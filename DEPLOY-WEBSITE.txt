@@ -1,0 +1,25 @@
+Billing Software - Website Deployment
+
+Upload all files from this folder to your website hosting public folder.
+
+Files to upload:
+- index.html
+- styles.css
+- app.js
+- manifest.webmanifest
+- service-worker.js
+- icon.svg
+
+Recommended hosting:
+- Any normal static website hosting works.
+- HTTPS is recommended and required for full PWA/offline install support.
+- If using cPanel or GoDaddy hosting, upload these files into public_html or into a subfolder like public_html/billing.
+
+Example website URLs:
+- Main site: https://yourdomain.com/
+- Billing subfolder: https://yourdomain.com/billing/
+
+Important:
+- Current version stores data in the browser/device local storage.
+- For shared online data across multiple devices/users, the next step is backend database and login.
+- After uploading a new version, refresh the browser once. If the old version still appears, clear site data/cache for the domain.

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142223">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Billing">
+  <title>Billing Software</title>
+  <link rel="icon" href="data:,">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">B</div>
+        <div>
+          <h1>Billing</h1>
+          <p>Purchase & Sales</p>
+        </div>
+      </div>
+      <nav class="nav-tabs" aria-label="Main sections">
+        <button class="nav-tab active" data-view="dashboard"><i data-lucide="layout-dashboard"></i><span>Dashboard</span></button>
+        <button class="nav-tab" data-view="sales"><i data-lucide="receipt-text"></i><span>Sales</span></button>
+        <button class="nav-tab" data-view="purchases"><i data-lucide="shopping-cart"></i><span>Purchases</span></button>
+        <button class="nav-tab" data-view="items"><i data-lucide="boxes"></i><span>Items</span></button>
+        <button class="nav-tab" data-view="parties"><i data-lucide="users"></i><span>Parties</span></button>
+        <button class="nav-tab" data-view="reports"><i data-lucide="bar-chart-3"></i><span>Reports</span></button>
+        <button class="nav-tab" data-view="settings"><i data-lucide="settings"></i><span>Settings</span></button>
+      </nav>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="todayLabel"></p>
+          <h2 id="viewTitle">Dashboard</h2>
+        </div>
+        <div class="topbar-actions">
+          <label class="topbar-profile">GST
+            <select id="activeProfileSelect"></select>
+          </label>
+          <button class="icon-btn" id="backupBtn" title="Export backup"><i data-lucide="download"></i></button>
+          <label class="icon-btn file-btn" title="Import backup">
+            <i data-lucide="upload"></i>
+            <input id="restoreInput" type="file" accept="application/json">
+          </label>
+          <button class="primary-btn" id="quickSaleBtn"><i data-lucide="plus"></i><span>Sale</span></button>
+        </div>
+      </header>
+
+      <section class="view active" id="dashboardView">
+        <div class="metric-grid">
+          <div class="metric"><span>Total Sales</span><strong id="metricSales">0</strong></div>
+          <div class="metric"><span>Total Purchases</span><strong id="metricPurchases">0</strong></div>
+          <div class="metric"><span>Stock Value</span><strong id="metricStock">0</strong></div>
+          <div class="metric"><span>Receivable</span><strong id="metricReceivable">0</strong></div>
+        </div>
+        <div class="split-layout">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Recent Entries</h3>
+              <button class="ghost-btn" data-view-link="sales">Open Sales</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Type</th><th>No.</th><th>GST</th><th>Party</th><th class="num">Amount</th></tr></thead>
+                <tbody id="recentEntries"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Low Stock</h3>
+              <button class="ghost-btn" data-view-link="items">Open Items</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Min</th></tr></thead>
+                <tbody id="lowStockRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="salesView">
+        <div class="section-head">
+          <div>
+            <h3>Sales Entry</h3>
+            <p>Create GST bills and reduce stock automatically.</p>
+          </div>
+          <button class="primary-btn" id="newSaleBtn"><i data-lucide="plus"></i><span>New Sale</span></button>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead><tr><th>Date</th><th>Invoice</th><th>GST</th><th>Customer</th><th>Status</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
+            <tbody id="salesRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="purchasesView">
+        <div class="section-head">
+          <div>
+            <h3>Purchase Entry</h3>
+            <p>Record supplier invoices and add stock automatically.</p>
+          </div>
+          <div class="section-actions">
+            <label class="secondary-btn upload-btn" title="Upload purchase invoice PDF">
+              <i data-lucide="file-up"></i><span>Upload Invoice</span>
+              <input id="purchaseInvoiceInput" type="file" accept="application/pdf">
+            </label>
+            <button class="primary-btn" id="newPurchaseBtn"><i data-lucide="plus"></i><span>New Purchase</span></button>
+          </div>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead><tr><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>Status</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
+            <tbody id="purchaseRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="itemsView">
+        <div class="section-head">
+          <div>
+            <h3>Item Master</h3>
+            <p>Maintain product rates, HSN, GST and stock levels.</p>
+          </div>
+          <button class="primary-btn" id="newItemBtn"><i data-lucide="plus"></i><span>New Item</span></button>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead><tr><th>Name</th><th>HSN</th><th>GST</th><th class="num">Sale Rate</th><th class="num">Purchase Rate</th><th class="num">Stock</th><th></th></tr></thead>
+            <tbody id="itemRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="partiesView">
+        <div class="section-head">
+          <div>
+            <h3>Party Master</h3>
+            <p>Customers and suppliers with GSTIN and address details.</p>
+          </div>
+          <button class="primary-btn" id="newPartyBtn"><i data-lucide="plus"></i><span>New Party</span></button>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>GSTIN</th><th>Phone</th><th>Place</th><th></th></tr></thead>
+            <tbody id="partyRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="reportsView">
+        <div class="section-head">
+          <div>
+            <h3>Reports</h3>
+            <p>Filter ledgers, stock, sales and purchases.</p>
+          </div>
+          <div class="segmented">
+            <button class="active" data-report="summary">Summary</button>
+            <button data-report="stock">Stock</button>
+            <button data-report="gst">GST</button>
+          </div>
+        </div>
+        <div class="filters panel">
+          <label>From<input type="date" id="reportFrom"></label>
+          <label>To<input type="date" id="reportTo"></label>
+          <button class="secondary-btn" id="printReportBtn"><i data-lucide="printer"></i><span>Print</span></button>
+        </div>
+        <div class="panel report-panel" id="reportOutput"></div>
+      </section>
+
+      <section class="view" id="settingsView">
+        <div class="section-head">
+          <div>
+            <h3>GST Profiles</h3>
+            <p>Maintain up to 8 GST registrations for invoices and reports.</p>
+          </div>
+          <button class="primary-btn" id="saveSettingsBtn"><i data-lucide="save"></i><span>Save</span></button>
+        </div>
+        <form class="settings-grid panel" id="settingsForm">
+          <label class="span-2">Edit GST Profile<select name="profileId"></select></label>
+          <label>Business Name<input name="businessName" required></label>
+          <label>Legal Name<input name="legalName"></label>
+          <label>GSTIN<input name="gstin"></label>
+          <label>Phone<input name="phone"></label>
+          <label>Email<input name="email" type="email"></label>
+          <label>Address<textarea name="address" rows="3"></textarea></label>
+          <label>State<input name="state"></label>
+          <label>Currency Symbol<input name="currency" maxlength="4"></label>
+          <label>Next Sales No.<input name="nextSaleNo" type="number" min="1"></label>
+          <label>Next Purchase No.<input name="nextPurchaseNo" type="number" min="1"></label>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="entryDialog" class="wide-dialog">
+    <form method="dialog" id="entryForm">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow" id="entryKindLabel">Sales Entry</p>
+          <h3 id="entryDialogTitle">New Entry</h3>
+        </div>
+        <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="dialog-scroll">
+        <div class="form-grid">
+          <label class="span-2">Business GST<select name="profileId" required></select></label>
+          <label>Date<input name="date" type="date" required></label>
+          <label>Number<input name="number" required></label>
+          <label>Party<select name="partyId" required></select></label>
+          <label>Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
+          <label class="span-2">Notes<input name="notes"></label>
+        </div>
+        <div class="line-editor">
+          <div class="line-head">
+            <h4>Items</h4>
+            <button type="button" class="secondary-btn" id="addLineBtn"><i data-lucide="plus"></i><span>Add Item</span></button>
+          </div>
+          <div id="lineRows"></div>
+        </div>
+      </div>
+      <div class="totals-box">
+        <div><span>Taxable</span><strong id="entryTaxable">0</strong></div>
+        <div><span>GST</span><strong id="entryGst">0</strong></div>
+        <div><span>Total</span><strong id="entryTotal">0</strong></div>
+      </div>
+      <menu class="dialog-actions">
+        <button class="secondary-btn" value="cancel">Cancel</button>
+        <button class="primary-btn" id="saveEntryBtn" value="default"><i data-lucide="save"></i><span>Save Entry</span></button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="itemDialog">
+    <form method="dialog" id="itemForm">
+      <div class="dialog-head">
+        <h3>Item</h3>
+        <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="form-grid">
+        <label class="span-2">Name<input name="name" required></label>
+        <label>HSN/SAC<input name="hsn"></label>
+        <label>GST %<input name="gstRate" type="number" min="0" step="0.01"></label>
+        <label>Sale Rate<input name="saleRate" type="number" min="0" step="0.01"></label>
+        <label>Purchase Rate<input name="purchaseRate" type="number" min="0" step="0.01"></label>
+        <label>Opening Stock<input name="openingStock" type="number" step="0.01"></label>
+        <label>Minimum Stock<input name="minStock" type="number" step="0.01"></label>
+      </div>
+      <menu class="dialog-actions">
+        <button class="secondary-btn" value="cancel">Cancel</button>
+        <button class="primary-btn" id="saveItemBtn" value="default"><i data-lucide="save"></i><span>Save Item</span></button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="partyDialog">
+    <form method="dialog" id="partyForm">
+      <div class="dialog-head">
+        <h3>Party</h3>
+        <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="form-grid">
+        <label class="span-2">Name<input name="name" required></label>
+        <label>Type<select name="type"><option>Customer</option><option>Supplier</option><option>Both</option></select></label>
+        <label>GSTIN<input name="gstin"></label>
+        <label>Phone<input name="phone"></label>
+        <label>Place<input name="place"></label>
+        <label class="span-2">Address<textarea name="address" rows="3"></textarea></label>
+      </div>
+      <menu class="dialog-actions">
+        <button class="secondary-btn" value="cancel">Cancel</button>
+        <button class="primary-btn" id="savePartyBtn" value="default"><i data-lucide="save"></i><span>Save Party</span></button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="invoiceDialog" class="invoice-dialog">
+    <div id="invoicePrintArea"></div>
+    <menu class="dialog-actions">
+      <button class="secondary-btn" id="closeInvoiceBtn">Close</button>
+      <button class="primary-btn" id="printInvoiceBtn"><i data-lucide="printer"></i><span>Print</span></button>
+    </menu>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
