@@ -14,6 +14,10 @@
 
 * { box-sizing: border-box; }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
@@ -1178,19 +1182,100 @@ textarea { resize: vertical; }
   .primary-btn, .secondary-btn, .ghost-btn, .icon-btn, .segmented button, .company-switcher {
     min-height: 44px;
   }
+  .app-shell {
+    display: block;
+    min-height: 100dvh;
+  }
   .workspace {
-    padding: 14px;
-    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+    padding: 12px;
+    padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+  .sidebar {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 20;
+    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+    background: #ffffff;
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -12px 28px rgba(28, 37, 38, 0.12);
+  }
+  .nav-tabs {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(44px, 1fr));
+    gap: 4px;
+    overflow: visible;
+  }
+  .nav-tab {
+    min-width: 0;
+    min-height: 54px;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    align-content: center;
+    gap: 3px;
+    padding: 5px 2px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.1;
+    text-align: center;
+  }
+  .nav-tab svg {
+    width: 19px;
+    height: 19px;
+  }
+  .nav-tab:hover,
+  .nav-tab.active {
+    background: var(--soft);
+    color: var(--primary-dark);
+  }
+  .brand {
+    display: none;
   }
   .topbar, .section-head {
     align-items: stretch;
     flex-direction: column;
   }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    margin: -12px -12px 12px;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+    background: rgba(245, 247, 248, 0.96);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    gap: 10px;
+  }
+  .topbar .eyebrow {
+    display: none;
+  }
+  .topbar h2 {
+    font-size: 20px;
+  }
   .section-actions {
     justify-content: stretch;
   }
   .topbar-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    justify-content: stretch;
+    gap: 8px;
+  }
+  .topbar-actions #cloudBtn,
+  .topbar-actions #backupBtn,
+  .topbar-actions > .file-btn {
+    display: none;
+  }
+  .company-switcher {
+    grid-column: 1 / -1;
+    width: 100%;
     justify-content: flex-start;
+  }
+  .company-switcher strong {
+    max-width: none;
+  }
+  #chatBillBtn,
+  #quickSaleBtn {
+    width: 100%;
   }
   .company-selector {
     padding: 12px;
@@ -1212,10 +1297,6 @@ textarea { resize: vertical; }
   }
   .company-card-main strong {
     font-size: 15px;
-  }
-  .company-switcher {
-    width: 100%;
-    justify-content: flex-start;
   }
   .chat-dialog {
     width: 100vw;
@@ -1261,18 +1342,183 @@ textarea { resize: vertical; }
   .topbar-actions .primary-btn,
   .section-head .primary-btn,
   .section-actions .secondary-btn,
+  .section-actions .upload-btn,
   .dialog-actions .primary-btn,
   .dialog-actions .secondary-btn {
     width: 100%;
   }
+  .section-actions,
+  .filters {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
   .metric-grid, .split-layout, .report-grid, .cloud-settings, .form-grid, .settings-grid {
     grid-template-columns: 1fr;
   }
-  .metric {
-    min-height: 92px;
+  .metric-grid {
+    gap: 10px;
+    margin-bottom: 12px;
   }
-  table {
-    min-width: 680px;
+  .metric {
+    min-height: 76px;
+    padding: 14px;
+  }
+  .metric strong {
+    font-size: 21px;
+  }
+  .panel {
+    box-shadow: none;
+  }
+  .panel-head {
+    padding: 14px 14px 0;
+  }
+  .section-head {
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .section-head p {
+    display: none;
+  }
+  #dashboardView .table-wrap,
+  #salesView .table-wrap,
+  #purchasesView .table-wrap,
+  #itemsView .table-wrap,
+  #partiesView .table-wrap {
+    overflow: visible;
+  }
+  #dashboardView .table-wrap table,
+  #salesView .table-wrap table,
+  #purchasesView .table-wrap table,
+  #itemsView .table-wrap table,
+  #partiesView .table-wrap table {
+    min-width: 0;
+  }
+  #dashboardView .table-wrap thead,
+  #salesView .table-wrap thead,
+  #purchasesView .table-wrap thead,
+  #itemsView .table-wrap thead,
+  #partiesView .table-wrap thead {
+    display: none;
+  }
+  #dashboardView .table-wrap tbody,
+  #salesView .table-wrap tbody,
+  #purchasesView .table-wrap tbody,
+  #itemsView .table-wrap tbody,
+  #partiesView .table-wrap tbody {
+    display: grid;
+    gap: 10px;
+    padding: 10px;
+  }
+  #dashboardView .table-wrap tbody tr,
+  #salesView .table-wrap tbody tr,
+  #purchasesView .table-wrap tbody tr,
+  #itemsView .table-wrap tbody tr,
+  #partiesView .table-wrap tbody tr {
+    display: grid;
+    gap: 7px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  #dashboardView .table-wrap tbody td,
+  #salesView .table-wrap tbody td,
+  #purchasesView .table-wrap tbody td,
+  #itemsView .table-wrap tbody td,
+  #partiesView .table-wrap tbody td {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 0;
+    border: 0;
+    font-size: 13px;
+    text-align: right;
+  }
+  #dashboardView .table-wrap tbody td::before,
+  #salesView .table-wrap tbody td::before,
+  #purchasesView .table-wrap tbody td::before,
+  #itemsView .table-wrap tbody td::before,
+  #partiesView .table-wrap tbody td::before {
+    content: "";
+    color: var(--muted);
+    font-weight: 650;
+    text-align: left;
+  }
+  #dashboardView .table-wrap tbody td:first-child,
+  #salesView .table-wrap tbody td:first-child,
+  #purchasesView .table-wrap tbody td:first-child,
+  #itemsView .table-wrap tbody td:first-child,
+  #partiesView .table-wrap tbody td:first-child {
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .num {
+    text-align: right;
+  }
+  .row-actions {
+    justify-content: flex-end;
+    width: 100%;
+  }
+  #dashboardView .table-wrap .empty-row,
+  #salesView .table-wrap .empty-row,
+  #purchasesView .table-wrap .empty-row,
+  #itemsView .table-wrap .empty-row,
+  #partiesView .table-wrap .empty-row {
+    display: block;
+    text-align: center;
+    padding: 16px;
+  }
+  #dashboardView .table-wrap .empty-row::before,
+  #salesView .table-wrap .empty-row::before,
+  #purchasesView .table-wrap .empty-row::before,
+  #itemsView .table-wrap .empty-row::before,
+  #partiesView .table-wrap .empty-row::before {
+    content: "";
+  }
+  #recentEntries td:nth-child(1)::before { content: "Date"; }
+  #recentEntries td:nth-child(2)::before { content: "Type"; }
+  #recentEntries td:nth-child(3)::before { content: "No."; }
+  #recentEntries td:nth-child(4)::before { content: "GST"; }
+  #recentEntries td:nth-child(5)::before { content: "Party"; }
+  #recentEntries td:nth-child(6)::before { content: "Amount"; }
+  #lowStockRows td:nth-child(1)::before { content: "Item"; }
+  #lowStockRows td:nth-child(2)::before { content: "HSN"; }
+  #lowStockRows td:nth-child(3)::before { content: "Stock"; }
+  #lowStockRows td:nth-child(4)::before { content: "Min"; }
+  #salesRows td:nth-child(1)::before { content: "Date"; }
+  #salesRows td:nth-child(2)::before { content: "Invoice"; }
+  #salesRows td:nth-child(3)::before { content: "GST"; }
+  #salesRows td:nth-child(4)::before { content: "Customer"; }
+  #salesRows td:nth-child(5)::before { content: "Status"; }
+  #salesRows td:nth-child(6)::before { content: "Taxable"; }
+  #salesRows td:nth-child(7)::before { content: "GST Amt"; }
+  #salesRows td:nth-child(8)::before { content: "Total"; }
+  #purchaseRows td:nth-child(2)::before { content: "Date"; }
+  #purchaseRows td:nth-child(3)::before { content: "Bill"; }
+  #purchaseRows td:nth-child(4)::before { content: "GST"; }
+  #purchaseRows td:nth-child(5)::before { content: "Supplier"; }
+  #purchaseRows td:nth-child(6)::before { content: "Status"; }
+  #purchaseRows td:nth-child(7)::before { content: "Review"; }
+  #purchaseRows td:nth-child(8)::before { content: "Taxable"; }
+  #purchaseRows td:nth-child(9)::before { content: "GST Amt"; }
+  #purchaseRows td:nth-child(10)::before { content: "Total"; }
+  #itemRows td:nth-child(1)::before { content: "Item"; }
+  #itemRows td:nth-child(2)::before { content: "HSN"; }
+  #itemRows td:nth-child(3)::before { content: "GST"; }
+  #itemRows td:nth-child(4)::before { content: "Sale Rate"; }
+  #itemRows td:nth-child(5)::before { content: "Purchase Rate"; }
+  #itemRows td:nth-child(6)::before { content: "Stock"; }
+  #partyRows td:nth-child(1)::before { content: "Name"; }
+  #partyRows td:nth-child(2)::before { content: "Type"; }
+  #partyRows td:nth-child(3)::before { content: "GSTIN"; }
+  #partyRows td:nth-child(4)::before { content: "Short Names"; }
+  #partyRows td:nth-child(5)::before { content: "Phone"; }
+  #partyRows td:nth-child(6)::before { content: "Place"; }
+  #salesRows td:last-child::before,
+  #purchaseRows td:last-child::before,
+  #itemRows td:last-child::before,
+  #partyRows td:last-child::before {
+    content: "";
   }
   .span-2 { grid-column: span 1; }
   .line-row { grid-template-columns: 1fr; }
