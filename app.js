@@ -1787,14 +1787,14 @@ function openChatBillDialog() {
   chatBillMessages = [];
   $("#chatBillInput").value = "";
   $("#chatBillThread").innerHTML = "";
-  appendChatBillMessage("assistant", "Tell me the customer, GSTIN, item, quantity and rate. If anything is missing, I will ask before creating the draft.");
+  appendChatBillMessage("assistant", "Send customer, GSTIN, item, qty and rate.");
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
   if (window.lucide) lucide.createIcons();
 }
 
 function fillChatBillSample() {
-  $("#chatBillInput").value = "Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each";
+  $("#chatBillInput").value = "ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 @65000";
 }
 
 async function prepareChatBillDraft() {
@@ -1814,7 +1814,7 @@ async function prepareChatBillDraft() {
       ? cloudResult.assistantMessage
       : buildMissingSaleQuestion(missing, parsed);
     appendChatBillMessage("assistant", question);
-    $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply in the box and click Send Details.</span>`;
+    $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply below and click Prepare.</span>`;
     return;
   }
   const draft = buildChatSaleDraft(parsed, fullMessage);

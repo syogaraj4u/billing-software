@@ -526,6 +526,10 @@ dialog::backdrop {
   width: min(900px, calc(100vw - 28px));
 }
 
+.chat-dialog {
+  width: min(560px, calc(100vw - 28px));
+}
+
 dialog form, .invoice-dialog {
   background: #fff;
 }
@@ -1074,30 +1078,50 @@ textarea { resize: vertical; }
   border-top: 1px solid #111;
 }
 
+.chat-dialog form {
+  overflow: hidden;
+}
+
+.chat-dialog .dialog-head {
+  padding: 14px 16px;
+}
+
+.chat-dialog .dialog-head h3 {
+  font-size: 18px;
+}
+
 .chat-bill-body {
   display: grid;
-  gap: 14px;
-  padding: 18px 20px;
+  gap: 10px;
+  padding: 14px 16px 10px;
 }
 
 .chat-thread {
-  min-height: 74px;
-  max-height: 240px;
+  min-height: 52px;
+  max-height: 160px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfc;
-  padding: 12px;
+  padding: 10px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
+}
+
+.chat-input-label {
+  gap: 5px;
+}
+
+.chat-input-label textarea {
+  min-height: 96px;
 }
 
 .chat-message {
-  max-width: min(760px, 86%);
+  max-width: 92%;
   color: var(--ink);
-  line-height: 1.45;
-  font-size: 14px;
-  padding: 9px 11px;
+  line-height: 1.35;
+  font-size: 13px;
+  padding: 8px 10px;
   border-radius: 8px;
   background: #fff;
   border: 1px solid var(--line);
@@ -1117,13 +1141,21 @@ textarea { resize: vertical; }
 }
 
 .chat-summary {
-  min-height: 42px;
   display: grid;
   gap: 4px;
   border: 1px dashed var(--line);
   border-radius: 8px;
-  padding: 12px;
+  padding: 10px;
   background: #fff;
+  font-size: 13px;
+}
+
+.chat-summary:empty {
+  display: none;
+}
+
+.chat-dialog .dialog-actions {
+  padding: 10px 16px 14px;
 }
 
 .purchase-select,

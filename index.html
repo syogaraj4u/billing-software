@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260626-company-selector">
+  <link rel="stylesheet" href="styles.css?v=20260626-chat-bill-compact">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -263,23 +263,22 @@
     </main>
   </div>
 
-  <dialog id="chatBillDialog" class="wide-dialog">
+  <dialog id="chatBillDialog" class="chat-dialog">
     <form method="dialog" id="chatBillForm">
       <div class="dialog-head">
         <div>
-          <p class="eyebrow">Chat Sale Bill</p>
-          <h3>Create Sale From Simple Details</h3>
+          <h3>Chat Bill</h3>
         </div>
         <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
       </div>
       <div class="chat-bill-body">
         <div class="chat-thread" id="chatBillThread"></div>
-        <label>Reply with bill details<textarea id="chatBillInput" rows="6" placeholder="Example: Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each"></textarea></label>
+        <label class="chat-input-label">Bill details<textarea id="chatBillInput" rows="4" placeholder="ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 @65000"></textarea></label>
         <div class="chat-summary" id="chatBillSummary"></div>
       </div>
       <menu class="dialog-actions">
         <button class="secondary-btn" id="chatSampleBtn" type="button"><i data-lucide="wand-sparkles"></i><span>Example</span></button>
-        <button class="primary-btn" id="prepareChatBillBtn" type="button"><i data-lucide="send"></i><span>Send Details</span></button>
+        <button class="primary-btn" id="prepareChatBillBtn" type="button"><i data-lucide="send"></i><span>Prepare</span></button>
       </menu>
     </form>
   </dialog>
@@ -427,6 +426,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260626-company-selector"></script>
+  <script src="app.js?v=20260626-chat-bill-compact"></script>
 </body>
 </html>
