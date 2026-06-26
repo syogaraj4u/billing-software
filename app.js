@@ -1790,6 +1790,13 @@ function openChatBillDialog() {
   appendChatBillMessage("assistant", "Send customer, GSTIN, item, qty and rate.");
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
+  setTimeout(() => {
+    try {
+      $("#chatBillInput").focus({ preventScroll: true });
+    } catch {
+      $("#chatBillInput").focus();
+    }
+  }, 80);
   if (window.lucide) lucide.createIcons();
 }
 

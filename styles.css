@@ -1231,6 +1231,13 @@ textarea { resize: vertical; }
 }
 
 @media (max-width: 820px) {
+  input, select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .primary-btn, .secondary-btn, .ghost-btn, .icon-btn, .segmented button, .company-switcher {
+    min-height: 44px;
+  }
   .workspace {
     padding: 14px;
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
@@ -1254,10 +1261,76 @@ textarea { resize: vertical; }
   }
   .company-grid {
     grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .company-selector-copy h2 {
+    font-size: 24px;
+  }
+  .company-card {
+    min-height: 0;
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    gap: 10px 12px;
+    padding: 12px;
+  }
+  .company-card-main {
+    gap: 3px;
+  }
+  .company-card-main strong {
+    font-size: 15px;
+  }
+  .company-card-meta {
+    grid-column: 2;
+    gap: 6px;
+  }
+  .company-card-meta span {
+    padding: 3px 7px;
   }
   .company-switcher {
     width: 100%;
     justify-content: flex-start;
+  }
+  .chat-dialog {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+  }
+  .chat-dialog form {
+    height: 100dvh;
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .chat-dialog .dialog-head {
+    padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+  }
+  .chat-bill-body {
+    min-height: 0;
+    overflow: auto;
+    align-content: start;
+    padding: 12px 14px;
+  }
+  .chat-thread {
+    min-height: 74px;
+    max-height: 24dvh;
+  }
+  .chat-input-label textarea {
+    min-height: min(34dvh, 220px);
+    padding: 12px;
+  }
+  .chat-message {
+    max-width: 96%;
+    font-size: 14px;
+  }
+  .chat-dialog .dialog-actions {
+    display: grid;
+    grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+    gap: 10px;
+    padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
   }
   .topbar-actions .primary-btn,
   .section-head .primary-btn,
