@@ -1264,6 +1264,123 @@ textarea { resize: vertical; }
   display: none;
 }
 
+.smart-review {
+  display: grid;
+  gap: 10px;
+}
+
+.smart-review-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.smart-review-head span,
+.smart-party-card span,
+.smart-review-totals span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.smart-review-head strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+}
+
+.smart-review-head > div:last-child {
+  text-align: right;
+}
+
+.smart-review-parties,
+.smart-review-addresses {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.smart-party-card {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.smart-party-card strong {
+  display: block;
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.smart-party-card p {
+  margin: 2px 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.smart-review-items {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.smart-review-items table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+}
+
+.smart-review-items th,
+.smart-review-items td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  text-align: left;
+}
+
+.smart-review-items th {
+  background: var(--soft);
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.smart-review-items tr:last-child td {
+  border-bottom: 0;
+}
+
+.smart-review-totals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.smart-review-totals strong {
+  text-align: right;
+}
+
+.smart-review-notes {
+  display: grid;
+  gap: 4px;
+  color: #8a5a00;
+}
+
+.smart-review-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .purchase-select,
 #selectAllPurchases {
   width: 18px;
@@ -1508,6 +1625,11 @@ textarea { resize: vertical; }
   .chat-message {
     max-width: 96%;
     font-size: 14px;
+  }
+  .smart-review-parties,
+  .smart-review-addresses,
+  .smart-review-actions {
+    grid-template-columns: 1fr;
   }
   .chat-dialog .dialog-actions {
     display: grid;

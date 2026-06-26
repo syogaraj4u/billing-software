@@ -179,6 +179,7 @@ let chatBillMessages = [];
 let chatBillAttachments = [];
 let chatBillPreparing = false;
 let chatBillHistoryActive = false;
+let pendingSmartBillReview = null;
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
 
@@ -1846,6 +1847,7 @@ function importBackup(event) {
 function openChatBillDialog() {
   chatBillMessages = [];
   chatBillAttachments = [];
+  pendingSmartBillReview = null;
   setChatBillBusy(false);
   $("#chatBillInput").value = "";
   $("#chatBillAttachmentInput").value = "";
@@ -1977,6 +1979,7 @@ function formatFileSize(size) {
 
 async function prepareChatBillDraft() {
   if (chatBillPreparing) return;
+  pendingSmartBillReview = null;
   const message = $("#chatBillInput").value.trim();
   const attachments = chatBillAttachments.slice();
   if (!message && !attachments.length) return toast("Enter sale details or attach image");
@@ -2013,13 +2016,8 @@ async function prepareChatBillDraft() {
       $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply below and send.</span>`;
       return;
     }
-    const draft = buildChatSaleDraft(parsed, fullMessage);
-    $("#chatBillSummary").innerHTML = renderChatBillSummary(parsed, draft);
-    saveState();
-    renderAll();
-    closeChatBillDialog();
-    openEntry("sale", null, draft);
-    toast("Sale draft prepared. Please review and save.");
+    showSmartBillReview(parsed, fullMessage);
+    appendChatBillMessage("assistant", "Please review the bill details below. If everything looks right, create the sale draft.");
   } finally {
     setChatBillBusy(false);
   }
@@ -2108,8 +2106,9 @@ function missingSaleBillDetails(parsed, sourceMessage) {
   if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
   if (!lines.length || lines.every(line => !num(line.rate))) missing.push("item name, quantity and rate");
   lines.forEach((line, index) => {
-    const label = line.name && !/^chat sale item$/i.test(line.name) ? line.name : `item ${index + 1}`;
-    if (!line.name || /^chat sale item$/i.test(line.name)) missing.push(`${label} name`);
+    const isFallbackName = /^(chat sale|smart bill) item$/i.test(line.name || "");
+    const label = line.name && !isFallbackName ? line.name : `item ${index + 1}`;
+    if (!line.name || isFallbackName) missing.push(`${label} name`);
     if (!num(line.qty)) missing.push(`${label} quantity`);
     if (!num(line.rate)) missing.push(`${label} rate`);
     if (!String(line.hsn || "").trim()) missing.push(`${label} HSN/SAC`);
@@ -2565,12 +2564,131 @@ function ensureChatItem(line) {
   return item;
 }
 
-function renderChatBillSummary(parsed, draft) {
+function showSmartBillReview(parsed, sourceMessage) {
+  pendingSmartBillReview = { parsed: clone(parsed), sourceMessage };
+  $("#chatBillSummary").innerHTML = renderSmartBillReview(parsed);
+  $("#confirmSmartBillDraftBtn")?.addEventListener("click", confirmSmartBillReview);
+  $("#correctSmartBillDraftBtn")?.addEventListener("click", focusSmartBillCorrection);
+}
+
+function confirmSmartBillReview() {
+  if (!pendingSmartBillReview) return toast("Prepare Smart Bill details first");
+  const draft = buildChatSaleDraft(pendingSmartBillReview.parsed, pendingSmartBillReview.sourceMessage);
+  saveState();
+  renderAll();
+  pendingSmartBillReview = null;
+  closeChatBillDialog();
+  openEntry("sale", null, draft);
+  toast("Sale draft ready. Review and save.");
+}
+
+function focusSmartBillCorrection() {
+  $("#chatBillInput").focus();
+  toast("Type the correction and send");
+}
+
+function renderSmartBillReview(parsed) {
+  const profile = profileById(parsed.profileId || activeProfileId());
+  const party = smartBillReviewParty(parsed);
+  const lines = smartBillReviewLines(parsed);
+  const calculated = calculateEntryTotals(lines, profile, party, "sale");
+  const shipTo = smartBillShipTo(parsed, party);
+  const invoiceNo = nextEntryNumber("sale", profile.id);
+  const taxSplit = calculated.taxMode === "IGST"
+    ? `<span>IGST</span><strong>${money(calculated.igst)}</strong>`
+    : `<span>CGST</span><strong>${money(calculated.cgst)}</strong><span>SGST</span><strong>${money(calculated.sgst)}</strong>`;
   return `
-    <div><strong>${escapeHtml(parsed.customerName || "Customer")}</strong></div>
-    <div>${escapeHtml(parsed.customerGstin || "GSTIN not entered")}</div>
-    <div>${draft.lines.length} item(s)</div>
+    <section class="smart-review">
+      <div class="smart-review-head">
+        <div>
+          <span>Review Before Saving</span>
+          <strong>${escapeHtml(invoiceNo)}</strong>
+        </div>
+        <div>
+          <span>Total</span>
+          <strong>${money(calculated.total)}</strong>
+        </div>
+      </div>
+      <div class="smart-review-parties">
+        ${smartBillPartyCard("Seller", profile.businessName || profile.label, profile.gstin, profile.address || profile.state)}
+        ${smartBillPartyCard("Buyer", party.name, party.gstin, party.address || party.place)}
+      </div>
+      <div class="smart-review-addresses">
+        ${smartBillPartyCard("Bill To", party.name, party.gstin, party.address || party.place)}
+        ${smartBillPartyCard("Ship To", shipTo.name, shipTo.gstin, shipTo.address || shipTo.place)}
+      </div>
+      <div class="smart-review-items">
+        <table>
+          <thead><tr><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Amount</th></tr></thead>
+          <tbody>
+            ${lines.map(line => {
+              const taxable = num(line.qty) * num(line.rate);
+              return `<tr>
+                <td>${escapeHtml(line.name || "Item")}</td>
+                <td>${escapeHtml(line.hsn || DEFAULT_SALE_HSN)}</td>
+                <td class="num">${formatQty(line.qty)}</td>
+                <td class="num">${money(line.rate)}</td>
+                <td class="num">${num(line.gstRate)}%</td>
+                <td class="num">${money(taxable)}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+      <div class="smart-review-totals">
+        <span>Taxable</span><strong>${money(calculated.taxable)}</strong>
+        ${taxSplit}
+        <span>GST Total</span><strong>${money(calculated.gst)}</strong>
+        <span>Grand Total</span><strong>${money(calculated.total)}</strong>
+      </div>
+      ${parsed.reviewMessages?.length ? `<div class="smart-review-notes">${parsed.reviewMessages.map(message => `<span>${escapeHtml(message)}</span>`).join("")}</div>` : ""}
+      <div class="smart-review-actions">
+        <button type="button" class="secondary-btn" id="correctSmartBillDraftBtn">Add Correction</button>
+        <button type="button" class="primary-btn" id="confirmSmartBillDraftBtn">Create Draft</button>
+      </div>
+    </section>
   `;
+}
+
+function smartBillReviewParty(parsed) {
+  const gstin = normalizeGstin(parsed.customerGstin);
+  return {
+    name: parsed.customerName || "Customer",
+    gstin: gstin || "-",
+    address: parsed.customerAddress || "",
+    place: parsed.customerPlace || stateNameFromGstin(gstin) || ""
+  };
+}
+
+function smartBillReviewLines(parsed) {
+  const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
+  return lines.map(line => ({
+    name: line.name || "Smart Bill Item",
+    hsn: line.hsn || DEFAULT_SALE_HSN,
+    qty: num(line.qty) || 1,
+    rate: num(line.rate),
+    gstRate: num(line.gstRate) || DEFAULT_SALE_GST_RATE
+  }));
+}
+
+function smartBillShipTo(parsed, party) {
+  const notes = String(parsed.notes || "");
+  const shipNote = notes.match(/ship\s*to\s*[:\-]?\s*([\s\S]+)/i)?.[1]?.trim();
+  return {
+    name: parsed.shipToName || (shipNote ? "Ship To" : `${party.name} (same as Bill To)`),
+    gstin: normalizeGstin(parsed.shipToGstin) || party.gstin,
+    address: parsed.shipToAddress || shipNote || party.address || party.place,
+    place: parsed.shipToPlace || party.place
+  };
+}
+
+function smartBillPartyCard(title, name, gstin, address) {
+  return `<div class="smart-party-card">
+    <span>${escapeHtml(title)}</span>
+    <strong>${escapeHtml(name || "-")}</strong>
+    <p>GSTIN: ${escapeHtml(gstin || "-")}</p>
+    <p>${escapeHtml(address || "-")}</p>
+  </div>`;
 }
 
 async function handlePurchaseInvoiceUpload(event) {
