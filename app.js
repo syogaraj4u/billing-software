@@ -2009,11 +2009,10 @@ async function prepareChatBillDraft() {
       ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
       : missingSaleBillDetails(parsed, fullMessage);
     if (missing.length) {
-      const question = cleanSaleAssistantMessage(cloudResult?.assistantMessage)
-        ? cloudResult.assistantMessage
-        : buildMissingSaleQuestion(missing, parsed);
+      const nextMissing = nextSaleMissingDetail(missing);
+      const question = buildMissingSaleQuestion(nextMissing, parsed);
       appendChatBillMessage("assistant", question);
-      $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply below and send.</span>`;
+      $("#chatBillSummary").innerHTML = `<strong>Need 1 more detail</strong><span class="help-text">${escapeHtml(shortMissingDetailLabel(nextMissing))}</span>`;
       return;
     }
     showSmartBillReview(parsed, fullMessage);
@@ -2089,11 +2088,11 @@ function parseSaleChatLocal(message) {
     lines: lines.length ? lines : [{
       name: "Smart Bill Item",
       hsn: extractHsnCode(message) || DEFAULT_SALE_HSN,
-      qty: 1,
+      qty: 0,
       rate: lastAmount(message) || 0,
       gstRate: extractGstRate(message)
     }],
-    customerAddress: internalBuyer?.address || savedBuyer?.address || "",
+    customerAddress: internalBuyer?.address || savedBuyer?.address || extractCustomerAddress(message),
     customerPlace: internalBuyer?.state || savedBuyer?.place || "",
     reviewMessages
   };
@@ -2104,7 +2103,12 @@ function missingSaleBillDetails(parsed, sourceMessage) {
   const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
   if (!String(parsed.customerName || "").trim() || /^chat customer$/i.test(parsed.customerName)) missing.push("customer business name");
   if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
-  if (!lines.length || lines.every(line => !num(line.rate))) missing.push("item name, quantity and rate");
+  if (!String(parsed.customerAddress || "").trim()) missing.push("customer address");
+  if (!lines.length) {
+    missing.push("item name");
+    missing.push("item quantity");
+    missing.push("item rate");
+  }
   lines.forEach((line, index) => {
     const isFallbackName = /^(chat sale|smart bill) item$/i.test(line.name || "");
     const label = line.name && !isFallbackName ? line.name : `item ${index + 1}`;
@@ -2116,15 +2120,56 @@ function missingSaleBillDetails(parsed, sourceMessage) {
   return uniqueMessages(missing);
 }
 
+function nextSaleMissingDetail(missing) {
+  const details = uniqueMessages(Array.isArray(missing) ? missing : [missing]);
+  const priority = [
+    /customer business name|buyer name|party name|customer name|party/i,
+    /customer gstin|buyer gstin|\bgstin\b/i,
+    /item name|product name/i,
+    /\bqty\b|\bquantity\b/i,
+    /\brate\b|\bprice\b|\bamount\b/i,
+    /customer address|buyer address|bill.?to address|ship.?to address|\baddress\b/i
+  ];
+  return priority.map(pattern => details.find(detail => pattern.test(detail))).find(Boolean) || details[0] || "more sale bill details";
+}
+
 function buildMissingSaleQuestion(missing, parsed) {
-  const examples = {
-    "customer business name": "customer business name",
-    "customer GSTIN": "customer GSTIN",
-    "item name, quantity and rate": "item, quantity and rate",
-    "GST rate": "GST rate"
-  };
-  const readable = missing.map(item => examples[item] || item);
-  return `Please share the missing detail${missing.length > 1 ? "s" : ""}: ${readable.join(", ")}.\nExample: ${parsed.customerName || "ABC Traders"} GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000.`;
+  const detail = nextSaleMissingDetail(missing);
+  const buyer = parsed.customerName && !/^chat customer$/i.test(parsed.customerName) ? parsed.customerName : "the buyer";
+  if (/customer business name|buyer name|party name|customer name|party/i.test(detail)) {
+    return "Please share the buyer/party business name.";
+  }
+  if (/customer gstin|buyer gstin|\bgstin\b/i.test(detail)) {
+    return `Please share the GSTIN for ${buyer}.`;
+  }
+  if (/item name|product name/i.test(detail)) {
+    return "Please share the item name.";
+  }
+  if (/\bqty\b|\bquantity\b/i.test(detail)) {
+    return `Please share the quantity${itemLabelFromMissing(detail)}.`;
+  }
+  if (/\brate\b|\bprice\b|\bamount\b/i.test(detail)) {
+    return `Please share the rate${itemLabelFromMissing(detail)}.`;
+  }
+  if (/customer address|buyer address|bill.?to address|ship.?to address|\baddress\b/i.test(detail)) {
+    return `Please share the bill-to address for ${buyer}.`;
+  }
+  return `Please share ${shortMissingDetailLabel(detail)}.`;
+}
+
+function itemLabelFromMissing(detail) {
+  const cleaned = String(detail || "").replace(/\b(quantity|qty|rate|price|amount)\b/ig, "").trim();
+  return cleaned && !/^item$/i.test(cleaned) ? ` for ${cleaned}` : "";
+}
+
+function shortMissingDetailLabel(detail) {
+  if (/customer business name|buyer name|party name|customer name|party/i.test(detail)) return "Buyer/party name";
+  if (/customer gstin|buyer gstin|\bgstin\b/i.test(detail)) return "Buyer GSTIN";
+  if (/item name|product name/i.test(detail)) return "Item name";
+  if (/\bqty\b|\bquantity\b/i.test(detail)) return "Quantity";
+  if (/\brate\b|\bprice\b|\bamount\b/i.test(detail)) return "Rate";
+  if (/customer address|buyer address|bill.?to address|ship.?to address|\baddress\b/i.test(detail)) return "Bill-to address";
+  return String(detail || "More sale bill details");
 }
 
 function saleChatMissingDetails(details) {
@@ -2331,11 +2376,29 @@ function partyAliasList(party) {
 function extractCustomerName(message, gstin) {
   const beforeGstin = gstin ? message.slice(0, message.toUpperCase().indexOf(gstin)) : message;
   const match = beforeGstin.match(/(?:bill\s*to|customer|party|to|for)\s+([^,\n]+)/i);
-  if (!match) return "";
-  return match[1]
+  const namedPart = match?.[1] || leadingCustomerName(beforeGstin);
+  if (!namedPart) return "";
+  return namedPart
     .replace(/\bgstin\b.*$/i, "")
+    .replace(/\baddress\b.*$/i, "")
     .replace(/\b(invoice|bill|sale)\b/ig, "")
     .trim();
+}
+
+function extractCustomerAddress(message) {
+  const match = String(message || "").match(/\b(?:bill\s*to\s*address|billing\s*address|buyer\s*address|customer\s*address|address|addr)\s*[:\-]?\s*([^;\n]+)/i);
+  if (!match) return "";
+  return match[1]
+    .split(/\s*,\s*(?=\d+(?:\.\d+)?\s*[A-Za-z]|[A-Za-z][^,]*(?:@|at|rate)\s*\d)/i)[0]
+    .replace(/\b(?:ship\s*to|item|product|gstin)\b.*$/i, "")
+    .trim();
+}
+
+function leadingCustomerName(message) {
+  const firstPart = String(message || "").split(/[,\n;]/)[0].trim();
+  if (!/^[A-Za-z]/.test(firstPart)) return "";
+  if (/\b(?:@|at|rate|qty|nos?|pcs?|pieces?|iphone|ipad|macbook|airpods)\b/i.test(firstPart)) return "";
+  return firstPart;
 }
 
 function extractGstRate(text) {
@@ -2396,7 +2459,7 @@ function resolveSaleLineGstRate(line, explicitGstRate = 0) {
 
 function parseSaleLines(message) {
   const stockLines = parseStockStyleSaleLines(message);
-  const chunks = message.split(/[\n;]/).flatMap(part => part.split(/\s*,\s*(?=\d+(?:\.\d+)?\s*[A-Za-z])/));
+  const chunks = message.split(/[\n;]/).flatMap(part => part.split(/\s*,\s*(?=\d+(?:\.\d+)?\s*[A-Za-z]|[A-Za-z][^,]*(?:@|at|rate)\s*\d)/i));
   const lines = [...stockLines];
   for (const chunk of chunks) {
     const pattern = /\b(\d+(?:\.\d+)?)\s*(?:x|nos?|pcs?|pieces?|qty)?\s+([A-Za-z0-9][A-Za-z0-9 \-+/().]{1,70}?)\s+(?:at|@|rate)\s*(\d+(?:,\d{3})*(?:\.\d+)?)/ig;
@@ -2414,8 +2477,45 @@ function parseSaleLines(message) {
         });
       }
     }
+    if (!hasSalePartyContext(chunk)) {
+      const noQtyPattern = /\b([A-Za-z][A-Za-z0-9 \-+/().]{1,70}?)\s+(?:at|@|rate)\s*(\d+(?:,\d{3})*(?:\.\d+)?)/ig;
+      while ((match = noQtyPattern.exec(chunk))) {
+        const name = cleanSaleItemName(match[1]);
+        const rate = Number(match[2].replace(/,/g, ""));
+        const hasSameNameAndRate = lines.some(line => line.name.toLowerCase() === name.toLowerCase() && num(line.rate) === rate);
+        if (name && rate > 0 && !hasSameNameAndRate) {
+          lines.push({
+            name,
+            hsn: hsnForSaleLine(name, chunk, message),
+            qty: 0,
+            rate,
+            gstRate: extractGstRate(chunk)
+          });
+        }
+      }
+    }
+    if (!/(?:@|at|rate)\s*\d/i.test(chunk) && !hasSalePartyContext(chunk)) {
+      const noRatePattern = /\b(\d+(?:\.\d+)?)\s*(?:x|nos?|pcs?|pieces?|qty)?\s+([A-Za-z][A-Za-z0-9 \-+/().]{1,70})\b/ig;
+      while ((match = noRatePattern.exec(chunk))) {
+        const name = cleanSaleItemName(match[2]);
+        const qty = num(match[1]);
+        if (name && qty > 0 && !hasSimilarSaleLine(lines, name, qty, 0)) {
+          lines.push({
+            name,
+            hsn: hsnForSaleLine(name, chunk, message),
+            qty,
+            rate: 0,
+            gstRate: extractGstRate(chunk)
+          });
+        }
+      }
+    }
   }
   return lines.slice(0, 20);
+}
+
+function hasSalePartyContext(value) {
+  return /\b(?:gstin|bill\s*to|ship\s*to|customer|party|address|addr)\b/i.test(String(value || ""));
 }
 
 function parseStockStyleSaleLines(message) {
