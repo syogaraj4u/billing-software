@@ -892,6 +892,7 @@ textarea { resize: vertical; }
 .invoice-party-block span,
 .amount-words-row span,
 .tax-words-row span,
+.invoice-bank-details span,
 .invoice-footer-grid span {
   display: block;
   color: #475569;
@@ -1056,6 +1057,31 @@ textarea { resize: vertical; }
 
 .tax-words-row strong {
   font-size: 15px;
+}
+
+.invoice-bank-details {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 1.35fr 1fr .9fr;
+  border-bottom: 1px solid #111827;
+}
+
+.invoice-bank-details > div {
+  min-height: 46px;
+  padding: 8px 10px;
+  border-right: 1px solid #111827;
+}
+
+.invoice-bank-details > div:last-child {
+  border-right: 0;
+}
+
+.invoice-bank-details strong {
+  display: block;
+  margin-top: 4px;
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .invoice-footer-grid {

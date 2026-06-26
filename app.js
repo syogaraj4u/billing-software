@@ -21,6 +21,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "1st Floor, 21-10-518/a, SivaSri Nilayam, Kranthi Nagar, Near Narayana English Medium School, Jeevakona, Tirupati, Tirupati, Andhra Pradesh - 517507",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "Nirvana Solutions",
+      bankName: "Kotak Mahindra Bank",
+      branch: "Air Bypass Road, Tirupati",
+      accountNumber: "8686839018",
+      ifsc: "KKBK0007919"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -34,6 +41,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "Ground floor, 21-10-518/A, Sivasri Nilayam, Kranthi Nagar, Near Narayana School, Jeevakona, Tirupati, Tirupati, Andhra Pradesh - 517507",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "Kala Nirvana",
+      bankName: "ICICI Bank",
+      branch: "Kupu Chandra Peta Branch",
+      accountNumber: "757205000565",
+      ifsc: "ICIC0007572"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -47,6 +61,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "GROUND FLOOR, 21-8-267, SLV COMPLEX, RAGHAVENDRA NAGAR, Near Raghavendra Nagar Auto Stand, SATHYANARAYANA PURAM, Tirupati, Tirupati, Andhra Pradesh - 517507",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "HARIHARA MOBILES",
+      bankName: "ICICI Bank",
+      branch: "Tirupati Branch",
+      accountNumber: "630905039494",
+      ifsc: "ICIC0006309"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -60,6 +81,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "2nd Floor, 21-10-518/A, SivaSri Illam, Kranthi Nagar, Opposite to Gurukrupa Vidyamandir, Jeevakona, Tirupati, Tirupati, Andhra Pradesh - 517507",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "Shiva Nandi Communications",
+      bankName: "ICICI Bank",
+      branch: "Tirupati Branch",
+      accountNumber: "630905039332",
+      ifsc: "ICIC0006309"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -73,6 +101,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "Ground Floor, 3-29, Govinda Nagar, Near S.N. Puram, Tirupati, Chittoor, Andhra Pradesh - 517501",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "Skanda Digitals",
+      bankName: "ICICI Bank",
+      branch: "KT Road Branch",
+      accountNumber: "720905500069",
+      ifsc: "ICIC0007209"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -86,6 +121,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "Ground Floor, 22-8-97/2, Upadyay Nagar 11th Cross, Beside Ramulavari Temple, Tirupati, Tirupati, Andhra Pradesh - 517507",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "Khairanya Infotech",
+      bankName: "ICICI Bank",
+      branch: "Kupu Chandra Peta Branch",
+      accountNumber: "757205000575",
+      ifsc: "ICIC0007572"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -99,6 +141,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "Ground floor, No 5/3, Lakshmi Jeyapandi Traders, Grace Garden 4th Lane, Near KPB Water Supply, Royapuram, Chennai, Chennai, Tamil Nadu - 600021",
     state: "Tamil Nadu",
+    bankDetails: {
+      accountName: "LAKSHMI JEYAPANDI TRADERS",
+      bankName: "ICICI Bank",
+      branch: "Chennai - Rajaji Salai Branch",
+      accountNumber: "793705000262",
+      ifsc: "ICIC0007937"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   },
@@ -112,6 +161,13 @@ const OFFICIAL_GST_PROFILES = [
     email: "",
     address: "10-8-349, Prakasam Road, Near Om Sakthi Temple, Nagari, Nagari, Chittoor, Andhra Pradesh - 517590",
     state: "Andhra Pradesh",
+    bankDetails: {
+      accountName: "SRI LAKSHMI DIGITALS",
+      bankName: "ICICI Bank",
+      branch: "Punganur Branch",
+      accountNumber: "377105500333",
+      ifsc: "ICIC0003771"
+    },
     nextSaleNo: 1,
     nextPurchaseNo: 1
   }
@@ -1439,6 +1495,7 @@ function showInvoice(id, kind) {
         <span>Tax Amount (in words) :</span>
         <strong>${escapeHtml(amountInWords(entry.gst))}</strong>
       </div>
+      ${invoiceBankBlock(settings)}
       <div class="invoice-footer-grid">
         <div>
           <span>Declaration</span>
@@ -1487,6 +1544,18 @@ function invoicePartyBlock(title, party) {
     <p>${escapeHtml(party.address || party.place || "")}</p>
     <p>GSTIN/UIN : ${escapeHtml(party.gstin || "-")}</p>
     <p>State Name : ${escapeHtml(stateNameFromGstin(party.gstin) || party.place || "-")}, Code : ${escapeHtml(stateCodeFromGstin(party.gstin) || "-")}</p>
+  </div>`;
+}
+
+function invoiceBankBlock(profile) {
+  const details = profile.bankDetails || {};
+  if (!details.accountNumber && !details.ifsc) return "";
+  return `<div class="invoice-bank-details">
+    <div><span>Bank Details</span><strong>${escapeHtml(details.bankName || "-")}</strong></div>
+    <div><span>Account Name</span><strong>${escapeHtml(details.accountName || profile.businessName || profile.label || "-")}</strong></div>
+    <div><span>Branch</span><strong>${escapeHtml(details.branch || "-")}</strong></div>
+    <div><span>A/c No.</span><strong>${escapeHtml(details.accountNumber || "-")}</strong></div>
+    <div><span>IFSC</span><strong>${escapeHtml(details.ifsc || "-")}</strong></div>
   </div>`;
 }
 
