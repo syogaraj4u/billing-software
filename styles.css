@@ -214,6 +214,12 @@ button > *,
   color: var(--ink);
 }
 
+#cloudBtnText {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .file-btn {
   position: relative;
   overflow: hidden;
@@ -536,6 +542,71 @@ textarea { resize: vertical; }
   padding: 18px;
 }
 
+.cloud-settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 1px;
+  margin-bottom: 18px;
+  background: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.cloud-settings div {
+  background: #fff;
+  padding: 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.cloud-settings span,
+.cloud-user-line span,
+.help-text {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cloud-settings strong,
+.cloud-user-line strong {
+  font-size: 15px;
+}
+
+.cloud-dialog-body {
+  padding: 18px 20px 20px;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-panel[hidden] {
+  display: none;
+}
+
+.auth-panel h4,
+.auth-panel p {
+  margin: 0;
+}
+
+.cloud-user-line,
+.workspace-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.inline-actions {
+  padding: 0;
+  border-top: 0;
+}
+
+.help-text {
+  margin: -4px 0 0;
+  line-height: 1.45;
+}
+
 .report-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(160px, 1fr));
@@ -606,6 +677,50 @@ textarea { resize: vertical; }
   font-size: 19px;
 }
 
+.chat-bill-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.chat-thread {
+  min-height: 74px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+  padding: 12px;
+}
+
+.chat-message {
+  max-width: 760px;
+  color: var(--ink);
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.chat-message.system {
+  color: var(--muted);
+}
+
+.chat-summary {
+  min-height: 42px;
+  display: grid;
+  gap: 4px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.purchase-select,
+#selectAllPurchases {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--primary);
+}
+
 #toast {
   position: fixed;
   right: 18px;
@@ -655,7 +770,7 @@ textarea { resize: vertical; }
     grid-template-columns: 18px auto;
     min-width: max-content;
   }
-  .metric-grid, .split-layout, .report-grid {
+  .metric-grid, .split-layout, .report-grid, .cloud-settings {
     grid-template-columns: 1fr 1fr;
   }
   .line-row {
@@ -694,7 +809,7 @@ textarea { resize: vertical; }
   .dialog-actions .secondary-btn {
     width: 100%;
   }
-  .metric-grid, .split-layout, .report-grid, .form-grid, .settings-grid {
+  .metric-grid, .split-layout, .report-grid, .cloud-settings, .form-grid, .settings-grid {
     grid-template-columns: 1fr;
   }
   .metric {

@@ -1,5 +1,9 @@
 const STORAGE_KEY = "billingSoftware.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
+const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
+const CLOUD_SELECTED_WORKSPACE_KEY = "billingSoftware.cloudWorkspaceId";
+const PURCHASE_ATTACHMENT_BUCKET = "purchase-invoices";
+const EWAY_DOCUMENT_VERSION = "1.0.0621";
 
 const OFFICIAL_GST_PROFILES = [
   {
@@ -116,7 +120,15 @@ const defaultState = {
   settings: {
     currency: "Rs.",
     activeProfileId: "gst-1",
-    profiles: createDefaultProfiles()
+    profiles: createDefaultProfiles(),
+    reportEmails: "",
+    ewayDefaults: {
+      vehicleNo: "",
+      distanceKm: 0,
+      vehicleType: "R",
+      transMode: "1",
+      transType: "1"
+    }
   },
   items: [
     { id: uid(), name: "Sample Product", hsn: "85171300", gstRate: 18, saleRate: 1000, purchaseRate: 850, openingStock: 10, minStock: 2 }
@@ -136,6 +148,14 @@ let editingEntryId = null;
 let editingItemId = null;
 let editingPartyId = null;
 let activeReport = "summary";
+let cloudClient = null;
+let cloudSession = null;
+let cloudWorkspaces = [];
+let cloudWorkspace = null;
+let cloudLoading = false;
+let cloudSyncTimer = null;
+let selectedPurchaseIds = new Set();
+let entryDraftMeta = {};
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -188,11 +208,20 @@ function normalizeState(value) {
       };
     });
   }
+  const existingEwayDefaults = value.settings.ewayDefaults || {};
   value.settings = {
     currency: value.settings.currency || "Rs.",
     activeProfileId: value.settings.activeProfileId || profiles[0].id,
     profiles,
-    gstProfilesLoadedVersion: GST_PROFILE_VERSION
+    gstProfilesLoadedVersion: GST_PROFILE_VERSION,
+    reportEmails: value.settings.reportEmails || "",
+    ewayDefaults: {
+      vehicleNo: existingEwayDefaults.vehicleNo || "",
+      distanceKm: num(existingEwayDefaults.distanceKm),
+      vehicleType: existingEwayDefaults.vehicleType || "R",
+      transMode: existingEwayDefaults.transMode || "1",
+      transType: existingEwayDefaults.transType || "1"
+    }
   };
   if (!profiles.some(profile => profile.id === value.settings.activeProfileId)) {
     value.settings.activeProfileId = profiles[0].id;
@@ -204,11 +233,30 @@ function normalizeState(value) {
   [...value.sales, ...value.purchases].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
+  value.sales.forEach(entry => normalizeEntryForState(entry, "sale"));
+  value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase"));
   return value;
 }
 
-function saveState() {
+function normalizeEntryForState(entry, kind) {
+  entry.lines = Array.isArray(entry.lines) ? entry.lines : [];
+  const calculated = basicTotals(entry.lines);
+  entry.taxable = num(entry.taxable) || calculated.taxable;
+  entry.cgst = num(entry.cgst);
+  entry.sgst = num(entry.sgst);
+  entry.igst = num(entry.igst);
+  entry.gst = num(entry.gst) || entry.cgst + entry.sgst + entry.igst || calculated.gst;
+  entry.total = num(entry.total) || entry.taxable + entry.gst;
+  entry.taxMode = entry.taxMode || (entry.igst > 0 ? "IGST" : "CGST_SGST");
+  entry.reviewMessages = Array.isArray(entry.reviewMessages) ? entry.reviewMessages : [];
+  entry.reviewStatus = entry.reviewStatus || (entry.reviewMessages.length ? "Needs Review" : "Ready");
+  entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
+  if (kind === "purchase") entry.source = entry.source || "manual";
+}
+
+function saveState(options = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!options.skipCloud) scheduleCloudSave();
 }
 
 function money(value) {
@@ -272,7 +320,25 @@ function nextEntryNumber(kind, profileId = state.settings.activeProfileId) {
   return `${entryPrefix(kind)}-${String(profile[key] || 1).padStart(4, "0")}`;
 }
 
-function totals(lines) {
+function normalizeGstin(value) {
+  return String(value || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+}
+
+function stateCodeFromGstin(gstin) {
+  const normalized = normalizeGstin(gstin);
+  return /^\d{2}/.test(normalized) ? normalized.slice(0, 2) : "";
+}
+
+function profileByGstin(gstin) {
+  const normalized = normalizeGstin(gstin);
+  return state.settings.profiles.find(profile => normalizeGstin(profile.gstin) === normalized);
+}
+
+function partyById(id) {
+  return state.parties.find(row => row.id === id);
+}
+
+function basicTotals(lines) {
   return lines.reduce((acc, line) => {
     const taxable = num(line.qty) * num(line.rate);
     const gst = taxable * num(line.gstRate) / 100;
@@ -280,7 +346,54 @@ function totals(lines) {
     acc.gst += gst;
     acc.total += taxable + gst;
     return acc;
-  }, { taxable: 0, gst: 0, total: 0 });
+  }, { taxable: 0, gst: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
+}
+
+function taxModeFromGstins(sellerGstin, buyerGstin) {
+  const sellerState = stateCodeFromGstin(sellerGstin);
+  const buyerState = stateCodeFromGstin(buyerGstin);
+  if (!sellerState || !buyerState) {
+    return {
+      mode: "CGST_SGST",
+      review: "GSTIN state code missing. Please confirm whether CGST/SGST or IGST applies."
+    };
+  }
+  return sellerState === buyerState
+    ? { mode: "CGST_SGST", review: "" }
+    : { mode: "IGST", review: "" };
+}
+
+function calculateEntryTotals(lines, profile, party, kind) {
+  const sellerGstin = kind === "purchase" ? party?.gstin : profile?.gstin;
+  const buyerGstin = kind === "purchase" ? profile?.gstin : party?.gstin;
+  const { mode, review } = taxModeFromGstins(sellerGstin, buyerGstin);
+  const calculated = lines.reduce((acc, line) => {
+    const taxable = num(line.qty) * num(line.rate);
+    const gst = taxable * num(line.gstRate) / 100;
+    acc.taxable += taxable;
+    acc.gst += gst;
+    if (mode === "IGST") acc.igst += gst;
+    else {
+      acc.cgst += gst / 2;
+      acc.sgst += gst / 2;
+    }
+    acc.total += taxable + gst;
+    return acc;
+  }, { taxable: 0, gst: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
+  calculated.taxMode = mode;
+  calculated.reviewMessages = review ? [review] : [];
+  return calculated;
+}
+
+function totals(lines) {
+  const form = $("#entryForm");
+  const profile = profileById(form?.elements?.profileId?.value || state.settings.activeProfileId);
+  const party = partyById(form?.elements?.partyId?.value);
+  return calculateEntryTotals(lines, profile, party, entryMode);
+}
+
+function amountsClose(a, b, tolerance = 1) {
+  return Math.abs(num(a) - num(b)) <= tolerance;
 }
 
 function stockForItem(itemId) {
@@ -303,11 +416,12 @@ function itemName(id) {
   return state.items.find(row => row.id === id)?.name || "Unknown Item";
 }
 
-function init() {
+async function init() {
   $("#todayLabel").textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "short", year: "numeric" });
   bindEvents();
   renderAll();
   registerServiceWorker();
+  await initCloud();
   if (window.lucide) lucide.createIcons();
 }
 
@@ -321,12 +435,19 @@ function bindEvents() {
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
   $("#quickSaleBtn").addEventListener("click", () => openEntry("sale"));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
+  $("#chatBillBtn").addEventListener("click", openChatBillDialog);
+  $("#newChatSaleBtn").addEventListener("click", openChatBillDialog);
   $("#newPurchaseBtn").addEventListener("click", () => openEntry("purchase"));
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
+  $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
+  $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
   $("#newItemBtn").addEventListener("click", () => openItem());
   $("#newPartyBtn").addEventListener("click", () => openParty());
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryForm").addEventListener("submit", saveEntry);
+  $("#chatBillForm").addEventListener("submit", event => event.preventDefault());
+  $("#chatSampleBtn").addEventListener("click", fillChatBillSample);
+  $("#prepareChatBillBtn").addEventListener("click", prepareChatBillDraft);
   $("#itemForm").addEventListener("submit", saveItem);
   $("#partyForm").addEventListener("submit", saveParty);
   $("#saveSettingsBtn").addEventListener("click", saveSettings);
@@ -339,9 +460,20 @@ function bindEvents() {
   $("#settingsForm").elements.profileId.addEventListener("change", renderSettings);
   $("#backupBtn").addEventListener("click", exportBackup);
   $("#restoreInput").addEventListener("change", importBackup);
+  $("#cloudBtn").addEventListener("click", openCloudDialog);
+  $("#openCloudSettingsBtn").addEventListener("click", openCloudDialog);
+  $("#cloudForm").addEventListener("submit", event => event.preventDefault());
+  $("#cloudSignInBtn").addEventListener("click", signInToCloud);
+  $("#cloudSignUpBtn").addEventListener("click", signUpForCloud);
+  $("#cloudSignOutBtn").addEventListener("click", signOutFromCloud);
+  $("#cloudWorkspaceSelect").addEventListener("change", event => selectCloudWorkspace(event.target.value));
+  $("#cloudNewWorkspaceBtn").addEventListener("click", () => createCloudWorkspace("New Workspace"));
+  $("#cloudSyncNowBtn").addEventListener("click", () => syncCloudNow(true));
+  $("#cloudSaveWorkspaceBtn").addEventListener("click", saveCloudWorkspaceSettings);
   $("#closeInvoiceBtn").addEventListener("click", () => $("#invoiceDialog").close());
   $("#printInvoiceBtn").addEventListener("click", () => window.print());
   $("#printReportBtn").addEventListener("click", () => window.print());
+  $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
   $("#reportFrom").addEventListener("change", renderReport);
   $("#reportTo").addEventListener("change", renderReport);
   $$(".segmented button").forEach(button => button.addEventListener("click", () => {
@@ -377,11 +509,219 @@ function renderAll() {
   renderParties();
   renderSettings();
   renderReport();
+  renderCloudUi();
   if (window.lucide) lucide.createIcons();
 }
 
 function renderProfileSelectors() {
   $("#activeProfileSelect").innerHTML = profileOptions(state.settings.activeProfileId);
+}
+
+function cloudConfig() {
+  return window.CLOUD_CONFIG || {};
+}
+
+function cloudConfigured() {
+  const config = cloudConfig();
+  return Boolean(config.supabaseUrl && config.supabaseAnonKey && window.supabase);
+}
+
+async function initCloud() {
+  renderCloudUi();
+  if (!cloudConfigured()) return;
+  const config = cloudConfig();
+  cloudClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  const { data, error } = await cloudClient.auth.getSession();
+  if (error) {
+    toast("Cloud session could not be loaded");
+    return;
+  }
+  cloudSession = data.session;
+  cloudClient.auth.onAuthStateChange(async (_event, session) => {
+    cloudSession = session;
+    if (session) await loadCloudWorkspaces();
+    else {
+      cloudWorkspaces = [];
+      cloudWorkspace = null;
+      renderCloudUi();
+    }
+  });
+  if (cloudSession) await loadCloudWorkspaces();
+  renderCloudUi();
+}
+
+function openCloudDialog() {
+  renderCloudUi();
+  $("#cloudDialog").showModal();
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderCloudUi() {
+  const configured = cloudConfigured();
+  const signedIn = Boolean(cloudSession);
+  const email = cloudSession?.user?.email || "-";
+  $("#cloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
+  $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
+  $("#cloudWorkspaceLabel").textContent = cloudWorkspace?.name || "Not connected";
+  $("#cloudLastSyncLabel").textContent = cloudWorkspace?.updated_at ? new Date(cloudWorkspace.updated_at).toLocaleString("en-IN") : "-";
+  $("#cloudNotConfigured").hidden = configured;
+  $("#cloudSignedOut").hidden = !configured || signedIn;
+  $("#cloudSignedIn").hidden = !configured || !signedIn;
+  $("#cloudUserEmail").textContent = email;
+  $("#cloudWorkspaceSelect").innerHTML = cloudWorkspaces.map(workspace => `
+    <option value="${workspace.id}" ${workspace.id === cloudWorkspace?.id ? "selected" : ""}>${escapeHtml(workspace.name)}</option>
+  `).join("");
+  $("#cloudWorkspaceName").value = cloudWorkspace?.name || "";
+  $("#cloudMemberEmails").value = (cloudWorkspace?.member_emails || []).join("\n");
+}
+
+async function signInToCloud() {
+  if (!cloudClient) return toast("Cloud is not configured");
+  const email = $("#cloudEmail").value.trim();
+  const password = $("#cloudPassword").value;
+  if (!email || !password) return toast("Enter email and password");
+  const { error } = await cloudClient.auth.signInWithPassword({ email, password });
+  if (error) return toast(error.message);
+  toast("Signed in");
+}
+
+async function signUpForCloud() {
+  if (!cloudClient) return toast("Cloud is not configured");
+  const email = $("#cloudEmail").value.trim();
+  const password = $("#cloudPassword").value;
+  if (!email || !password) return toast("Enter email and password");
+  const { data, error } = await cloudClient.auth.signUp({ email, password });
+  if (error) return toast(error.message);
+  if (!data.session) toast("Account created. Check your email to confirm sign in.");
+  else toast("Account created");
+}
+
+async function signOutFromCloud() {
+  if (!cloudClient) return;
+  await syncCloudNow(false);
+  await cloudClient.auth.signOut();
+  cloudSession = null;
+  cloudWorkspace = null;
+  cloudWorkspaces = [];
+  renderCloudUi();
+  toast("Signed out");
+}
+
+async function loadCloudWorkspaces() {
+  if (!cloudClient || !cloudSession) return;
+  cloudLoading = true;
+  const { data, error } = await cloudClient
+    .from(CLOUD_WORKSPACE_TABLE)
+    .select("id,name,owner_id,member_emails,data,updated_at,created_at")
+    .order("updated_at", { ascending: false });
+  cloudLoading = false;
+  if (error) {
+    renderCloudUi();
+    toast("Cloud table is not ready. Run the database setup.");
+    return;
+  }
+  cloudWorkspaces = data || [];
+  if (!cloudWorkspaces.length) {
+    await createCloudWorkspace("Main Business");
+    return;
+  }
+  const savedId = localStorage.getItem(CLOUD_SELECTED_WORKSPACE_KEY);
+  const workspace = cloudWorkspaces.find(row => row.id === savedId) || cloudWorkspaces[0];
+  applyCloudWorkspace(workspace, "Cloud data loaded");
+}
+
+async function createCloudWorkspace(name) {
+  if (!cloudClient || !cloudSession) return toast("Sign in to create a workspace");
+  const { data, error } = await cloudClient
+    .from(CLOUD_WORKSPACE_TABLE)
+    .insert({
+      owner_id: cloudSession.user.id,
+      name,
+      member_emails: [],
+      data: clone(state)
+    })
+    .select("id,name,owner_id,member_emails,data,updated_at,created_at")
+    .single();
+  if (error) return toast(error.message);
+  cloudWorkspaces = [data, ...cloudWorkspaces.filter(row => row.id !== data.id)];
+  applyCloudWorkspace(data, "Cloud workspace created");
+}
+
+function applyCloudWorkspace(workspace, message) {
+  cloudWorkspace = workspace;
+  localStorage.setItem(CLOUD_SELECTED_WORKSPACE_KEY, workspace.id);
+  state = normalizeState(clone(workspace.data || defaultState));
+  saveState({ skipCloud: true });
+  renderAll();
+  if (message) toast(message);
+}
+
+function parseMemberEmails(value) {
+  return [...new Set(value
+    .split(/[\n,;]/)
+    .map(email => email.trim().toLowerCase())
+    .filter(Boolean))];
+}
+
+async function selectCloudWorkspace(id) {
+  const workspace = cloudWorkspaces.find(row => row.id === id);
+  if (!workspace) return;
+  await syncCloudNow(false);
+  applyCloudWorkspace(workspace, "Workspace changed");
+}
+
+async function saveCloudWorkspaceSettings() {
+  if (!cloudClient || !cloudWorkspace) return toast("Sign in to save workspace");
+  const name = $("#cloudWorkspaceName").value.trim() || "Main Business";
+  const memberEmails = parseMemberEmails($("#cloudMemberEmails").value);
+  const { data, error } = await cloudClient
+    .from(CLOUD_WORKSPACE_TABLE)
+    .update({
+      name,
+      member_emails: memberEmails,
+      data: clone(state),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", cloudWorkspace.id)
+    .select("id,name,owner_id,member_emails,data,updated_at,created_at")
+    .single();
+  if (error) return toast(error.message);
+  cloudWorkspace = data;
+  cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
+  renderCloudUi();
+  toast("Workspace saved");
+}
+
+function scheduleCloudSave() {
+  if (!cloudClient || !cloudSession || !cloudWorkspace || cloudLoading) return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => syncCloudNow(false), 900);
+}
+
+async function syncCloudNow(showToast) {
+  if (!cloudClient || !cloudSession || !cloudWorkspace) {
+    if (showToast) toast("Sign in to sync cloud data");
+    return;
+  }
+  clearTimeout(cloudSyncTimer);
+  const { data, error } = await cloudClient
+    .from(CLOUD_WORKSPACE_TABLE)
+    .update({
+      data: clone(state),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", cloudWorkspace.id)
+    .select("id,name,owner_id,member_emails,data,updated_at,created_at")
+    .single();
+  if (error) {
+    if (showToast) toast(error.message);
+    else toast("Cloud sync failed");
+    return;
+  }
+  cloudWorkspace = data;
+  cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
+  renderCloudUi();
+  if (showToast) toast("Cloud synced");
 }
 
 function renderDashboard() {
@@ -409,13 +749,20 @@ function renderDashboard() {
 }
 
 function renderEntries(kind) {
-  const rows = entryList(kind).sort((a, b) => b.date.localeCompare(a.date)).map(entry => `
+  const rows = entryList(kind).sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
+    const purchaseSelect = kind === "purchase" ? `
+      <td><input class="purchase-select" type="checkbox" aria-label="Select ${escapeHtml(entry.number)}" data-purchase-id="${entry.id}" ${selectedPurchaseIds.has(entry.id) ? "checked" : ""}></td>
+    ` : "";
+    const reviewCell = kind === "purchase" ? `<td>${reviewBadge(entry)}</td>` : "";
+    return `
     <tr>
+      ${purchaseSelect}
       <td>${entry.date}</td>
       <td>${escapeHtml(entry.number)}</td>
       <td>${escapeHtml(profileName(entry.profileId))}</td>
       <td>${escapeHtml(partyName(entry.partyId))}</td>
       <td><span class="badge ${entry.status === "Unpaid" ? "warn" : ""}">${escapeHtml(entry.status)}</span></td>
+      ${reviewCell}
       <td class="num">${money(entry.taxable)}</td>
       <td class="num">${money(entry.gst)}</td>
       <td class="num">${money(entry.total)}</td>
@@ -427,8 +774,45 @@ function renderEntries(kind) {
         </div>
       </td>
     </tr>
-  `).join("");
-  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = rows || emptyRow(9, kind === "sale" ? "No sales entries" : "No purchase entries");
+  `;
+  }).join("");
+  const emptyColspan = kind === "sale" ? 9 : 11;
+  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = rows || emptyRow(emptyColspan, kind === "sale" ? "No sales entries" : "No purchase entries");
+  if (kind === "purchase") bindPurchaseSelectors();
+}
+
+function reviewBadge(entry) {
+  const status = entry.reviewStatus || "Ready";
+  const message = (entry.reviewMessages || []).join(" ");
+  const className = status === "Needs Review" ? "warn" : "";
+  const title = message ? ` title="${escapeHtml(message)}"` : "";
+  return `<span class="badge ${className}"${title}>${escapeHtml(status)}</span>`;
+}
+
+function bindPurchaseSelectors() {
+  $$(".purchase-select").forEach(input => {
+    input.addEventListener("change", event => {
+      const id = event.target.dataset.purchaseId;
+      if (event.target.checked) selectedPurchaseIds.add(id);
+      else selectedPurchaseIds.delete(id);
+      updateSelectAllPurchases();
+    });
+  });
+  updateSelectAllPurchases();
+}
+
+function updateSelectAllPurchases() {
+  const control = $("#selectAllPurchases");
+  if (!control) return;
+  const ids = state.purchases.map(entry => entry.id);
+  const selectedCount = ids.filter(id => selectedPurchaseIds.has(id)).length;
+  control.checked = ids.length > 0 && selectedCount === ids.length;
+  control.indeterminate = selectedCount > 0 && selectedCount < ids.length;
+}
+
+function toggleAllPurchases(event) {
+  selectedPurchaseIds = event.target.checked ? new Set(state.purchases.map(entry => entry.id)) : new Set();
+  renderEntries("purchase");
 }
 
 function renderItems() {
@@ -472,6 +856,9 @@ function renderSettings() {
     form.elements[key].value = profile?.[key] ?? "";
   });
   form.elements.currency.value = state.settings.currency || "Rs.";
+  form.elements.reportEmails.value = state.settings.reportEmails || "";
+  form.elements.ewayVehicleNo.value = state.settings.ewayDefaults?.vehicleNo || "";
+  form.elements.ewayDistanceKm.value = num(state.settings.ewayDefaults?.distanceKm) || "";
 }
 
 function emptyRow(colspan, label) {
@@ -493,6 +880,15 @@ function openEntry(kind, id = null, draft = null) {
   editingEntryId = id;
   const entry = id ? entryList(kind).find(row => row.id === id) : null;
   const source = entry || draft;
+  entryDraftMeta = {
+    attachments: clone(source?.attachments || []),
+    reviewStatus: source?.reviewStatus || "Ready",
+    reviewMessages: clone(source?.reviewMessages || []),
+    source: source?.source || (draft ? "imported" : "manual"),
+    extractedTaxes: clone(source?.extractedTaxes || null),
+    sellerGstin: source?.sellerGstin || "",
+    buyerGstin: source?.buyerGstin || ""
+  };
   const form = $("#entryForm");
   form.reset();
   $("#entryKindLabel").textContent = kind === "sale" ? "Sales Entry" : "Purchase Entry";
@@ -502,10 +898,12 @@ function openEntry(kind, id = null, draft = null) {
   form.elements.profileId.innerHTML = profileOptions(source?.profileId || state.settings.activeProfileId);
   form.elements.profileId.onchange = () => {
     if (!editingEntryId) form.elements.number.value = nextEntryNumber(kind, form.elements.profileId.value);
+    updateEntryTotals();
   };
   form.elements.status.value = source?.status || "Paid";
   form.elements.notes.value = source?.notes || "";
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
+  form.elements.partyId.onchange = updateEntryTotals;
   $("#lineRows").innerHTML = "";
   (source?.lines?.length ? source.lines : [blankLine(kind)]).forEach(line => addLineRow(line));
   updateEntryTotals();
@@ -567,8 +965,43 @@ function updateEntryTotals() {
   });
   const calculated = totals(collectLines());
   $("#entryTaxable").textContent = money(calculated.taxable);
+  $("#entryCgst").textContent = money(calculated.cgst);
+  $("#entrySgst").textContent = money(calculated.sgst);
+  $("#entryIgst").textContent = money(calculated.igst);
   $("#entryGst").textContent = money(calculated.gst);
   $("#entryTotal").textContent = money(calculated.total);
+}
+
+function uniqueMessages(messages) {
+  return [...new Set(messages.map(message => String(message || "").trim()).filter(Boolean))];
+}
+
+function purchaseTaxReviewMessages(extractedTaxes, calculated) {
+  if (!extractedTaxes) return [];
+  const messages = [];
+  const extractedCgst = num(extractedTaxes.cgst);
+  const extractedSgst = num(extractedTaxes.sgst);
+  const extractedIgst = num(extractedTaxes.igst);
+  const extractedGst = num(extractedTaxes.gst) || extractedCgst + extractedSgst + extractedIgst;
+  if (calculated.taxMode === "IGST" && (extractedCgst > 0 || extractedSgst > 0)) {
+    messages.push("Supplier and buyer GSTIN states differ, so IGST is expected. Uploaded invoice shows CGST/SGST.");
+  }
+  if (calculated.taxMode === "CGST_SGST" && extractedIgst > 0) {
+    messages.push("Supplier and buyer GSTIN states match, so CGST/SGST is expected. Uploaded invoice shows IGST.");
+  }
+  if (extractedGst && !amountsClose(extractedGst, calculated.gst)) {
+    messages.push(`Uploaded GST amount ${money(extractedGst)} differs from calculated GST ${money(calculated.gst)}.`);
+  }
+  if (extractedCgst && !amountsClose(extractedCgst, calculated.cgst)) {
+    messages.push(`Uploaded CGST ${money(extractedCgst)} differs from calculated CGST ${money(calculated.cgst)}.`);
+  }
+  if (extractedSgst && !amountsClose(extractedSgst, calculated.sgst)) {
+    messages.push(`Uploaded SGST ${money(extractedSgst)} differs from calculated SGST ${money(calculated.sgst)}.`);
+  }
+  if (extractedIgst && !amountsClose(extractedIgst, calculated.igst)) {
+    messages.push(`Uploaded IGST ${money(extractedIgst)} differs from calculated IGST ${money(calculated.igst)}.`);
+  }
+  return messages;
 }
 
 function saveEntry(event) {
@@ -579,7 +1012,14 @@ function saveEntry(event) {
     toast("Add at least one item");
     return;
   }
-  const calculated = totals(lines);
+  const profile = profileById(form.elements.profileId.value);
+  const party = partyById(form.elements.partyId.value);
+  const calculated = calculateEntryTotals(lines, profile, party, entryMode);
+  const reviewMessages = uniqueMessages([
+    ...calculated.reviewMessages,
+    ...(entryDraftMeta.reviewMessages || []),
+    ...(entryMode === "purchase" ? purchaseTaxReviewMessages(entryDraftMeta.extractedTaxes, calculated) : [])
+  ]);
   const entry = {
     id: editingEntryId || uid(),
     date: form.elements.date.value,
@@ -589,7 +1029,14 @@ function saveEntry(event) {
     status: form.elements.status.value,
     notes: form.elements.notes.value.trim(),
     lines,
-    ...calculated
+    ...calculated,
+    attachments: clone(entryDraftMeta.attachments || []),
+    extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
+    source: entryDraftMeta.source || "manual",
+    sellerGstin: entryDraftMeta.sellerGstin || normalizeGstin(party?.gstin),
+    buyerGstin: entryDraftMeta.buyerGstin || normalizeGstin(profile?.gstin),
+    reviewMessages,
+    reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
   };
   const list = entryList(entryMode);
   const index = list.findIndex(row => row.id === entry.id);
@@ -610,6 +1057,7 @@ function deleteEntry(kind, id) {
   if (!confirm("Delete this entry?")) return;
   const key = kind === "sale" ? "sales" : "purchases";
   state[key] = state[key].filter(row => row.id !== id);
+  selectedPurchaseIds.delete(id);
   saveState();
   renderAll();
   toast("Entry deleted");
@@ -723,6 +1171,12 @@ function saveSettings(event) {
   profile.nextSaleNo = Math.max(1, num(form.elements.nextSaleNo.value));
   profile.nextPurchaseNo = Math.max(1, num(form.elements.nextPurchaseNo.value));
   state.settings.currency = form.elements.currency.value.trim() || "Rs.";
+  state.settings.reportEmails = form.elements.reportEmails.value.trim();
+  state.settings.ewayDefaults = {
+    ...(state.settings.ewayDefaults || {}),
+    vehicleNo: form.elements.ewayVehicleNo.value.trim().toUpperCase(),
+    distanceKm: Math.max(0, num(form.elements.ewayDistanceKm.value))
+  };
   state.settings.activeProfileId = profile.id;
   saveState();
   renderAll();
@@ -769,6 +1223,9 @@ function showInvoice(id, kind) {
       </table>
       <div class="invoice-total">
         <div><span>Taxable</span><span>${money(entry.taxable)}</span></div>
+        ${num(entry.cgst) ? `<div><span>CGST</span><span>${money(entry.cgst)}</span></div>` : ""}
+        ${num(entry.sgst) ? `<div><span>SGST</span><span>${money(entry.sgst)}</span></div>` : ""}
+        ${num(entry.igst) ? `<div><span>IGST</span><span>${money(entry.igst)}</span></div>` : ""}
         <div><span>GST</span><span>${money(entry.gst)}</span></div>
         <div><strong>Total</strong><strong>${money(entry.total)}</strong></div>
       </div>
@@ -826,14 +1283,189 @@ function renderReport() {
   </tbody></table></div>`;
 }
 
-function exportBackup() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+function exportSelectedEwayJson() {
+  const purchases = state.purchases.filter(entry => selectedPurchaseIds.has(entry.id));
+  if (!purchases.length) return toast("Select purchase bills first");
+  const reviewMeta = [];
+  const billLists = purchases.map(entry => {
+    const result = buildEwayBill(entry);
+    if (result.reviewMessages.length) {
+      reviewMeta.push({ docNo: entry.number, messages: result.reviewMessages });
+    }
+    return result.bill;
+  });
+  const payload = {
+    version: EWAY_DOCUMENT_VERSION,
+    billLists,
+    reviewMeta
+  };
+  downloadJson(payload, `purchase-eway-${today()}.json`);
+  toast(reviewMeta.length ? "E-way JSON downloaded with review notes" : "E-way JSON downloaded");
+}
+
+function buildEwayBill(entry) {
+  const profile = profileById(entry.profileId);
+  const supplier = partyById(entry.partyId) || {};
+  const fromGstin = normalizeGstin(supplier.gstin);
+  const toGstin = normalizeGstin(profile.gstin);
+  const fromStateCode = Number(stateCodeFromGstin(fromGstin) || stateCodeFromGstin(entry.sellerGstin));
+  const toStateCode = Number(stateCodeFromGstin(toGstin) || stateCodeFromGstin(entry.buyerGstin));
+  const fromPincode = extractPincode(supplier.address || supplier.place);
+  const toPincode = extractPincode(profile.address);
+  const defaults = state.settings.ewayDefaults || {};
+  const bill = {
+    userGstin: toGstin,
+    supplyType: "I",
+    subSupplyType: 1,
+    docType: "INV",
+    docNo: entry.number,
+    docDate: ewayDate(entry.date),
+    transType: defaults.transType || "1",
+    fromGstin: fromGstin || "URP",
+    fromTrdName: supplier.name || partyName(entry.partyId),
+    fromAddr1: supplier.address || supplier.place || "",
+    fromAddr2: "",
+    fromPlace: supplier.place || "",
+    fromPincode,
+    actFromStateCode: fromStateCode || 0,
+    fromStateCode: fromStateCode || 0,
+    toGstin,
+    toTrdName: profile.businessName || profile.label,
+    toAddr1: profile.address || "",
+    toAddr2: "",
+    toPlace: profile.state || "",
+    toPincode,
+    actToStateCode: toStateCode || 0,
+    toStateCode: toStateCode || 0,
+    totalValue: round2(entry.taxable),
+    cgstValue: round2(entry.cgst),
+    sgstValue: round2(entry.sgst),
+    igstValue: round2(entry.igst),
+    cessValue: 0,
+    cessNonAdvolValue: 0,
+    totInvValue: round2(entry.total),
+    transMode: defaults.transMode || "1",
+    transDistance: String(num(defaults.distanceKm) || 0),
+    transporterName: "",
+    transporterId: "",
+    transDocNo: "",
+    transDocDate: "",
+    vehicleNo: defaults.vehicleNo || "",
+    vehicleType: defaults.vehicleType || "R",
+    itemList: entry.lines.map((line, index) => ewayItem(line, index + 1, entry.taxMode))
+  };
+  return { bill, reviewMessages: validateEwayBill(bill) };
+}
+
+function ewayItem(line, serialNo, taxMode) {
+  const item = state.items.find(row => row.id === line.itemId) || {};
+  const taxable = num(line.qty) * num(line.rate);
+  const gstRate = num(line.gstRate);
+  return {
+    itemNo: serialNo,
+    productName: item.name || itemName(line.itemId),
+    productDesc: item.name || itemName(line.itemId),
+    hsnCode: item.hsn || "",
+    quantity: num(line.qty),
+    qtyUnit: "NOS",
+    taxableAmount: round2(taxable),
+    sgstRate: taxMode === "IGST" ? 0 : gstRate / 2,
+    cgstRate: taxMode === "IGST" ? 0 : gstRate / 2,
+    igstRate: taxMode === "IGST" ? gstRate : 0,
+    cessRate: 0
+  };
+}
+
+function validateEwayBill(bill) {
+  const messages = [];
+  if (!bill.userGstin) messages.push("Buyer GSTIN missing.");
+  if (!bill.fromGstin || bill.fromGstin === "URP") messages.push("Supplier GSTIN missing.");
+  if (!bill.fromPincode) messages.push("Supplier pincode missing.");
+  if (!bill.toPincode) messages.push("Buyer pincode missing.");
+  if (!bill.vehicleNo) messages.push("Default vehicle number missing in Settings.");
+  if (!bill.transDistance || bill.transDistance === "0") messages.push("Transport distance missing in Settings.");
+  if (!bill.itemList.length) messages.push("No item lines found.");
+  bill.itemList.forEach(item => {
+    if (!item.hsnCode) messages.push(`${item.productName}: HSN missing.`);
+    if (!item.quantity) messages.push(`${item.productName}: quantity missing.`);
+  });
+  return uniqueMessages(messages);
+}
+
+function exportPurchaseRegister() {
+  const from = $("#reportFrom").value || "0000-01-01";
+  const to = $("#reportTo").value || "9999-12-31";
+  const rows = state.purchases
+    .filter(entry => entry.date >= from && entry.date <= to)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(entry => {
+      const profile = profileById(entry.profileId);
+      const supplier = partyById(entry.partyId) || {};
+      return [
+        entry.date,
+        entry.number,
+        profile.businessName || profile.label,
+        profile.gstin,
+        supplier.name || "",
+        supplier.gstin || "",
+        entry.taxMode || "",
+        round2(entry.taxable),
+        round2(entry.cgst),
+        round2(entry.sgst),
+        round2(entry.igst),
+        round2(entry.gst),
+        round2(entry.total),
+        entry.reviewStatus || "",
+        (entry.reviewMessages || []).join(" | "),
+        (entry.attachments || []).map(file => file.storagePath || file.name).join(" | ")
+      ];
+    });
+  const header = ["Date", "Bill No", "Buyer Business", "Buyer GSTIN", "Supplier", "Supplier GSTIN", "Tax Mode", "Taxable", "CGST", "SGST", "IGST", "GST", "Total", "Review Status", "Review Notes", "Invoice Soft Copy"];
+  downloadCsv([header, ...rows], `purchase-register-${today()}.csv`);
+  toast("Purchase register downloaded");
+}
+
+function downloadJson(payload, fileName) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  downloadBlob(blob, fileName);
+}
+
+function downloadCsv(rows, fileName) {
+  const csv = rows.map(row => row.map(csvCell).join(",")).join("\n");
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), fileName);
+}
+
+function downloadBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `billing-backup-${today()}.json`;
+  link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function extractPincode(value) {
+  const match = String(value || "").match(/\b\d{6}\b/);
+  return match ? Number(match[0]) : 0;
+}
+
+function ewayDate(value) {
+  const [year, month, day] = String(value || today()).split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function round2(value) {
+  return Math.round(num(value) * 100) / 100;
+}
+
+function exportBackup() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  downloadBlob(blob, `billing-backup-${today()}.json`);
 }
 
 function importBackup(event) {
@@ -857,28 +1489,309 @@ function importBackup(event) {
   reader.readAsText(file);
 }
 
+function openChatBillDialog() {
+  $("#chatBillInput").value = "";
+  $("#chatBillThread").innerHTML = `
+    <div class="chat-message system">Type the customer, GSTIN, items, qty, rate and GST %. I will prepare a sale draft for review.</div>
+  `;
+  $("#chatBillSummary").innerHTML = "";
+  $("#chatBillDialog").showModal();
+  if (window.lucide) lucide.createIcons();
+}
+
+function fillChatBillSample() {
+  $("#chatBillInput").value = "Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each, GST 18%, unpaid";
+}
+
+async function prepareChatBillDraft() {
+  const message = $("#chatBillInput").value.trim();
+  if (!message) return toast("Enter sale details");
+  $("#chatBillSummary").innerHTML = `<span class="help-text">Preparing draft...</span>`;
+  let parsed = await parseSaleChatWithCloud(message);
+  if (!parsed) parsed = parseSaleChatLocal(message);
+  const draft = buildChatSaleDraft(parsed, message);
+  $("#chatBillSummary").innerHTML = renderChatBillSummary(parsed, draft);
+  saveState();
+  renderAll();
+  $("#chatBillDialog").close();
+  openEntry("sale", null, draft);
+  toast("Sale draft prepared. Please review and save.");
+}
+
+async function parseSaleChatWithCloud(message) {
+  if (!cloudClient || !cloudSession) return null;
+  try {
+    const { data, error } = await cloudClient.functions.invoke("parse-sale-chat", {
+      body: {
+        message,
+        profiles: state.settings.profiles,
+        items: state.items,
+        parties: state.parties
+      }
+    });
+    if (error) throw error;
+    return data?.draft || data;
+  } catch (error) {
+    console.warn("Cloud sale parser unavailable", error);
+    return null;
+  }
+}
+
+function parseSaleChatLocal(message) {
+  const gstin = normalizeGstin(message.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0] || "");
+  const profile = extractProfileFromMessage(message) || activeProfile();
+  const customerName = extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
+  const status = /unpaid|credit|due/i.test(message) ? "Unpaid" : /partial/i.test(message) ? "Partial" : "Paid";
+  const lines = parseSaleLines(message);
+  return {
+    profileId: profile.id,
+    customerName,
+    customerGstin: gstin,
+    status,
+    notes: "Prepared from chat details. Review values before saving.",
+    lines: lines.length ? lines : [{
+      name: "Chat Sale Item",
+      hsn: "",
+      qty: 1,
+      rate: lastAmount(message) || 0,
+      gstRate: extractGstRate(message)
+    }],
+    reviewMessages: gstin ? [] : ["B2B customer GSTIN not found in chat. Please add GSTIN before final billing."]
+  };
+}
+
+function extractProfileFromMessage(message) {
+  const normalized = message.toLowerCase();
+  return state.settings.profiles.find(profile => {
+    const gstin = normalizeGstin(profile.gstin);
+    return (gstin && normalized.includes(gstin.toLowerCase()))
+      || normalized.includes(String(profile.businessName || "").toLowerCase())
+      || normalized.includes(String(profile.label || "").toLowerCase());
+  });
+}
+
+function extractCustomerName(message, gstin) {
+  const beforeGstin = gstin ? message.slice(0, message.toUpperCase().indexOf(gstin)) : message;
+  const match = beforeGstin.match(/(?:bill\s*to|customer|party|to|for)\s+([^,\n]+)/i);
+  if (!match) return "";
+  return match[1]
+    .replace(/\bgstin\b.*$/i, "")
+    .replace(/\b(invoice|bill|sale)\b/ig, "")
+    .trim();
+}
+
+function extractGstRate(text) {
+  const match = text.match(/\b(?:gst|tax)\s*(?:rate)?\s*[:\-]?\s*(0|3|5|12|18|28)\s*%?/i)
+    || text.match(/\b(0|3|5|12|18|28)\s*%\b/);
+  return match ? Number(match[1]) : 18;
+}
+
+function parseSaleLines(message) {
+  const chunks = message.split(/[\n;]/).flatMap(part => part.split(/\s*,\s*(?=\d+(?:\.\d+)?\s*[A-Za-z])/));
+  const lines = [];
+  for (const chunk of chunks) {
+    const pattern = /\b(\d+(?:\.\d+)?)\s*(?:x|nos?|pcs?|pieces?|qty)?\s+([A-Za-z0-9][A-Za-z0-9 \-+/().]{1,70}?)\s+(?:at|@|rate)\s*(\d+(?:,\d{3})*(?:\.\d+)?)/ig;
+    let match;
+    while ((match = pattern.exec(chunk))) {
+      const name = match[2].replace(/\b(each|gst|tax|paid|unpaid|partial)\b.*$/i, "").trim();
+      const rate = Number(match[3].replace(/,/g, ""));
+      if (name && rate > 0) {
+        lines.push({
+          name,
+          hsn: inferHsnFromItemName(name),
+          qty: num(match[1]) || 1,
+          rate,
+          gstRate: extractGstRate(chunk)
+        });
+      }
+    }
+  }
+  return lines.slice(0, 20);
+}
+
+function inferHsnFromItemName(name) {
+  const existing = state.items.find(item => item.name.toLowerCase() === name.toLowerCase());
+  return existing?.hsn || "";
+}
+
+function buildChatSaleDraft(parsed, sourceMessage) {
+  const partyId = ensureChatCustomer(parsed);
+  const lines = parsed.lines.map(line => {
+    const item = ensureChatItem(line);
+    return {
+      itemId: item.id,
+      qty: num(line.qty) || 1,
+      rate: num(line.rate),
+      gstRate: num(line.gstRate)
+    };
+  });
+  return {
+    profileId: parsed.profileId || state.settings.activeProfileId,
+    date: today(),
+    number: nextEntryNumber("sale", parsed.profileId || state.settings.activeProfileId),
+    partyId,
+    status: parsed.status || "Paid",
+    notes: parsed.notes || `Prepared from chat: ${sourceMessage.slice(0, 160)}`,
+    lines,
+    reviewMessages: parsed.reviewMessages || [],
+    reviewStatus: parsed.reviewMessages?.length ? "Needs Review" : "Ready",
+    source: "chat"
+  };
+}
+
+function ensureChatCustomer(parsed) {
+  const normalizedGstin = normalizeGstin(parsed.customerGstin);
+  const existing = state.parties.find(party => (
+    normalizedGstin && normalizeGstin(party.gstin) === normalizedGstin
+  ) || party.name.toLowerCase() === String(parsed.customerName || "").toLowerCase());
+  if (existing) return existing.id;
+  const party = {
+    id: uid(),
+    name: parsed.customerName || "Chat Customer",
+    type: "Customer",
+    gstin: normalizedGstin,
+    phone: "",
+    place: stateCodeFromGstin(normalizedGstin) || "",
+    address: ""
+  };
+  state.parties.push(party);
+  return party.id;
+}
+
+function ensureChatItem(line) {
+  const existing = state.items.find(item => item.name.toLowerCase() === String(line.name || "").toLowerCase());
+  if (existing) return existing;
+  const item = {
+    id: uid(),
+    name: line.name || "Chat Sale Item",
+    hsn: line.hsn || "",
+    gstRate: num(line.gstRate) || 18,
+    saleRate: num(line.rate),
+    purchaseRate: 0,
+    openingStock: 0,
+    minStock: 0
+  };
+  state.items.push(item);
+  return item;
+}
+
+function renderChatBillSummary(parsed, draft) {
+  return `
+    <div><strong>${escapeHtml(parsed.customerName || "Customer")}</strong></div>
+    <div>${escapeHtml(parsed.customerGstin || "GSTIN not entered")}</div>
+    <div>${draft.lines.length} item(s), ${escapeHtml(draft.status)}</div>
+  `;
+}
+
 async function handlePurchaseInvoiceUpload(event) {
-  const file = event.target.files[0];
+  const files = Array.from(event.target.files || []);
+  const file = files[0];
   if (!file) return;
   try {
     toast("Reading purchase invoice...");
-    const text = await extractPdfText(file);
-    if (!text.trim()) {
-      toast("No readable text found in PDF");
-      return;
+    const attachment = await createPurchaseAttachment(file);
+    let parsed = await extractPurchaseInvoiceWithCloud(file);
+    if (!parsed && file.type === "application/pdf") {
+      const text = await extractPdfText(file);
+      if (!text.trim()) {
+        parsed = buildManualReviewPurchase(file, "No readable text found in PDF. Please review and enter values manually.");
+      } else {
+        parsed = parsePurchaseInvoiceText(text, file.name);
+      }
     }
-    const parsed = parsePurchaseInvoiceText(text, file.name);
+    if (!parsed) {
+      parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
+    }
+    parsed.attachments = [attachment];
     const draft = buildPurchaseDraft(parsed);
     saveState();
     renderAll();
     openEntry("purchase", null, draft);
-    toast("Invoice details filled. Please review before saving.");
+    toast(files.length > 1 ? "First invoice opened. Upload the next after saving." : "Invoice details filled. Please review before saving.");
   } catch (error) {
     console.error(error);
-    toast("Could not read this invoice PDF");
+    toast("Could not read this invoice");
   } finally {
     event.target.value = "";
   }
+}
+
+async function createPurchaseAttachment(file) {
+  const attachment = {
+    name: file.name,
+    type: file.type || "application/octet-stream",
+    size: file.size,
+    uploadedAt: new Date().toISOString(),
+    bucket: "",
+    storagePath: "",
+    status: "Local only"
+  };
+  if (!cloudClient || !cloudSession || !cloudWorkspace) return attachment;
+  const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "-");
+  const storagePath = `${cloudWorkspace.id}/${today()}/${Date.now()}-${safeName}`;
+  const { error } = await cloudClient.storage
+    .from(PURCHASE_ATTACHMENT_BUCKET)
+    .upload(storagePath, file, { contentType: file.type || "application/octet-stream", upsert: false });
+  if (error) {
+    attachment.status = "Cloud upload failed";
+    attachment.error = error.message;
+    return attachment;
+  }
+  attachment.bucket = PURCHASE_ATTACHMENT_BUCKET;
+  attachment.storagePath = storagePath;
+  attachment.status = "Cloud stored";
+  return attachment;
+}
+
+async function extractPurchaseInvoiceWithCloud(file) {
+  if (!cloudClient || !cloudSession) return null;
+  try {
+    const base64 = await fileToBase64(file);
+    const { data, error } = await cloudClient.functions.invoke("extract-purchase-invoice", {
+      body: {
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        base64,
+        profiles: state.settings.profiles
+      }
+    });
+    if (error) throw error;
+    return data?.invoice || data;
+  } catch (error) {
+    console.warn("Cloud purchase extractor unavailable", error);
+    return null;
+  }
+}
+
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function buildManualReviewPurchase(file, message) {
+  const profile = activeProfile();
+  return {
+    fileName: file.name,
+    profileId: profile.id,
+    supplierName: file.name.replace(/\.[^.]+$/i, ""),
+    supplierGstin: "",
+    invoiceNumber: nextEntryNumber("purchase", profile.id),
+    invoiceDate: today(),
+    taxable: 0,
+    gst: 0,
+    total: 0,
+    extractedTaxes: { cgst: 0, sgst: 0, igst: 0, gst: 0 },
+    reviewMessages: [message],
+    lines: [{
+      name: "Imported Purchase",
+      hsn: "",
+      qty: 1,
+      rate: 0,
+      gstRate: 18
+    }]
+  };
 }
 
 async function extractPdfText(file) {
@@ -909,25 +1822,45 @@ async function extractPdfText(file) {
 function parsePurchaseInvoiceText(text, fileName) {
   const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
   const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
-  const gstins = [...new Set(cleaned.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/g) || [])];
-  const profile = state.settings.profiles.find(candidate => gstins.includes(candidate.gstin)) || activeProfile();
-  const supplierGstin = gstins.find(gstin => gstin !== profile.gstin) || "";
+  const gstins = [...new Set((cleaned.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/gi) || []).map(normalizeGstin))];
+  const matchedProfile = gstins.map(profileByGstin).find(Boolean);
+  const profile = matchedProfile || activeProfile();
+  const buyerGstin = normalizeGstin(profile.gstin);
+  const supplierGstin = gstins.find(gstin => gstin !== buyerGstin) || "";
   const supplierName = findSupplierName(lines, supplierGstin) || fileName.replace(/\.pdf$/i, "");
   const invoiceNumber = findInvoiceNumber(lines) || nextEntryNumber("purchase", profile.id);
   const invoiceDate = findInvoiceDate(cleaned) || today();
   const amounts = findInvoiceAmounts(lines);
   const parsedLines = findItemLines(lines);
   const fallbackTaxable = amounts.taxable || Math.max(0, amounts.total - amounts.gst) || amounts.total;
+  const expectedTax = taxModeFromGstins(supplierGstin, buyerGstin);
+  const reviewMessages = uniqueMessages([
+    matchedProfile ? "" : "Buyer GSTIN did not match one of your 8 GST profiles. Confirm the business GST before saving.",
+    supplierGstin ? "" : "Supplier GSTIN was not found. Confirm supplier details before saving.",
+    expectedTax.review,
+    ...(expectedTax.mode === "IGST" && (amounts.cgst || amounts.sgst) ? ["Supplier and buyer GSTIN states differ, so IGST is expected. Uploaded invoice shows CGST/SGST."] : []),
+    ...(expectedTax.mode === "CGST_SGST" && amounts.igst ? ["Supplier and buyer GSTIN states match, so CGST/SGST is expected. Uploaded invoice shows IGST."] : [])
+  ]);
   return {
     fileName,
     profileId: profile.id,
     supplierName,
     supplierGstin,
+    buyerGstin,
     invoiceNumber,
     invoiceDate,
     taxable: fallbackTaxable,
     gst: amounts.gst,
     total: amounts.total || fallbackTaxable + amounts.gst,
+    extractedTaxes: {
+      taxable: fallbackTaxable,
+      cgst: amounts.cgst,
+      sgst: amounts.sgst,
+      igst: amounts.igst,
+      gst: amounts.gst,
+      total: amounts.total || fallbackTaxable + amounts.gst
+    },
+    reviewMessages,
     lines: parsedLines.length ? parsedLines : [{
       name: "Imported Purchase",
       hsn: "",
@@ -990,15 +1923,28 @@ function toDateInput(value) {
 }
 
 function findInvoiceAmounts(lines) {
-  const result = { taxable: 0, gst: 0, total: 0 };
+  const result = { taxable: 0, cgst: 0, sgst: 0, igst: 0, gst: 0, total: 0 };
   for (const line of lines) {
     const lower = line.toLowerCase();
     const amount = lastAmount(line);
     if (!amount) continue;
+    if (/\bcgst\b|central\s+tax/.test(lower)) {
+      result.cgst += amount;
+      continue;
+    }
+    if (/\bsgst\b|state\s+tax/.test(lower)) {
+      result.sgst += amount;
+      continue;
+    }
+    if (/\bigst\b|integrated\s+tax/.test(lower)) {
+      result.igst += amount;
+      continue;
+    }
     if (/taxable|sub\s*total|assessable/.test(lower)) result.taxable = amount;
-    if (/(igst|cgst|sgst|gst amount|total tax)/.test(lower)) result.gst += amount;
+    if (/(gst amount|total tax|tax amount)/.test(lower)) result.gst = Math.max(result.gst, amount);
     if (/(grand total|invoice total|net amount|total amount|amount payable|round off total)/.test(lower)) result.total = amount;
   }
+  result.gst = result.gst || result.cgst + result.sgst + result.igst;
   if (!result.total) {
     const candidates = lines.map(lastAmount).filter(Boolean);
     result.total = Math.max(0, ...candidates);
@@ -1057,7 +2003,14 @@ function buildPurchaseDraft(parsed) {
     partyId,
     status: "Unpaid",
     notes: `Auto-filled from ${parsed.fileName}. Review values before saving.`,
-    lines
+    lines,
+    attachments: clone(parsed.attachments || []),
+    extractedTaxes: clone(parsed.extractedTaxes || null),
+    sellerGstin: parsed.supplierGstin || "",
+    buyerGstin: parsed.buyerGstin || normalizeGstin(profileById(parsed.profileId)?.gstin),
+    reviewMessages: clone(parsed.reviewMessages || []),
+    reviewStatus: parsed.reviewMessages?.length ? "Needs Review" : "Ready",
+    source: "purchase-upload"
   };
 }
 

@@ -6,20 +6,26 @@ Files to upload:
 - index.html
 - styles.css
 - app.js
+- cloud-config.js
+- supabase-schema.sql
+- supabase/functions folder
 - manifest.webmanifest
 - service-worker.js
 - icon.svg
+- CNAME
 
 Recommended hosting:
 - Any normal static website hosting works.
 - HTTPS is recommended and required for full PWA/offline install support.
-- If using cPanel or GoDaddy hosting, upload these files into public_html or into a subfolder like public_html/billing.
+- This repo is configured for the billing subdomain in CNAME.
 
 Example website URLs:
-- Main site: https://yourdomain.com/
-- Billing subfolder: https://yourdomain.com/billing/
+- Main site: https://nirvanasolutions.in/
+- Billing subdomain: https://billing.nirvanasolutions.in/
 
 Important:
-- Current version stores data in the browser/device local storage.
-- For shared online data across multiple devices/users, the next step is backend database and login.
+- Without Supabase config, data stores in browser/device local storage.
+- For cloud multi-user mode, run supabase-schema.sql in Supabase and add your Project URL and anon key in cloud-config.js before uploading.
+- For ChatGPT sale draft and purchase invoice PDF/image extraction, deploy Supabase Edge Functions and set OPENAI_API_KEY plus OPENAI_MODEL as Supabase secrets.
+- For month-end email reports, set RESEND_API_KEY and REPORT_FROM_EMAIL as Supabase secrets, then schedule the monthly-report Edge Function.
 - After uploading a new version, refresh the browser once. If the old version still appears, clear site data/cache for the domain.

@@ -12,6 +12,8 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="styles.css">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="cloud-config.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -41,6 +43,7 @@
           <h2 id="viewTitle">Dashboard</h2>
         </div>
         <div class="topbar-actions">
+          <button class="secondary-btn" id="cloudBtn" title="Cloud account"><i data-lucide="cloud"></i><span id="cloudBtnText">Local</span></button>
           <label class="topbar-profile">GST
             <select id="activeProfileSelect"></select>
           </label>
@@ -49,6 +52,7 @@
             <i data-lucide="upload"></i>
             <input id="restoreInput" type="file" accept="application/json">
           </label>
+          <button class="secondary-btn" id="chatBillBtn"><i data-lucide="message-square-text"></i><span>Chat Bill</span></button>
           <button class="primary-btn" id="quickSaleBtn"><i data-lucide="plus"></i><span>Sale</span></button>
         </div>
       </header>
@@ -94,7 +98,10 @@
             <h3>Sales Entry</h3>
             <p>Create GST bills and reduce stock automatically.</p>
           </div>
-          <button class="primary-btn" id="newSaleBtn"><i data-lucide="plus"></i><span>New Sale</span></button>
+          <div class="section-actions">
+            <button class="secondary-btn" id="newChatSaleBtn"><i data-lucide="message-square-text"></i><span>Chat Bill</span></button>
+            <button class="primary-btn" id="newSaleBtn"><i data-lucide="plus"></i><span>New Sale</span></button>
+          </div>
         </div>
         <div class="table-wrap panel">
           <table>
@@ -111,16 +118,17 @@
             <p>Record supplier invoices and add stock automatically.</p>
           </div>
           <div class="section-actions">
-            <label class="secondary-btn upload-btn" title="Upload purchase invoice PDF">
+            <button class="secondary-btn" id="ewayJsonBtn"><i data-lucide="file-json"></i><span>E-way JSON</span></button>
+            <label class="secondary-btn upload-btn" title="Upload purchase invoice PDF or image">
               <i data-lucide="file-up"></i><span>Upload Invoice</span>
-              <input id="purchaseInvoiceInput" type="file" accept="application/pdf">
+              <input id="purchaseInvoiceInput" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,image/tiff,image/bmp,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp" multiple>
             </label>
             <button class="primary-btn" id="newPurchaseBtn"><i data-lucide="plus"></i><span>New Purchase</span></button>
           </div>
         </div>
         <div class="table-wrap panel">
           <table>
-            <thead><tr><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>Status</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
+            <thead><tr><th><input id="selectAllPurchases" type="checkbox" aria-label="Select all purchases"></th><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>Status</th><th>Review</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
             <tbody id="purchaseRows"></tbody>
           </table>
         </div>
@@ -173,12 +181,35 @@
         <div class="filters panel">
           <label>From<input type="date" id="reportFrom"></label>
           <label>To<input type="date" id="reportTo"></label>
+          <button class="secondary-btn" id="purchaseRegisterBtn" type="button"><i data-lucide="table"></i><span>Purchase Register</span></button>
           <button class="secondary-btn" id="printReportBtn"><i data-lucide="printer"></i><span>Print</span></button>
         </div>
         <div class="panel report-panel" id="reportOutput"></div>
       </section>
 
       <section class="view" id="settingsView">
+        <div class="section-head">
+          <div>
+            <h3>Cloud Workspace</h3>
+            <p>Sign in and share this billing data across devices and staff.</p>
+          </div>
+          <button class="secondary-btn" id="openCloudSettingsBtn" type="button"><i data-lucide="cloud-cog"></i><span>Cloud</span></button>
+        </div>
+        <div class="cloud-settings panel" id="cloudSettingsPanel">
+          <div>
+            <span>Mode</span>
+            <strong id="cloudModeLabel">Local browser storage</strong>
+          </div>
+          <div>
+            <span>Workspace</span>
+            <strong id="cloudWorkspaceLabel">Not connected</strong>
+          </div>
+          <div>
+            <span>Last Sync</span>
+            <strong id="cloudLastSyncLabel">-</strong>
+          </div>
+        </div>
+
         <div class="section-head">
           <div>
             <h3>GST Profiles</h3>
@@ -198,10 +229,34 @@
           <label>Currency Symbol<input name="currency" maxlength="4"></label>
           <label>Next Sales No.<input name="nextSaleNo" type="number" min="1"></label>
           <label>Next Purchase No.<input name="nextPurchaseNo" type="number" min="1"></label>
+          <label class="span-2">Monthly Report Email IDs<textarea name="reportEmails" rows="3" placeholder="accounts@example.com&#10;owner@example.com"></textarea></label>
+          <label>Default Vehicle No.<input name="ewayVehicleNo" placeholder="AP00AA0000"></label>
+          <label>Default Transport Distance KM<input name="ewayDistanceKm" type="number" min="0" step="1"></label>
         </form>
       </section>
     </main>
   </div>
+
+  <dialog id="chatBillDialog" class="wide-dialog">
+    <form method="dialog" id="chatBillForm">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">Chat Sale Bill</p>
+          <h3>Create Sale From Simple Details</h3>
+        </div>
+        <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="chat-bill-body">
+        <div class="chat-thread" id="chatBillThread"></div>
+        <label>Tell me the bill details<textarea id="chatBillInput" rows="6" placeholder="Example: Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each, GST 18%, unpaid"></textarea></label>
+        <div class="chat-summary" id="chatBillSummary"></div>
+      </div>
+      <menu class="dialog-actions">
+        <button class="secondary-btn" id="chatSampleBtn" type="button"><i data-lucide="wand-sparkles"></i><span>Example</span></button>
+        <button class="primary-btn" id="prepareChatBillBtn" type="button"><i data-lucide="file-plus-2"></i><span>Prepare Draft</span></button>
+      </menu>
+    </form>
+  </dialog>
 
   <dialog id="entryDialog" class="wide-dialog">
     <form method="dialog" id="entryForm">
@@ -231,6 +286,9 @@
       </div>
       <div class="totals-box">
         <div><span>Taxable</span><strong id="entryTaxable">0</strong></div>
+        <div><span>CGST</span><strong id="entryCgst">0</strong></div>
+        <div><span>SGST</span><strong id="entrySgst">0</strong></div>
+        <div><span>IGST</span><strong id="entryIgst">0</strong></div>
         <div><span>GST</span><strong id="entryGst">0</strong></div>
         <div><span>Total</span><strong id="entryTotal">0</strong></div>
       </div>
@@ -281,6 +339,54 @@
         <button class="secondary-btn" value="cancel">Cancel</button>
         <button class="primary-btn" id="savePartyBtn" value="default"><i data-lucide="save"></i><span>Save Party</span></button>
       </menu>
+    </form>
+  </dialog>
+
+  <dialog id="cloudDialog">
+    <form method="dialog" id="cloudForm">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">Cloud Account</p>
+          <h3>Billing Cloud Sync</h3>
+        </div>
+        <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="cloud-dialog-body">
+        <div class="auth-panel" id="cloudNotConfigured">
+          <h4>Cloud is not configured yet</h4>
+          <p>Add your Supabase URL and anon key in <strong>cloud-config.js</strong>, then refresh this app.</p>
+        </div>
+
+        <div class="auth-panel" id="cloudSignedOut">
+          <label>Email<input id="cloudEmail" type="email" autocomplete="email"></label>
+          <label>Password<input id="cloudPassword" type="password" autocomplete="current-password"></label>
+          <div class="dialog-actions inline-actions">
+            <button class="secondary-btn" id="cloudSignUpBtn" type="button">Create Account</button>
+            <button class="primary-btn" id="cloudSignInBtn" type="button"><i data-lucide="log-in"></i><span>Sign In</span></button>
+          </div>
+        </div>
+
+        <div class="auth-panel" id="cloudSignedIn">
+          <div class="cloud-user-line">
+            <div>
+              <span>Signed in as</span>
+              <strong id="cloudUserEmail">-</strong>
+            </div>
+            <button class="secondary-btn" id="cloudSignOutBtn" type="button"><i data-lucide="log-out"></i><span>Sign Out</span></button>
+          </div>
+          <label>Workspace<select id="cloudWorkspaceSelect"></select></label>
+          <div class="workspace-actions">
+            <button class="secondary-btn" id="cloudNewWorkspaceBtn" type="button"><i data-lucide="plus"></i><span>New Workspace</span></button>
+            <button class="secondary-btn" id="cloudSyncNowBtn" type="button"><i data-lucide="refresh-cw"></i><span>Sync Now</span></button>
+          </div>
+          <label>Workspace Name<input id="cloudWorkspaceName" placeholder="Main Business"></label>
+          <label>Staff Emails<textarea id="cloudMemberEmails" rows="4" placeholder="staff1@example.com&#10;staff2@example.com"></textarea></label>
+          <p class="help-text">Staff emails can open the same workspace after signing in with those email addresses.</p>
+          <div class="dialog-actions inline-actions">
+            <button class="primary-btn" id="cloudSaveWorkspaceBtn" type="button"><i data-lucide="save"></i><span>Save Workspace</span></button>
+          </div>
+        </div>
+      </div>
     </form>
   </dialog>
 
