@@ -1808,6 +1808,7 @@ function missingSaleBillDetails(parsed, sourceMessage) {
   const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
   const hasPaymentStatus = /\b(paid|unpaid|partial|credit|due|cash|upi|bank|card)\b/i.test(sourceMessage);
   const hasGstRateText = /\b(?:gst|tax)\s*(?:rate)?\s*[:\-]?\s*(0|3|5|12|18|28)\s*%?\b/i.test(sourceMessage) || /\b(0|3|5|12|18|28)\s*%\b/.test(sourceMessage);
+  const hasApplePhoneDefaults = lines.length && lines.every(line => isApplePhoneItem(line.name) && num(line.gstRate) === 18);
   if (!String(parsed.customerName || "").trim() || /^chat customer$/i.test(parsed.customerName)) missing.push("customer business name");
   if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
   if (!lines.length || lines.every(line => !num(line.rate))) missing.push("item name, quantity and rate");
@@ -1818,7 +1819,7 @@ function missingSaleBillDetails(parsed, sourceMessage) {
     if (!num(line.rate)) missing.push(`${label} rate`);
     if (!String(line.hsn || "").trim()) missing.push(`${label} HSN/SAC`);
   });
-  if (!hasGstRateText) missing.push("GST rate");
+  if (!hasGstRateText && !hasApplePhoneDefaults) missing.push("GST rate");
   if (!hasPaymentStatus) missing.push("payment status");
   return uniqueMessages(missing);
 }
@@ -1957,15 +1958,16 @@ function extractGstRate(text) {
 }
 
 function parseSaleLines(message) {
+  const stockLines = parseStockStyleSaleLines(message);
   const chunks = message.split(/[\n;]/).flatMap(part => part.split(/\s*,\s*(?=\d+(?:\.\d+)?\s*[A-Za-z])/));
-  const lines = [];
+  const lines = [...stockLines];
   for (const chunk of chunks) {
     const pattern = /\b(\d+(?:\.\d+)?)\s*(?:x|nos?|pcs?|pieces?|qty)?\s+([A-Za-z0-9][A-Za-z0-9 \-+/().]{1,70}?)\s+(?:at|@|rate)\s*(\d+(?:,\d{3})*(?:\.\d+)?)/ig;
     let match;
     while ((match = pattern.exec(chunk))) {
-      const name = match[2].replace(/\b(each|gst|tax|paid|unpaid|partial)\b.*$/i, "").trim();
+      const name = cleanSaleItemName(match[2]);
       const rate = Number(match[3].replace(/,/g, ""));
-      if (name && rate > 0) {
+      if (name && rate > 0 && !hasSimilarSaleLine(lines, name, num(match[1]) || 1, rate)) {
         lines.push({
           name,
           hsn: inferHsnFromItemName(name),
@@ -1979,9 +1981,80 @@ function parseSaleLines(message) {
   return lines.slice(0, 20);
 }
 
+function parseStockStyleSaleLines(message) {
+  const lines = [];
+  let currentSection = "";
+  String(message || "").split(/[\n;]/).forEach(rawLine => {
+    const line = cleanStockInputLine(rawLine);
+    if (!line) return;
+    const section = stockSectionLabel(line);
+    if (section && !/\b(?:qty|nos?|pcs?|pieces?|@|rate|at)\b/i.test(line)) {
+      currentSection = section;
+      return;
+    }
+    const match = line.match(/^(.+?)\s*(?:[-\u2013\u2014:]|\s)\s*(\d+(?:\.\d+)?)\s*(?:qty|nos?|pcs?|pieces?)\s*(?:@|at|rate)\s*(\d+(?:,\d{3})*(?:\.\d+)?)/i);
+    if (!match) return;
+    const lineSection = stockSectionLabel(match[1]) || currentSection;
+    const baseName = cleanSaleItemName(match[1].replace(/^(?:fresh|activated|activation|sealed|open box|demo|used)\s+stock\b/i, ""));
+    const rate = Number(match[3].replace(/,/g, ""));
+    if (!baseName || rate <= 0) return;
+    const name = lineSection ? `${lineSection} - ${baseName}` : baseName;
+    lines.push({
+      name,
+      hsn: inferHsnFromItemName(baseName),
+      qty: num(match[2]) || 1,
+      rate,
+      gstRate: inferGstRateFromItemName(baseName) || extractGstRate(line)
+    });
+  });
+  return lines;
+}
+
+function cleanStockInputLine(value) {
+  return String(value || "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/^[\s*\u2022+\-\u2013\u2014]+/g, "")
+    .replace(/[*_]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stockSectionLabel(value) {
+  const match = String(value || "").match(/\b(fresh|activated|activation|sealed|open box|demo|used)\s+stock\b/i);
+  if (!match) return "";
+  const normalized = match[0].replace(/\s+/g, " ").toLowerCase();
+  if (normalized.startsWith("fresh")) return "Fresh Stock";
+  if (normalized.startsWith("activated") || normalized.startsWith("activation")) return "Activated Stock";
+  if (normalized.startsWith("open box")) return "Open Box Stock";
+  return normalized.split(" ").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function cleanSaleItemName(value) {
+  return String(value || "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/\b(each|gst|tax|paid|unpaid|partial)\b.*$/i, "")
+    .replace(/[-\u2013\u2014:]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasSimilarSaleLine(lines, name, qty, rate) {
+  const normalizedName = name.toLowerCase();
+  return lines.some(line => line.name.toLowerCase() === normalizedName && num(line.qty) === qty && num(line.rate) === rate);
+}
+
 function inferHsnFromItemName(name) {
   const existing = state.items.find(item => item.name.toLowerCase() === name.toLowerCase());
-  return existing?.hsn || "";
+  if (existing?.hsn) return existing.hsn;
+  return isApplePhoneItem(name) ? "85171300" : "";
+}
+
+function inferGstRateFromItemName(name) {
+  return isApplePhoneItem(name) ? 18 : 0;
+}
+
+function isApplePhoneItem(name) {
+  return /\biphone\b/i.test(String(name || ""));
 }
 
 function buildChatSaleDraft(parsed, sourceMessage) {
