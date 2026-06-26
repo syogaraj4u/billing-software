@@ -1712,14 +1712,14 @@ function openChatBillDialog() {
   chatBillMessages = [];
   $("#chatBillInput").value = "";
   $("#chatBillThread").innerHTML = "";
-  appendChatBillMessage("assistant", "Tell me the customer, GSTIN, item, qty, rate and GST %. If anything is missing, I will ask before creating the draft.");
+  appendChatBillMessage("assistant", "Tell me the customer, GSTIN, item, quantity and rate. If anything is missing, I will ask before creating the draft.");
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
   if (window.lucide) lucide.createIcons();
 }
 
 function fillChatBillSample() {
-  $("#chatBillInput").value = "Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each, HSN 85171300, GST 18%, unpaid";
+  $("#chatBillInput").value = "Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each";
 }
 
 async function prepareChatBillDraft() {
@@ -1735,7 +1735,9 @@ async function prepareChatBillDraft() {
     ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
     : missingSaleBillDetails(parsed, fullMessage);
   if (missing.length) {
-    const question = cloudResult?.assistantMessage || buildMissingSaleQuestion(missing, parsed);
+    const question = cleanSaleAssistantMessage(cloudResult?.assistantMessage)
+      ? cloudResult.assistantMessage
+      : buildMissingSaleQuestion(missing, parsed);
     appendChatBillMessage("assistant", question);
     $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply in the box and click Send Details.</span>`;
     return;
@@ -1808,7 +1810,6 @@ function parseSaleChatLocal(message) {
 function missingSaleBillDetails(parsed, sourceMessage) {
   const missing = [];
   const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
-  const hasPaymentStatus = /\b(paid|unpaid|partial|credit|due|cash|upi|bank|card)\b/i.test(sourceMessage);
   if (!String(parsed.customerName || "").trim() || /^chat customer$/i.test(parsed.customerName)) missing.push("customer business name");
   if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
   if (!lines.length || lines.every(line => !num(line.rate))) missing.push("item name, quantity and rate");
@@ -1819,7 +1820,6 @@ function missingSaleBillDetails(parsed, sourceMessage) {
     if (!num(line.rate)) missing.push(`${label} rate`);
     if (!String(line.hsn || "").trim()) missing.push(`${label} HSN/SAC`);
   });
-  if (!hasPaymentStatus) missing.push("payment status");
   return uniqueMessages(missing);
 }
 
@@ -1828,15 +1828,18 @@ function buildMissingSaleQuestion(missing, parsed) {
     "customer business name": "customer business name",
     "customer GSTIN": "customer GSTIN",
     "item name, quantity and rate": "item, quantity and rate",
-    "GST rate": "GST rate",
-    "payment status": "paid, unpaid, or partial"
+    "GST rate": "GST rate"
   };
   const readable = missing.map(item => examples[item] || item);
-  return `Please share the missing detail${missing.length > 1 ? "s" : ""}: ${readable.join(", ")}.\nExample: ${parsed.customerName || "ABC Traders"} GSTIN 29ABCDE1234F1Z5, HSN 85171300, payment unpaid.`;
+  return `Please share the missing detail${missing.length > 1 ? "s" : ""}: ${readable.join(", ")}.\nExample: ${parsed.customerName || "ABC Traders"} GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000.`;
 }
 
 function saleChatMissingDetails(details) {
-  return uniqueMessages(details).filter(detail => !/\bgst\s*(rate|percentage|%)?\b/i.test(detail));
+  return uniqueMessages(details).filter(detail => !/\bgst\s*(rate|percentage|%)?\b/i.test(detail) && !/\b(payment\s*)?status\b|\bpaid\b|\bunpaid\b|\bpartial\b/i.test(detail));
+}
+
+function cleanSaleAssistantMessage(message) {
+  return message && !/\bgst\s*(rate|percentage|%)?\b|\b(payment\s*)?status\b|\bpaid\b|\bunpaid\b|\bpartial\b/i.test(message);
 }
 
 function extractProfileFromMessage(message) {
@@ -1980,6 +1983,7 @@ function applySaleChatDefaults(parsed, sourceMessage) {
   const lines = Array.isArray(draft.lines) ? draft.lines : [];
   return {
     ...draft,
+    status: draft.status || "Paid",
     lines: lines.map(line => ({
       ...line,
       hsn: resolveSaleLineHsn(line, explicitHsn),
@@ -2172,7 +2176,7 @@ function renderChatBillSummary(parsed, draft) {
   return `
     <div><strong>${escapeHtml(parsed.customerName || "Customer")}</strong></div>
     <div>${escapeHtml(parsed.customerGstin || "GSTIN not entered")}</div>
-    <div>${draft.lines.length} item(s), ${escapeHtml(draft.status)}</div>
+    <div>${draft.lines.length} item(s)</div>
   `;
 }
 
