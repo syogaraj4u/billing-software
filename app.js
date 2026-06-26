@@ -1347,38 +1347,31 @@ function showInvoice(id, kind) {
   const entry = entryList(kind).find(row => row.id === id);
   const party = state.parties.find(row => row.id === entry.partyId) || {};
   const settings = profileById(entry.profileId);
-  const eInvoice = entry.eInvoice || {};
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   const roundOff = round2(num(entry.total) - num(entry.taxable) - num(entry.gst));
   $("#invoicePrintArea").innerHTML = `
-    <div class="invoice-sheet tally-invoice">
-      <div class="invoice-title-row">
-        <h2>Tax Invoice</h2>
-        <h3>e-Invoice</h3>
+    <div class="invoice-sheet modern-invoice">
+      <div class="modern-invoice-head">
+        <div class="invoice-title-block">
+          <span class="invoice-kicker">Sales Bill</span>
+          <h2>Tax Invoice</h2>
+          <p>${escapeHtml(settings.businessName || settings.label || state.selectedOrg?.name || "Business")}</p>
+        </div>
+        <div class="modern-header-metrics">
+          ${invoiceMetaCell("Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
+          ${invoiceMetaCell("e-Way Bill No.", entry.ewayBillNo || "-", "Mode/Terms of Payment", entry.status || "-")}
+        </div>
       </div>
-      <div class="einvoice-row">
-        <div class="irn-block">
-          <div><span>IRN</span><strong>${escapeHtml(eInvoice.irn || "-")}</strong></div>
-          <div><span>Ack No.</span><strong>${escapeHtml(eInvoice.ackNo || "-")}</strong></div>
-          <div><span>Ack Date</span><strong>${escapeHtml(eInvoice.ackDate || "-")}</strong></div>
-        </div>
-        <div class="qr-placeholder">${eInvoice.qr ? "" : "QR"}</div>
+      <div class="modern-party-grid">
+        ${invoiceSellerBlock(settings)}
+        ${invoicePartyBlock("Consignee (Ship to)", party)}
+        ${invoicePartyBlock("Buyer (Bill to)", party)}
       </div>
-      <div class="invoice-info-grid">
-        <div class="seller-buyer-cell">
-          ${invoiceSellerBlock(settings)}
-          ${invoicePartyBlock("Consignee (Ship to)", party)}
-          ${invoicePartyBlock("Buyer (Bill to)", party)}
-        </div>
-        <div class="voucher-grid">
-          ${invoiceMetaCell("Invoice No.", entry.number, "e-Way Bill No.", entry.ewayBillNo || "-")}
-          ${invoiceMetaCell("Dated", formatInvoiceDate(entry.date), "Mode/Terms of Payment", entry.status || "-")}
-          ${invoiceMetaCell("Delivery Note", "-", "Reference No. & Date.", "-")}
-          ${invoiceMetaCell("Other References", "-", "Buyer's Order No.", "-")}
-          ${invoiceMetaCell("Dated", "-", "Dispatch Doc No.", "-")}
-          ${invoiceMetaCell("Delivery Note Date", "-", "Dispatched through", "-")}
-          ${invoiceMetaCell("Destination", party.place || "-", "Terms of Delivery", "-")}
-        </div>
+      <div class="modern-meta-grid">
+        ${invoiceMetaCell("Delivery Note", "-", "Reference No. & Date.", "-")}
+        ${invoiceMetaCell("Other References", "-", "Buyer's Order No.", "-")}
+        ${invoiceMetaCell("Dispatch Doc No.", "-", "Dispatched through", "-")}
+        ${invoiceMetaCell("Destination", party.place || "-", "Terms of Delivery", "-")}
       </div>
       <table class="invoice-items-table">
         <thead>
@@ -1450,6 +1443,7 @@ function showInvoice(id, kind) {
 
 function invoiceSellerBlock(profile) {
   return `<div class="invoice-party-block seller-block">
+    <span>Seller</span>
     <strong>${escapeHtml(profile.businessName || profile.label || "")}</strong>
     <p>${escapeHtml(profile.address || "")}</p>
     <p>GSTIN/UIN: ${escapeHtml(profile.gstin || "-")}</p>
