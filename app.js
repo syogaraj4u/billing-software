@@ -128,6 +128,7 @@ const GST_PROFILE_ALIASES = {
   "gst-8": ["sri lakshmi", "sri lakshmi digitals", "sld", "durga prasad", "durgaprasad"]
 };
 
+const HOME_COMPANY_PROFILE_ORDER = ["gst-1", "gst-2", "gst-7", "gst-5", "gst-6", "gst-8", "gst-4", "gst-3"];
 const AMBIGUOUS_PROFILE_ALIASES = new Set(["lakshmi", "s lakshmi"]);
 const GENERIC_PARTY_ALIASES = new Set(["cash", "cash customer", "customer", "supplier", "default", "default supplier"]);
 
@@ -576,7 +577,7 @@ function renderAppVisibility() {
 
 function renderCompanySelector() {
   const activeId = activeProfileId();
-  $("#companyCards").innerHTML = state.settings.profiles.map(profile => {
+  $("#companyCards").innerHTML = homeCompanyProfiles().map(profile => {
     const initials = companyInitials(profile.businessName || profile.label);
     return `
       <button class="company-card ${profile.id === activeId ? "selected" : ""}" type="button" data-profile-id="${profile.id}">
@@ -590,6 +591,15 @@ function renderCompanySelector() {
     `;
   }).join("");
   $$(".company-card").forEach(card => card.addEventListener("click", () => selectCompany(card.dataset.profileId)));
+}
+
+function homeCompanyProfiles() {
+  const order = new Map(HOME_COMPANY_PROFILE_ORDER.map((id, index) => [id, index]));
+  return [...state.settings.profiles].sort((a, b) => {
+    const aIndex = order.has(a.id) ? order.get(a.id) : HOME_COMPANY_PROFILE_ORDER.length;
+    const bIndex = order.has(b.id) ? order.get(b.id) : HOME_COMPANY_PROFILE_ORDER.length;
+    return aIndex - bIndex;
+  });
 }
 
 function companyInitials(value) {
