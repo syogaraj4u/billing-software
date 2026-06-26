@@ -177,6 +177,7 @@ let selectedPurchaseIds = new Set();
 let entryDraftMeta = {};
 let chatBillMessages = [];
 let chatBillAttachments = [];
+let chatBillPreparing = false;
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
 
@@ -493,6 +494,8 @@ function bindEvents() {
   $("#entryForm").addEventListener("submit", saveEntry);
   $("#chatBillForm").addEventListener("submit", event => event.preventDefault());
   $("#chatBillAttachmentInput").addEventListener("change", handleChatBillAttachmentInput);
+  $("#chatBillInput").addEventListener("input", resizeChatBillInput);
+  $("#chatBillInput").addEventListener("keydown", handleChatBillInputKeydown);
   $("#chatSampleBtn").addEventListener("click", fillChatBillSample);
   $("#prepareChatBillBtn").addEventListener("click", prepareChatBillDraft);
   $("#itemForm").addEventListener("submit", saveItem);
@@ -1847,13 +1850,15 @@ function importBackup(event) {
 function openChatBillDialog() {
   chatBillMessages = [];
   chatBillAttachments = [];
+  setChatBillBusy(false);
   $("#chatBillInput").value = "";
   $("#chatBillAttachmentInput").value = "";
   $("#chatBillThread").innerHTML = "";
-  appendChatBillMessage("assistant", "Send customer, GSTIN, item, qty and rate. You can also attach bill-to or ship-to screenshots.");
+  appendChatBillMessage("assistant", "Ready for sale bill details.");
   renderChatBillAttachments();
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
+  resizeChatBillInput();
   setTimeout(() => {
     try {
       $("#chatBillInput").focus({ preventScroll: true });
@@ -1866,6 +1871,29 @@ function openChatBillDialog() {
 
 function fillChatBillSample() {
   $("#chatBillInput").value = "ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 @65000";
+  resizeChatBillInput();
+}
+
+function handleChatBillInputKeydown(event) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  if (window.matchMedia?.("(max-width: 820px)").matches) return;
+  event.preventDefault();
+  prepareChatBillDraft();
+}
+
+function resizeChatBillInput() {
+  const input = $("#chatBillInput");
+  if (!input) return;
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight, 150)}px`;
+}
+
+function setChatBillBusy(isBusy) {
+  chatBillPreparing = isBusy;
+  const sendButton = $("#prepareChatBillBtn");
+  const sampleButton = $("#chatSampleBtn");
+  if (sendButton) sendButton.disabled = isBusy;
+  if (sampleButton) sampleButton.disabled = isBusy;
 }
 
 async function handleChatBillAttachmentInput(event) {
@@ -1922,46 +1950,53 @@ function formatFileSize(size) {
 }
 
 async function prepareChatBillDraft() {
+  if (chatBillPreparing) return;
   const message = $("#chatBillInput").value.trim();
   const attachments = chatBillAttachments.slice();
   if (!message && !attachments.length) return toast("Enter sale details or attach image");
+  setChatBillBusy(true);
   const userMessage = message || "Please read bill-to and ship-to details from attached screenshot.";
   appendChatBillMessage("user", formatChatBillUserMessage(userMessage, attachments), attachments, message);
   $("#chatBillInput").value = "";
+  resizeChatBillInput();
   chatBillAttachments = [];
   renderChatBillAttachments();
   $("#chatBillSummary").innerHTML = `<span class="help-text">Checking details...</span>`;
-  const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
-  const typedMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.rawText || "").join("\n").trim();
-  const allAttachments = chatBillMessages.filter(row => row.role === "user").flatMap(row => row.attachments || []);
-  const cloudResult = await parseSaleChatWithCloud(fullMessage, allAttachments);
-  if (allAttachments.length && !cloudResult) {
-    appendChatBillMessage("assistant", "I could not read the attached image now. Please sign in to Cloud and make sure the ChatGPT API function is deployed, or type the bill-to and ship-to details here.");
-    if (!typedMessage) {
-      $("#chatBillSummary").innerHTML = `<strong>Image reading unavailable</strong><span class="help-text">Type the address details or try again after Cloud is ready.</span>`;
+  try {
+    const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
+    const typedMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.rawText || "").join("\n").trim();
+    const allAttachments = chatBillMessages.filter(row => row.role === "user").flatMap(row => row.attachments || []);
+    const cloudResult = await parseSaleChatWithCloud(fullMessage, allAttachments);
+    if (allAttachments.length && !cloudResult) {
+      appendChatBillMessage("assistant", "I could not read the attached image now. Please sign in to Cloud and make sure the ChatGPT API function is deployed, or type the bill-to and ship-to details here.");
+      if (!typedMessage) {
+        $("#chatBillSummary").innerHTML = `<strong>Image reading unavailable</strong><span class="help-text">Type the address details or try again after Cloud is ready.</span>`;
+        return;
+      }
+    }
+    const sourceMessage = cloudResult ? fullMessage : (typedMessage || fullMessage);
+    const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(sourceMessage), sourceMessage);
+    const missing = cloudResult
+      ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
+      : missingSaleBillDetails(parsed, fullMessage);
+    if (missing.length) {
+      const question = cleanSaleAssistantMessage(cloudResult?.assistantMessage)
+        ? cloudResult.assistantMessage
+        : buildMissingSaleQuestion(missing, parsed);
+      appendChatBillMessage("assistant", question);
+      $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply below and send.</span>`;
       return;
     }
+    const draft = buildChatSaleDraft(parsed, fullMessage);
+    $("#chatBillSummary").innerHTML = renderChatBillSummary(parsed, draft);
+    saveState();
+    renderAll();
+    $("#chatBillDialog").close();
+    openEntry("sale", null, draft);
+    toast("Sale draft prepared. Please review and save.");
+  } finally {
+    setChatBillBusy(false);
   }
-  const sourceMessage = cloudResult ? fullMessage : (typedMessage || fullMessage);
-  const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(sourceMessage), sourceMessage);
-  const missing = cloudResult
-    ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
-    : missingSaleBillDetails(parsed, fullMessage);
-  if (missing.length) {
-    const question = cleanSaleAssistantMessage(cloudResult?.assistantMessage)
-      ? cloudResult.assistantMessage
-      : buildMissingSaleQuestion(missing, parsed);
-    appendChatBillMessage("assistant", question);
-    $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply below and click Prepare.</span>`;
-    return;
-  }
-  const draft = buildChatSaleDraft(parsed, fullMessage);
-  $("#chatBillSummary").innerHTML = renderChatBillSummary(parsed, draft);
-  saveState();
-  renderAll();
-  $("#chatBillDialog").close();
-  openEntry("sale", null, draft);
-  toast("Sale draft prepared. Please review and save.");
 }
 
 function formatChatBillUserMessage(message, attachments = []) {

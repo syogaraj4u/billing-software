@@ -534,7 +534,7 @@ dialog::backdrop {
 }
 
 .chat-dialog {
-  width: min(560px, calc(100vw - 28px));
+  width: min(760px, calc(100vw - 28px));
 }
 
 dialog form, .invoice-dialog {
@@ -1086,6 +1086,9 @@ textarea { resize: vertical; }
 }
 
 .chat-dialog form {
+  height: min(760px, calc(100dvh - 28px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
 
@@ -1099,37 +1102,86 @@ textarea { resize: vertical; }
 
 .chat-bill-body {
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 10px;
-  padding: 14px 16px 10px;
+  min-height: 0;
+  padding: 12px 16px 0;
+  background: #fff;
 }
 
 .chat-thread {
-  min-height: 52px;
-  max-height: 160px;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  padding: 8px 2px 14px;
+  display: grid;
+  align-content: end;
+  gap: 10px;
+}
+
+.chat-composer {
+  display: grid;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+
+.chat-composer-box {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px 40px;
+  align-items: end;
+  gap: 6px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfc;
-  padding: 10px;
-  display: grid;
-  gap: 6px;
 }
 
-.chat-input-label {
-  gap: 5px;
+.chat-composer-box textarea {
+  width: 100%;
+  min-height: 40px;
+  max-height: 150px;
+  padding: 10px 4px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--ink);
+  line-height: 1.35;
 }
 
-.chat-input-label textarea {
-  min-height: 96px;
+.chat-composer-box textarea::placeholder {
+  color: var(--muted);
 }
 
-.chat-attachment-row {
-  display: grid;
-  gap: 8px;
+.chat-composer-box .icon-btn {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.chat-composer-box .icon-btn:hover {
+  background: var(--soft);
+}
+
+.chat-composer-box .chat-send-btn {
+  background: var(--primary);
+  color: #fff;
+}
+
+.chat-composer-box .chat-send-btn:hover {
+  background: var(--primary-dark);
 }
 
 .chat-attach-btn {
-  width: fit-content;
+  position: relative;
+  overflow: hidden;
 }
 
 .chat-attachments {
@@ -1178,11 +1230,11 @@ textarea { resize: vertical; }
 }
 
 .chat-message {
-  max-width: 92%;
+  max-width: 84%;
   color: var(--ink);
   line-height: 1.35;
-  font-size: 13px;
-  padding: 8px 10px;
+  font-size: 14px;
+  padding: 10px 12px;
   border-radius: 8px;
   background: #fff;
   border: 1px solid var(--line);
@@ -1204,19 +1256,15 @@ textarea { resize: vertical; }
 .chat-summary {
   display: grid;
   gap: 4px;
-  border: 1px dashed var(--line);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
-  background: #fff;
+  background: #fbfcfc;
   font-size: 13px;
 }
 
 .chat-summary:empty {
   display: none;
-}
-
-.chat-dialog .dialog-actions {
-  padding: 10px 16px 14px;
 }
 
 .purchase-select,
@@ -1434,20 +1482,28 @@ textarea { resize: vertical; }
   }
   .chat-bill-body {
     min-height: 0;
-    overflow: auto;
-    align-content: start;
-    padding: 12px 14px;
+    overflow: hidden;
+    padding: 10px 14px 0;
   }
   .chat-thread {
-    min-height: 74px;
-    max-height: 24dvh;
+    min-height: 0;
+    max-height: none;
+    padding-bottom: 10px;
   }
-  .chat-input-label textarea {
-    min-height: min(34dvh, 220px);
-    padding: 12px;
+  .chat-composer {
+    padding: 8px 14px calc(12px + env(safe-area-inset-bottom));
+  }
+  .chat-composer-box {
+    grid-template-columns: 40px minmax(0, 1fr) 40px 40px;
+    gap: 4px;
+  }
+  .chat-composer-box textarea {
+    min-height: 40px;
+    max-height: 132px;
+    padding: 10px 2px;
   }
   .chat-attach-btn {
-    width: 100%;
+    width: 40px;
   }
   .chat-attachments {
     display: grid;
