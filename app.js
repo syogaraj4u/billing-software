@@ -4,6 +4,7 @@ const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_SELECTED_WORKSPACE_KEY = "billingSoftware.cloudWorkspaceId";
 const PURCHASE_ATTACHMENT_BUCKET = "purchase-invoices";
 const EWAY_DOCUMENT_VERSION = "1.0.0621";
+const DEFAULT_SALE_HSN = "85171300";
 
 const OFFICIAL_GST_PROFILES = [
   {
@@ -1728,7 +1729,7 @@ async function prepareChatBillDraft() {
   $("#chatBillSummary").innerHTML = `<span class="help-text">Checking details...</span>`;
   const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
   const cloudResult = await parseSaleChatWithCloud(fullMessage);
-  const parsed = cloudResult?.draft || parseSaleChatLocal(fullMessage);
+  const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(fullMessage), fullMessage);
   const missing = cloudResult
     ? uniqueMessages(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
     : missingSaleBillDetails(parsed, fullMessage);
@@ -1792,7 +1793,7 @@ function parseSaleChatLocal(message) {
     notes: "Prepared from chat details. Review values before saving.",
     lines: lines.length ? lines : [{
       name: "Chat Sale Item",
-      hsn: "",
+      hsn: extractHsnCode(message) || DEFAULT_SALE_HSN,
       qty: 1,
       rate: lastAmount(message) || 0,
       gstRate: extractGstRate(message)
@@ -1957,6 +1958,33 @@ function extractGstRate(text) {
   return match ? Number(match[1]) : 18;
 }
 
+function extractHsnCode(text) {
+  const value = String(text || "");
+  const match = value.match(/\b(?:hsn|sac)(?:\s*code)?\s*(?:is|=|:|-)?\s*([0-9]{4,8})\b/i)
+    || value.match(/\b([0-9]{4,8})\s*(?:hsn|sac)\b/i);
+  return match ? match[1] : "";
+}
+
+function applySaleChatDefaults(parsed, sourceMessage) {
+  const draft = parsed || {};
+  const explicitHsn = extractHsnCode(sourceMessage);
+  const lines = Array.isArray(draft.lines) ? draft.lines : [];
+  return {
+    ...draft,
+    lines: lines.map(line => ({
+      ...line,
+      hsn: resolveSaleLineHsn(line, explicitHsn),
+      gstRate: num(line.gstRate) || inferGstRateFromItemName(line.name) || extractGstRate(sourceMessage)
+    }))
+  };
+}
+
+function resolveSaleLineHsn(line, explicitHsn = "") {
+  const lineHsn = String(line?.hsn || "").trim();
+  if (explicitHsn && (!lineHsn || lineHsn === DEFAULT_SALE_HSN)) return explicitHsn;
+  return lineHsn || explicitHsn || inferHsnFromItemName(line?.name);
+}
+
 function parseSaleLines(message) {
   const stockLines = parseStockStyleSaleLines(message);
   const chunks = message.split(/[\n;]/).flatMap(part => part.split(/\s*,\s*(?=\d+(?:\.\d+)?\s*[A-Za-z])/));
@@ -1970,7 +1998,7 @@ function parseSaleLines(message) {
       if (name && rate > 0 && !hasSimilarSaleLine(lines, name, num(match[1]) || 1, rate)) {
         lines.push({
           name,
-          hsn: inferHsnFromItemName(name),
+          hsn: hsnForSaleLine(name, chunk, message),
           qty: num(match[1]) || 1,
           rate,
           gstRate: extractGstRate(chunk)
@@ -2001,7 +2029,7 @@ function parseStockStyleSaleLines(message) {
     const name = lineSection ? `${lineSection} - ${baseName}` : baseName;
     lines.push({
       name,
-      hsn: inferHsnFromItemName(baseName),
+      hsn: hsnForSaleLine(baseName, line, message),
       qty: num(match[2]) || 1,
       rate,
       gstRate: inferGstRateFromItemName(baseName) || extractGstRate(line)
@@ -2032,7 +2060,7 @@ function stockSectionLabel(value) {
 function cleanSaleItemName(value) {
   return String(value || "")
     .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
-    .replace(/\b(each|gst|tax|paid|unpaid|partial)\b.*$/i, "")
+    .replace(/\b(each|hsn|sac|gst|tax|paid|unpaid|partial)\b.*$/i, "")
     .replace(/[-\u2013\u2014:]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -2043,10 +2071,18 @@ function hasSimilarSaleLine(lines, name, qty, rate) {
   return lines.some(line => line.name.toLowerCase() === normalizedName && num(line.qty) === qty && num(line.rate) === rate);
 }
 
+function hsnForSaleLine(name, lineText, sourceMessage) {
+  return extractHsnCode(lineText) || extractHsnCode(sourceMessage) || inferHsnFromItemName(name);
+}
+
 function inferHsnFromItemName(name) {
-  const existing = state.items.find(item => item.name.toLowerCase() === name.toLowerCase());
+  const normalizedName = String(name || "").replace(/^(?:fresh|activated|activation|sealed|open box|demo|used)\s+stock\s+-\s+/i, "").toLowerCase();
+  const existing = state.items.find(item => {
+    const itemName = item.name.toLowerCase();
+    return itemName === String(name || "").toLowerCase() || itemName === normalizedName;
+  });
   if (existing?.hsn) return existing.hsn;
-  return isApplePhoneItem(name) ? "85171300" : "";
+  return DEFAULT_SALE_HSN;
 }
 
 function inferGstRateFromItemName(name) {
