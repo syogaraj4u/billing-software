@@ -28,11 +28,13 @@ const saleLineSchema = {
 const saleDraftSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["profileId", "customerName", "customerGstin", "status", "notes", "reviewMessages", "lines"],
+  required: ["profileId", "customerName", "customerGstin", "customerAddress", "customerPlace", "status", "notes", "reviewMessages", "lines"],
   properties: {
     profileId: { type: "string" },
     customerName: { type: "string" },
     customerGstin: { type: "string" },
+    customerAddress: { type: "string" },
+    customerPlace: { type: "string" },
     status: { type: "string", enum: ["Paid", "Unpaid", "Partial"] },
     notes: { type: "string" },
     reviewMessages: { type: "array", items: { type: "string" } },
@@ -82,7 +84,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "You are a responsive B2B Indian GST sale bill assistant. Read the full conversation text and decide if the sale bill has enough details to create a draft. Required details: seller GST profileId from provided profiles, customer business name, customer GSTIN, item name, HSN/SAC, quantity, rate, GST rate, and payment status Paid/Unpaid/Partial. Do not invent unknown values. If anything is missing, set ready false, list missingDetails, and write assistantMessage as a short follow-up question asking only for missing details. If complete, set ready true and assistantMessage to a short confirmation. Return only schema fields."
+              text: "You are a responsive B2B Indian GST sale bill assistant. Read the full conversation text and decide if the sale bill has enough details to create a draft. Required details: seller GST profileId from provided profiles, customer business name, customer GSTIN, item name, HSN/SAC, quantity, rate, GST rate, and payment status Paid/Unpaid/Partial. For internal billing between provided GST profiles, infer both companies from names: phrases like 'from X to Y' mean seller profileId is X and customer is Y. If only two provided profile names are mentioned, use the first as seller and second as customer. When customer matches a provided profile, fill customerName, customerGstin, customerAddress, and customerPlace from that profile. Do not invent unknown values. If anything is missing, set ready false, list missingDetails, and write assistantMessage as a short follow-up question asking only for missing details. If complete, set ready true and assistantMessage to a short confirmation. Return only schema fields."
             }
           ]
         },
@@ -109,6 +111,8 @@ Deno.serve(async request => {
     const result = parseJsonOutput(response);
     const draft = result.draft || {};
     if (!draft.profileId && activeProfileId) draft.profileId = activeProfileId;
+    draft.customerAddress = draft.customerAddress || "";
+    draft.customerPlace = draft.customerPlace || "";
     draft.lines = (draft.lines || []).map((line: SaleLine) => ({
       name: line.name || "",
       hsn: line.hsn || "",

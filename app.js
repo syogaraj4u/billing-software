@@ -1764,9 +1764,10 @@ async function parseSaleChatWithCloud(message) {
 }
 
 function parseSaleChatLocal(message) {
-  const gstin = normalizeGstin(message.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0] || "");
-  const profile = extractProfileFromMessage(message) || activeProfile();
-  const customerName = extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
+  const internalBuyer = extractInternalBuyerProfileFromMessage(message);
+  const gstin = normalizeGstin(internalBuyer?.gstin || message.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0] || "");
+  const profile = extractSellerProfileFromMessage(message, internalBuyer) || activeProfile();
+  const customerName = internalBuyer?.businessName || internalBuyer?.label || extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
   const status = /unpaid|credit|due/i.test(message) ? "Unpaid" : /partial/i.test(message) ? "Partial" : "Paid";
   const lines = parseSaleLines(message);
   return {
@@ -1782,6 +1783,8 @@ function parseSaleChatLocal(message) {
       rate: lastAmount(message) || 0,
       gstRate: extractGstRate(message)
     }],
+    customerAddress: internalBuyer?.address || "",
+    customerPlace: internalBuyer?.state || "",
     reviewMessages: gstin ? [] : ["B2B customer GSTIN not found in chat. Please add GSTIN before final billing."]
   };
 }
@@ -1819,13 +1822,48 @@ function buildMissingSaleQuestion(missing, parsed) {
 }
 
 function extractProfileFromMessage(message) {
+  return profileMentions(message)[0];
+}
+
+function extractSellerProfileFromMessage(message, buyerProfile) {
+  const explicit = extractProfileNearKeyword(message, ["bill from", "sold by", "seller", "from", "our company"]);
+  if (explicit && explicit.id !== buyerProfile?.id) return explicit;
+  const mentions = profileMentions(message).filter(profile => profile.id !== buyerProfile?.id);
+  return mentions[0];
+}
+
+function extractInternalBuyerProfileFromMessage(message) {
+  const explicit = extractProfileNearKeyword(message, ["bill to", "ship to", "buyer", "customer", "to"]);
+  if (explicit) return explicit;
+  const mentions = profileMentions(message);
+  return mentions.length > 1 ? mentions[1] : null;
+}
+
+function extractProfileNearKeyword(message, keywords) {
+  for (const keyword of keywords) {
+    const pattern = new RegExp(`\\b${escapeRegExp(keyword).replace(/\s+/g, "\\s+")}\\b`, "ig");
+    let keywordMatch;
+    while ((keywordMatch = pattern.exec(message))) {
+      const afterKeyword = message.slice(keywordMatch.index + keywordMatch[0].length, keywordMatch.index + keywordMatch[0].length + 140);
+      const match = profileMentions(afterKeyword)[0];
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+function profileMentions(message) {
   const normalized = message.toLowerCase();
-  return state.settings.profiles.find(profile => {
+  return state.settings.profiles.filter(profile => {
     const gstin = normalizeGstin(profile.gstin);
     return (gstin && normalized.includes(gstin.toLowerCase()))
       || normalized.includes(String(profile.businessName || "").toLowerCase())
       || normalized.includes(String(profile.label || "").toLowerCase());
   });
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function extractCustomerName(message, gstin) {
@@ -1909,8 +1947,8 @@ function ensureChatCustomer(parsed) {
     type: "Customer",
     gstin: normalizedGstin,
     phone: "",
-    place: stateCodeFromGstin(normalizedGstin) || "",
-    address: ""
+    place: parsed.customerPlace || stateNameFromGstin(normalizedGstin) || stateCodeFromGstin(normalizedGstin) || "",
+    address: parsed.customerAddress || ""
   };
   state.parties.push(party);
   return party.id;
