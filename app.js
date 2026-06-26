@@ -112,6 +112,19 @@ const OFFICIAL_GST_PROFILES = [
   }
 ];
 
+const GST_PROFILE_ALIASES = {
+  "gst-1": ["nirvana", "nirvana solutions", "senrayan yogaraj"],
+  "gst-2": ["kala", "kala nirvana"],
+  "gst-3": ["harihara", "harihara mobiles", "nagaraju perumal"],
+  "gst-4": ["shiva nandi", "shiva nandi communications", "nandi communications", "selvasobia"],
+  "gst-5": ["skanda", "skanda digitals", "yugandhar"],
+  "gst-6": ["khairanya", "khairanya infotech", "sandhya rani"],
+  "gst-7": ["lakshmi jeyapandi", "jeyapandi", "lakshmi jeyapandi traders", "lj traders", "jeyapandi traders"],
+  "gst-8": ["sri lakshmi", "sri lakshmi digitals", "sld", "durga prasad", "durgaprasad"]
+};
+
+const AMBIGUOUS_PROFILE_ALIASES = new Set(["lakshmi", "s lakshmi"]);
+
 function createDefaultProfiles() {
   return clone(OFFICIAL_GST_PROFILES);
 }
@@ -1751,6 +1764,7 @@ async function parseSaleChatWithCloud(message) {
         message,
         activeProfileId: state.settings.activeProfileId,
         profiles: state.settings.profiles,
+        profileAliases: buildProfileAliasPayload(),
         items: state.items,
         parties: state.parties
       }
@@ -1853,13 +1867,73 @@ function extractProfileNearKeyword(message, keywords) {
 }
 
 function profileMentions(message) {
-  const normalized = message.toLowerCase();
-  return state.settings.profiles.filter(profile => {
-    const gstin = normalizeGstin(profile.gstin);
-    return (gstin && normalized.includes(gstin.toLowerCase()))
-      || normalized.includes(String(profile.businessName || "").toLowerCase())
-      || normalized.includes(String(profile.label || "").toLowerCase());
+  return profileMentionRows(message).map(row => row.profile);
+}
+
+function profileMentionRows(message) {
+  return state.settings.profiles
+    .map(profile => ({ profile, ...profileAliasMatch(profile, message) }))
+    .filter(row => row.index >= 0)
+    .sort((a, b) => a.index - b.index || b.score - a.score);
+}
+
+function profileAliasMatch(profile, message) {
+  const rawMessage = String(message || "");
+  const normalizedText = ` ${normalizeForAlias(rawMessage)} `;
+  const rawUpper = rawMessage.toUpperCase();
+  const gstin = normalizeGstin(profile.gstin);
+  let best = { index: -1, score: 0 };
+  if (gstin) {
+    const gstIndex = rawUpper.indexOf(gstin);
+    if (gstIndex >= 0) best = { index: gstIndex, score: 1000 };
+  }
+  profileAliases(profile).forEach(alias => {
+    const normalizedAlias = normalizeForAlias(alias);
+    if (!normalizedAlias || AMBIGUOUS_PROFILE_ALIASES.has(normalizedAlias)) return;
+    const search = ` ${normalizedAlias} `;
+    const aliasIndex = normalizedText.indexOf(search);
+    if (aliasIndex < 0) return;
+    const score = normalizedAlias.length;
+    const plainIndex = Math.max(0, aliasIndex - 1);
+    if (best.index < 0 || plainIndex < best.index || (plainIndex === best.index && score > best.score)) {
+      best = { index: plainIndex, score };
+    }
   });
+  return best;
+}
+
+function buildProfileAliasPayload() {
+  return state.settings.profiles.map(profile => ({
+    id: profile.id,
+    businessName: profile.businessName || profile.label || "",
+    legalName: profile.legalName || "",
+    gstin: normalizeGstin(profile.gstin),
+    state: profile.state || "",
+    address: profile.address || "",
+    aliases: profileAliases(profile)
+  }));
+}
+
+function profileAliases(profile) {
+  return uniqueMessages([
+    profile.businessName,
+    profile.label,
+    profile.legalName,
+    profile.gstin,
+    ...(GST_PROFILE_ALIASES[profile.id] || [])
+  ]).filter(alias => {
+    const normalized = normalizeForAlias(alias);
+    return normalized && !AMBIGUOUS_PROFILE_ALIASES.has(normalized);
+  });
+}
+
+function normalizeForAlias(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function escapeRegExp(value) {

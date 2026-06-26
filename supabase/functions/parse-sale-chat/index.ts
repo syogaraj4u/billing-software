@@ -72,7 +72,7 @@ Deno.serve(async request => {
       return json({ error: "OPENAI_API_KEY and OPENAI_MODEL must be configured" }, 500);
     }
 
-    const { message, profiles = [], items = [], parties = [], activeProfileId = "" } = await request.json();
+    const { message, profiles = [], profileAliases = [], items = [], parties = [], activeProfileId = "" } = await request.json();
     if (!message || typeof message !== "string") {
       return json({ error: "message is required" }, 400);
     }
@@ -84,7 +84,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "You are a responsive B2B Indian GST sale bill assistant. Read the full conversation text and decide if the sale bill has enough details to create a draft. Required details: seller GST profileId from provided profiles, customer business name, customer GSTIN, item name, HSN/SAC, quantity, rate, GST rate, and payment status Paid/Unpaid/Partial. For internal billing between provided GST profiles, infer both companies from names: phrases like 'from X to Y' mean seller profileId is X and customer is Y. If only two provided profile names are mentioned, use the first as seller and second as customer. When customer matches a provided profile, fill customerName, customerGstin, customerAddress, and customerPlace from that profile. Do not invent unknown values. If anything is missing, set ready false, list missingDetails, and write assistantMessage as a short follow-up question asking only for missing details. If complete, set ready true and assistantMessage to a short confirmation. Return only schema fields."
+              text: "You are a responsive B2B Indian GST sale bill assistant. Read the full conversation text and decide if the sale bill has enough details to create a draft. Required details: seller GST profileId from provided profiles, customer business name, customer GSTIN, item name, HSN/SAC, quantity, rate, GST rate, and payment status Paid/Unpaid/Partial. Use profileAliases to understand short company names. For example, 'Nirvana to Lakshmi Jeyapandi' means seller alias Nirvana and buyer alias Lakshmi Jeyapandi. For internal billing between provided GST profiles, infer both companies from names: phrases like 'from X to Y' mean seller profileId is X and customer is Y. If only two provided profile names or aliases are mentioned, use the first as seller and second as customer. When customer matches a provided profile or alias, fill customerName, customerGstin, customerAddress, and customerPlace from that profile. Do not treat plain 'Lakshmi' as enough if more than one Lakshmi-related alias could match; ask for clarification. Do not invent unknown values. If anything is missing, set ready false, list missingDetails, and write assistantMessage as a short follow-up question asking only for missing details. If complete, set ready true and assistantMessage to a short confirmation. Return only schema fields."
             }
           ]
         },
@@ -93,7 +93,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: JSON.stringify({ message, activeProfileId, profiles, items, parties })
+              text: JSON.stringify({ message, activeProfileId, profiles, profileAliases, items, parties })
             }
           ]
         }
