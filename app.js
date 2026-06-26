@@ -481,7 +481,6 @@ function registerServiceWorker() {
 function bindEvents() {
   $$(".nav-tab").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
-  $("#quickSaleBtn").addEventListener("click", () => openEntry("sale"));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
   $("#chatBillBtn").addEventListener("click", openChatBillDialog);
   $("#newChatSaleBtn").addEventListener("click", openChatBillDialog);

@@ -1435,8 +1435,7 @@ textarea { resize: vertical; }
   .company-switcher strong {
     max-width: none;
   }
-  #chatBillBtn,
-  #quickSaleBtn {
+  #chatBillBtn {
     width: 100%;
   }
   .company-selector {
