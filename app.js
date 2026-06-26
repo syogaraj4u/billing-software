@@ -239,6 +239,7 @@ let chatBillHistoryActive = false;
 let pendingSmartBillReview = null;
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
+let currentInvoiceFileName = "invoice.pdf";
 
 const COMPANY_PAGE_TRANSITION_MS = 460;
 
@@ -576,6 +577,8 @@ function bindEvents() {
   $("#cloudSaveWorkspaceBtn").addEventListener("click", saveCloudWorkspaceSettings);
   $("#closeInvoiceBtn").addEventListener("click", () => $("#invoiceDialog").close());
   $("#printInvoiceBtn").addEventListener("click", printInvoice);
+  $("#downloadInvoicePdfBtn").addEventListener("click", downloadInvoicePdf);
+  $("#shareInvoicePdfBtn").addEventListener("click", shareInvoicePdf);
   $("#printReportBtn").addEventListener("click", () => window.print());
   window.addEventListener("afterprint", clearInvoicePrintMode);
   $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
@@ -1133,11 +1136,66 @@ function openEntry(kind, id = null, draft = null) {
   form.elements.notes.value = source?.notes || "";
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
   form.elements.partyId.onchange = updateEntryTotals;
+  $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview(kind, source);
   $("#lineRows").innerHTML = "";
   (source?.lines?.length ? source.lines : [blankLine(kind)]).forEach(line => addLineRow(line));
   updateEntryTotals();
   $("#entryDialog").showModal();
   if (window.lucide) lucide.createIcons();
+}
+
+function renderPurchaseUploadReview(kind, source) {
+  if (kind !== "purchase" || !source || source.source !== "purchase-upload") return "";
+  const profile = profileById(source.profileId || activeProfileId());
+  const supplier = partyById(source.partyId) || {};
+  const calculated = calculateEntryTotals(source.lines || [], profile, supplier, "purchase");
+  const extracted = source.extractedTaxes || {};
+  const messages = uniqueMessages(source.reviewMessages || []);
+  const attachments = source.attachments || [];
+  return `<section class="purchase-review-panel">
+    <div class="purchase-review-head">
+      <div>
+        <span>Purchase Upload Review</span>
+        <strong>${escapeHtml(source.number || "-")}</strong>
+      </div>
+      <div>
+        <span>${messages.length ? "Needs Review" : "Ready"}</span>
+        <strong>${money(calculated.total)}</strong>
+      </div>
+    </div>
+    <div class="purchase-review-grid">
+      ${purchaseReviewCard("Supplier", supplier.name || "-", supplier.gstin || source.sellerGstin || "-", supplier.address || supplier.place || "-")}
+      ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", source.buyerGstin || profile.gstin || "-", profile.address || profile.state || "-")}
+      ${purchaseReviewCard("Invoice", source.number || "-", formatInvoiceDate(source.date || today()), attachments.map(file => file.name).join(", ") || "-")}
+    </div>
+    <div class="purchase-review-totals">
+      <span>Taxable</span><strong>${money(calculated.taxable)}</strong>
+      <span>CGST</span><strong>${money(calculated.cgst)}</strong>
+      <span>SGST</span><strong>${money(calculated.sgst)}</strong>
+      <span>IGST</span><strong>${money(calculated.igst)}</strong>
+      <span>GST</span><strong>${money(calculated.gst)}</strong>
+      <span>Total</span><strong>${money(calculated.total)}</strong>
+    </div>
+    ${renderExtractedTaxReview(extracted)}
+    ${messages.length ? `<div class="purchase-review-warnings">${messages.map(message => `<span>${escapeHtml(message)}</span>`).join("")}</div>` : ""}
+  </section>`;
+}
+
+function purchaseReviewCard(title, main, detail, extra) {
+  return `<div class="purchase-review-card">
+    <span>${escapeHtml(title)}</span>
+    <strong>${escapeHtml(main || "-")}</strong>
+    <p>${escapeHtml(detail || "-")}</p>
+    <p>${escapeHtml(extra || "-")}</p>
+  </div>`;
+}
+
+function renderExtractedTaxReview(extracted = {}) {
+  if (!Object.values(extracted).some(value => num(value))) return "";
+  return `<div class="purchase-review-extracted">
+    <span>Uploaded Tax</span>
+    <strong>Taxable ${money(extracted.taxable)} | CGST ${money(extracted.cgst)} | SGST ${money(extracted.sgst)} | IGST ${money(extracted.igst)} | GST ${money(extracted.gst)} | Total ${money(extracted.total)}</strong>
+  </div>`;
 }
 
 function blankLine(kind) {
@@ -1419,6 +1477,7 @@ function showInvoice(id, kind) {
   const settings = profileById(entry.profileId);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   const roundOff = round2(num(entry.total) - num(entry.taxable) - num(entry.gst));
+  currentInvoiceFileName = invoicePdfFileName(entry, party);
   $("#invoicePrintArea").innerHTML = `
     <div class="invoice-sheet modern-invoice">
       <div class="modern-invoice-head">
@@ -1525,6 +1584,93 @@ function printInvoice() {
 
 function clearInvoicePrintMode() {
   document.body.classList.remove("invoice-print-mode");
+}
+
+async function downloadInvoicePdf() {
+  try {
+    setInvoicePdfBusy(true);
+    const blob = await buildInvoicePdfBlob();
+    downloadBlob(blob, currentInvoiceFileName);
+    toast("Invoice PDF downloaded");
+  } catch (error) {
+    console.error(error);
+    toast("Could not create PDF. Try Print instead.");
+  } finally {
+    setInvoicePdfBusy(false);
+  }
+}
+
+async function shareInvoicePdf() {
+  try {
+    setInvoicePdfBusy(true);
+    const blob = await buildInvoicePdfBlob();
+    const file = new File([blob], currentInvoiceFileName, { type: "application/pdf" });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({
+        title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
+        text: "Invoice PDF",
+        files: [file]
+      });
+      toast("Invoice shared");
+      return;
+    }
+    downloadBlob(blob, currentInvoiceFileName);
+    toast("Sharing is not supported here. PDF downloaded.");
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      console.error(error);
+      toast("Could not share PDF");
+    }
+  } finally {
+    setInvoicePdfBusy(false);
+  }
+}
+
+async function buildInvoicePdfBlob() {
+  const sheet = $("#invoicePrintArea .modern-invoice");
+  if (!sheet) throw new Error("Invoice is not open");
+  if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error("PDF tools are still loading");
+  const canvas = await html2canvas(sheet, {
+    backgroundColor: "#ffffff",
+    scale: Math.min(2, window.devicePixelRatio || 1.5),
+    useCORS: true,
+    scrollX: 0,
+    scrollY: 0
+  });
+  const image = canvas.toDataURL("image/png");
+  const pdf = new window.jspdf.jsPDF("p", "mm", "a4");
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 8;
+  const contentWidth = pageWidth - margin * 2;
+  const contentHeight = pageHeight - margin * 2;
+  const imageHeight = canvas.height * contentWidth / canvas.width;
+  let y = margin;
+  let remainingHeight = imageHeight;
+  while (remainingHeight > 0) {
+    pdf.addImage(image, "PNG", margin, y, contentWidth, imageHeight);
+    remainingHeight -= contentHeight;
+    if (remainingHeight > 0) {
+      pdf.addPage();
+      y -= contentHeight;
+    }
+  }
+  return pdf.output("blob");
+}
+
+function setInvoicePdfBusy(isBusy) {
+  ["#downloadInvoicePdfBtn", "#shareInvoicePdfBtn"].forEach(selector => {
+    const button = $(selector);
+    if (button) button.disabled = isBusy;
+  });
+}
+
+function invoicePdfFileName(entry, party) {
+  return `${safeFileName(entry.number || "invoice")}-${safeFileName(party.name || "customer")}.pdf`;
+}
+
+function safeFileName(value) {
+  return String(value || "file").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "file";
 }
 
 function invoiceSellerBlock(profile) {
@@ -2454,11 +2600,25 @@ function partyAliases(party) {
   return uniqueMessages([
     party.name,
     party.gstin,
-    ...partyAliasList(party)
+    ...partyAliasList(party),
+    ...derivedPartyAliases(party.name)
   ]).filter(alias => {
     const normalized = normalizeForAlias(alias);
     return normalized && !GENERIC_PARTY_ALIASES.has(normalized);
   });
+}
+
+function derivedPartyAliases(name) {
+  const words = normalizeForAlias(name).split(" ").filter(word => word.length > 1);
+  const aliases = [];
+  if (words[0] && words[0].length >= 3) aliases.push(words[0]);
+  const initials = words.map(word => word[0]).join("");
+  if (initials.length >= 3) aliases.push(initials);
+  const withoutSuffix = words.filter(word => !/^(traders?|digitals?|mobiles?|communications?|solutions?|infotech|enterprises?|services?)$/.test(word));
+  if (withoutSuffix.length && withoutSuffix.length !== words.length) {
+    aliases.push(withoutSuffix.join(" "));
+  }
+  return aliases;
 }
 
 function partyAliasList(party) {
@@ -2728,7 +2888,10 @@ function ensureChatCustomer(parsed) {
   const existing = state.parties.find(party => (
     normalizedGstin && normalizeGstin(party.gstin) === normalizedGstin
   ) || party.name.toLowerCase() === String(parsed.customerName || "").toLowerCase());
-  if (existing) return existing.id;
+  if (existing) {
+    updateExistingChatCustomer(existing, parsed, normalizedGstin);
+    return existing.id;
+  }
   const party = {
     id: uid(),
     name: parsed.customerName || "Chat Customer",
@@ -2740,6 +2903,17 @@ function ensureChatCustomer(parsed) {
   };
   state.parties.push(party);
   return party.id;
+}
+
+function updateExistingChatCustomer(party, parsed, normalizedGstin) {
+  if (!normalizeGstin(party.gstin) && normalizedGstin) party.gstin = normalizedGstin;
+  if (!String(party.address || "").trim() && parsed.customerAddress) party.address = parsed.customerAddress;
+  if (!String(party.place || "").trim()) {
+    party.place = parsed.customerPlace || stateNameFromGstin(normalizedGstin) || stateCodeFromGstin(normalizedGstin) || "";
+  }
+  if (!String(party.aliases || "").trim() && parsed.customerName && parsed.customerName !== party.name) {
+    party.aliases = parsed.customerName;
+  }
 }
 
 function ensureChatItem(line) {
