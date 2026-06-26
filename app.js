@@ -174,6 +174,9 @@ let selectedPurchaseIds = new Set();
 let entryDraftMeta = {};
 let chatBillMessages = [];
 let companySelectionOpen = true;
+let companyPageTransitionTimer = null;
+
+const COMPANY_PAGE_TRANSITION_MS = 460;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -554,6 +557,7 @@ function renderProfileSelectors() {
 }
 
 function renderAppVisibility() {
+  if (document.body.classList.contains("company-page-transitioning")) return;
   $("#companySelector").hidden = !companySelectionOpen;
   $("#appShell").hidden = companySelectionOpen;
 }
@@ -582,6 +586,11 @@ function companyInitials(value) {
 }
 
 function openCompanySelector() {
+  if (companySelectionOpen) return;
+  if ($("#companySelector") && $("#appShell")) {
+    slideToCompanySelector();
+    return;
+  }
   companySelectionOpen = true;
   renderAll();
 }
@@ -589,12 +598,70 @@ function openCompanySelector() {
 function selectCompany(profileId) {
   const profile = state.settings.profiles.find(row => row.id === profileId);
   if (!profile) return;
+  const shouldSlide = companySelectionOpen && canSlideCompanyPages();
   state.settings.activeProfileId = profileId;
   selectedPurchaseIds.clear();
-  companySelectionOpen = false;
   saveState();
+  if (shouldSlide) {
+    slideToCompanyWorkspace(profileId);
+    return;
+  }
+  companySelectionOpen = false;
   showView("dashboard");
   toast(`${profileName(profileId)} selected`);
+}
+
+function canSlideCompanyPages() {
+  return Boolean($("#companySelector") && $("#appShell"));
+}
+
+function clearCompanyPageTransition() {
+  window.clearTimeout(companyPageTransitionTimer);
+  companyPageTransitionTimer = null;
+  document.body.classList.remove("company-page-transitioning");
+  $("#companySelector")?.classList.remove("page-slide-exit-left", "page-slide-enter-left", "is-active");
+  $("#appShell")?.classList.remove("page-slide-enter-right", "page-slide-exit-right", "is-active");
+}
+
+function slideToCompanyWorkspace(profileId) {
+  const selector = $("#companySelector");
+  const appShell = $("#appShell");
+  clearCompanyPageTransition();
+  companySelectionOpen = false;
+  document.body.classList.add("company-page-transitioning");
+  selector.hidden = false;
+  appShell.hidden = false;
+  appShell.classList.add("page-slide-enter-right");
+  showView("dashboard");
+  requestAnimationFrame(() => {
+    selector.classList.add("page-slide-exit-left", "is-active");
+    appShell.classList.add("is-active");
+  });
+  companyPageTransitionTimer = window.setTimeout(() => {
+    clearCompanyPageTransition();
+    renderAppVisibility();
+    toast(`${profileName(profileId)} selected`);
+  }, COMPANY_PAGE_TRANSITION_MS);
+}
+
+function slideToCompanySelector() {
+  const selector = $("#companySelector");
+  const appShell = $("#appShell");
+  clearCompanyPageTransition();
+  companySelectionOpen = true;
+  renderCompanySelector();
+  document.body.classList.add("company-page-transitioning");
+  selector.hidden = false;
+  appShell.hidden = false;
+  selector.classList.add("page-slide-enter-left");
+  requestAnimationFrame(() => {
+    selector.classList.add("is-active");
+    appShell.classList.add("page-slide-exit-right", "is-active");
+  });
+  companyPageTransitionTimer = window.setTimeout(() => {
+    clearCompanyPageTransition();
+    renderAppVisibility();
+  }, COMPANY_PAGE_TRANSITION_MS);
 }
 
 function cloudConfig() {

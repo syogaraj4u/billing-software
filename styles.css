@@ -40,6 +40,69 @@ button {
   min-height: 100vh;
 }
 
+body.company-page-transitioning {
+  overflow: hidden;
+}
+
+body.company-page-transitioning .company-selector,
+body.company-page-transitioning .app-shell {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  min-height: 100dvh;
+  max-height: 100dvh;
+  overflow: auto;
+  background: var(--bg);
+  transition: transform 460ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 360ms ease;
+  will-change: transform, opacity;
+}
+
+body.company-page-transitioning .company-selector {
+  z-index: 40;
+}
+
+body.company-page-transitioning .app-shell {
+  z-index: 41;
+}
+
+body.company-page-transitioning .app-shell.page-slide-enter-right {
+  transform: translateX(100%);
+  opacity: 0.98;
+}
+
+body.company-page-transitioning .app-shell.page-slide-enter-right.is-active {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+body.company-page-transitioning .company-selector.page-slide-exit-left.is-active {
+  transform: translateX(-28%);
+  opacity: 0.55;
+}
+
+body.company-page-transitioning .company-selector.page-slide-enter-left {
+  z-index: 42;
+  transform: translateX(-100%);
+  opacity: 0.98;
+}
+
+body.company-page-transitioning .company-selector.page-slide-enter-left.is-active {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+body.company-page-transitioning .app-shell.page-slide-exit-right.is-active {
+  transform: translateX(28%);
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.company-page-transitioning .company-selector,
+  body.company-page-transitioning .app-shell {
+    transition: none;
+  }
+}
+
 .company-selector {
   min-height: 100vh;
   padding: 24px;
