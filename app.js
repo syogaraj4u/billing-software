@@ -178,6 +178,7 @@ let entryDraftMeta = {};
 let chatBillMessages = [];
 let chatBillAttachments = [];
 let chatBillPreparing = false;
+let chatBillHistoryActive = false;
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
 
@@ -493,6 +494,7 @@ function bindEvents() {
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryForm").addEventListener("submit", saveEntry);
   $("#chatBillForm").addEventListener("submit", event => event.preventDefault());
+  $("#closeChatBillBtn").addEventListener("click", closeChatBillDialog);
   $("#chatBillAttachmentInput").addEventListener("change", handleChatBillAttachmentInput);
   $("#chatBillInput").addEventListener("input", resizeChatBillInput);
   $("#chatBillInput").addEventListener("keydown", handleChatBillInputKeydown);
@@ -526,6 +528,7 @@ function bindEvents() {
     $$(".segmented button").forEach(item => item.classList.toggle("active", item === button));
     renderReport();
   }));
+  window.addEventListener("popstate", closeChatBillOnBack);
 }
 
 function showView(view) {
@@ -1852,6 +1855,7 @@ function openChatBillDialog() {
   renderChatBillAttachments();
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
+  pushChatBillHistory();
   resizeChatBillInput();
   setTimeout(() => {
     try {
@@ -1861,6 +1865,35 @@ function openChatBillDialog() {
     }
   }, 80);
   if (window.lucide) lucide.createIcons();
+}
+
+function closeChatBillDialog(options = {}) {
+  const dialog = $("#chatBillDialog");
+  if (dialog?.open) dialog.close();
+  if (!chatBillHistoryActive) return;
+  chatBillHistoryActive = false;
+  if (!options.fromHistory && window.history?.state?.chatBillOpen) {
+    window.history.back();
+  }
+}
+
+function pushChatBillHistory() {
+  if (chatBillHistoryActive || !window.history?.pushState) return;
+  try {
+    const currentState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+    window.history.pushState({ ...currentState, chatBillOpen: true }, "", window.location.href);
+    chatBillHistoryActive = true;
+  } catch {
+    chatBillHistoryActive = false;
+  }
+}
+
+function closeChatBillOnBack() {
+  if ($("#chatBillDialog")?.open) {
+    closeChatBillDialog({ fromHistory: true });
+  } else {
+    chatBillHistoryActive = false;
+  }
 }
 
 function fillChatBillSample() {
@@ -1985,7 +2018,7 @@ async function prepareChatBillDraft() {
     $("#chatBillSummary").innerHTML = renderChatBillSummary(parsed, draft);
     saveState();
     renderAll();
-    $("#chatBillDialog").close();
+    closeChatBillDialog();
     openEntry("sale", null, draft);
     toast("Sale draft prepared. Please review and save.");
   } finally {

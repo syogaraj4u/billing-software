@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260626-chat-console">
+  <link rel="stylesheet" href="styles.css?v=20260626-chat-close">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -248,7 +248,7 @@
         <div>
           <h3>Chat Bill</h3>
         </div>
-        <button class="icon-btn" value="cancel" title="Close"><i data-lucide="x"></i></button>
+        <button class="icon-btn" id="closeChatBillBtn" type="button" title="Close" aria-label="Close Chat Bill"><i data-lucide="x"></i></button>
       </div>
       <div class="chat-bill-body">
         <div class="chat-thread" id="chatBillThread"></div>
@@ -412,6 +412,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260626-chat-console"></script>
+  <script src="app.js?v=20260626-chat-close"></script>
 </body>
 </html>
