@@ -2089,7 +2089,7 @@ function parseSaleChatLocal(message) {
     status,
     notes: "Prepared from chat details. Review values before saving.",
     lines: lines.length ? lines : [{
-      name: "Chat Sale Item",
+      name: "Smart Bill Item",
       hsn: extractHsnCode(message) || DEFAULT_SALE_HSN,
       qty: 1,
       rate: lastAmount(message) || 0,
@@ -2553,7 +2553,7 @@ function ensureChatItem(line) {
   if (existing) return existing;
   const item = {
     id: uid(),
-    name: line.name || "Chat Sale Item",
+    name: line.name || "Smart Bill Item",
     hsn: line.hsn || "",
     gstRate: num(line.gstRate) || 18,
     saleRate: num(line.rate),

@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260626-dashboard-sale">
+  <link rel="stylesheet" href="styles.css?v=20260626-smart-bill">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -57,7 +57,7 @@
             <i data-lucide="upload"></i>
             <input id="restoreInput" type="file" accept="application/json">
           </label>
-          <button class="secondary-btn" id="chatBillBtn"><i data-lucide="message-square-text"></i><span>Chat Bill</span></button>
+          <button class="secondary-btn" id="chatBillBtn"><i data-lucide="message-square-text"></i><span>Smart Bill</span></button>
         </div>
       </header>
 
@@ -103,7 +103,7 @@
             <p>Create GST bills and reduce stock automatically.</p>
           </div>
           <div class="section-actions">
-            <button class="secondary-btn" id="newChatSaleBtn"><i data-lucide="message-square-text"></i><span>Chat Bill</span></button>
+            <button class="secondary-btn" id="newChatSaleBtn"><i data-lucide="message-square-text"></i><span>Smart Bill</span></button>
             <button class="primary-btn" id="newSaleBtn"><i data-lucide="plus"></i><span>New Sale</span></button>
           </div>
         </div>
@@ -245,22 +245,22 @@
     <form method="dialog" id="chatBillForm">
       <div class="dialog-head">
         <div>
-          <h3>Chat Bill</h3>
+          <h3>Smart Bill</h3>
         </div>
-        <button class="icon-btn" id="closeChatBillBtn" type="button" title="Close" aria-label="Close Chat Bill"><i data-lucide="x"></i></button>
+        <button class="icon-btn" id="closeChatBillBtn" type="button" title="Close" aria-label="Close Smart Bill"><i data-lucide="x"></i></button>
       </div>
       <div class="chat-bill-body">
         <div class="chat-thread" id="chatBillThread"></div>
         <div class="chat-summary" id="chatBillSummary"></div>
       </div>
-      <div class="chat-composer" aria-label="Chat bill message composer">
+      <div class="chat-composer" aria-label="Smart Bill message composer">
         <div class="chat-attachments" id="chatBillAttachments"></div>
         <div class="chat-composer-box">
           <label class="icon-btn upload-btn chat-attach-btn" title="Attach image">
             <i data-lucide="image-plus"></i>
             <input id="chatBillAttachmentInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple>
           </label>
-          <textarea id="chatBillInput" rows="1" aria-label="Chat bill details" placeholder="Message Chat Bill"></textarea>
+          <textarea id="chatBillInput" rows="1" aria-label="Smart Bill details" placeholder="Message Smart Bill"></textarea>
           <button class="icon-btn" id="chatSampleBtn" type="button" title="Example"><i data-lucide="wand-sparkles"></i></button>
           <button class="icon-btn chat-send-btn" id="prepareChatBillBtn" type="button" title="Send"><i data-lucide="send"></i></button>
         </div>
@@ -411,6 +411,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260626-dashboard-sale"></script>
+  <script src="app.js?v=20260626-smart-bill"></script>
 </body>
 </html>
