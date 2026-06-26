@@ -1187,51 +1187,254 @@ function showInvoice(id, kind) {
   const entry = entryList(kind).find(row => row.id === id);
   const party = state.parties.find(row => row.id === entry.partyId) || {};
   const settings = profileById(entry.profileId);
+  const eInvoice = entry.eInvoice || {};
+  const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
+  const roundOff = round2(num(entry.total) - num(entry.taxable) - num(entry.gst));
   $("#invoicePrintArea").innerHTML = `
-    <div class="invoice-sheet">
-      <div class="invoice-top">
-        <div>
-          <h2>${escapeHtml(settings.businessName)}</h2>
-          <p>${settings.legalName ? `Legal Name: ${escapeHtml(settings.legalName)}` : ""}</p>
-          <p>${escapeHtml(settings.address)}</p>
-          <p>${escapeHtml(settings.phone)} ${settings.email ? ` | ${escapeHtml(settings.email)}` : ""}</p>
-          <p>${settings.gstin ? `GSTIN: ${escapeHtml(settings.gstin)}` : ""}</p>
-          <p>${settings.state ? `State: ${escapeHtml(settings.state)}` : ""}</p>
+    <div class="invoice-sheet tally-invoice">
+      <div class="invoice-title-row">
+        <h2>Tax Invoice</h2>
+        <h3>e-Invoice</h3>
+      </div>
+      <div class="einvoice-row">
+        <div class="irn-block">
+          <div><span>IRN</span><strong>${escapeHtml(eInvoice.irn || "-")}</strong></div>
+          <div><span>Ack No.</span><strong>${escapeHtml(eInvoice.ackNo || "-")}</strong></div>
+          <div><span>Ack Date</span><strong>${escapeHtml(eInvoice.ackDate || "-")}</strong></div>
         </div>
-        <div class="invoice-meta">
-          <h2>Tax Invoice</h2>
-          <p>No: ${escapeHtml(entry.number)}</p>
-          <p>Date: ${entry.date}</p>
+        <div class="qr-placeholder">${eInvoice.qr ? "" : "QR"}</div>
+      </div>
+      <div class="invoice-info-grid">
+        <div class="seller-buyer-cell">
+          ${invoiceSellerBlock(settings)}
+          ${invoicePartyBlock("Consignee (Ship to)", party)}
+          ${invoicePartyBlock("Buyer (Bill to)", party)}
+        </div>
+        <div class="voucher-grid">
+          ${invoiceMetaCell("Invoice No.", entry.number, "e-Way Bill No.", entry.ewayBillNo || "-")}
+          ${invoiceMetaCell("Dated", formatInvoiceDate(entry.date), "Mode/Terms of Payment", entry.status || "-")}
+          ${invoiceMetaCell("Delivery Note", "-", "Reference No. & Date.", "-")}
+          ${invoiceMetaCell("Other References", "-", "Buyer's Order No.", "-")}
+          ${invoiceMetaCell("Dated", "-", "Dispatch Doc No.", "-")}
+          ${invoiceMetaCell("Delivery Note Date", "-", "Dispatched through", "-")}
+          ${invoiceMetaCell("Destination", party.place || "-", "Terms of Delivery", "-")}
         </div>
       </div>
-      <div class="invoice-party">
-        <strong>Bill To</strong>
-        <p>${escapeHtml(party.name || "")}</p>
-        <p>${escapeHtml(party.address || party.place || "")}</p>
-        <p>${party.gstin ? `GSTIN: ${escapeHtml(party.gstin)}` : ""}</p>
-      </div>
-      <table>
-        <thead><tr><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Amount</th></tr></thead>
+      <table class="invoice-items-table">
+        <thead>
+          <tr>
+            <th class="sl-col">Sl<br>No.</th>
+            <th>Description of Goods</th>
+            <th>HSN/SAC</th>
+            <th class="num">Quantity</th>
+            <th class="num">Rate<br><small>(Incl. of Tax)</small></th>
+            <th class="num">Rate</th>
+            <th>per</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
         <tbody>
-          ${entry.lines.map(line => {
+          ${entry.lines.map((line, index) => {
             const item = state.items.find(row => row.id === line.itemId) || {};
             const taxable = num(line.qty) * num(line.rate);
-            const gst = taxable * num(line.gstRate) / 100;
-            return `<tr><td>${escapeHtml(item.name || itemName(line.itemId))}</td><td>${escapeHtml(item.hsn || "")}</td><td class="num">${num(line.qty)}</td><td class="num">${money(line.rate)}</td><td class="num">${num(line.gstRate)}%</td><td class="num">${money(taxable + gst)}</td></tr>`;
+            const inclusiveRate = num(line.rate) * (1 + num(line.gstRate) / 100);
+            return `<tr>
+              <td class="num">${index + 1}</td>
+              <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}</td>
+              <td>${escapeHtml(item.hsn || "")}</td>
+              <td class="num strong">${formatQty(line.qty)}</td>
+              <td class="num">${formatInvoiceMoney(inclusiveRate)}</td>
+              <td class="num">${formatInvoiceMoney(line.rate)}</td>
+              <td>Pcs</td>
+              <td class="num strong">${formatInvoiceMoney(taxable)}</td>
+            </tr>`;
           }).join("")}
+          ${invoiceOutputTaxRows(entry, roundOff)}
+          <tr class="invoice-total-row">
+            <td></td>
+            <td class="num">Total</td>
+            <td></td>
+            <td class="num strong">${formatQty(totalQty)}</td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td class="num grand-total">Rs. ${formatInvoiceMoney(entry.total)}</td>
+          </tr>
         </tbody>
       </table>
-      <div class="invoice-total">
-        <div><span>Taxable</span><span>${money(entry.taxable)}</span></div>
-        ${num(entry.cgst) ? `<div><span>CGST</span><span>${money(entry.cgst)}</span></div>` : ""}
-        ${num(entry.sgst) ? `<div><span>SGST</span><span>${money(entry.sgst)}</span></div>` : ""}
-        ${num(entry.igst) ? `<div><span>IGST</span><span>${money(entry.igst)}</span></div>` : ""}
-        <div><span>GST</span><span>${money(entry.gst)}</span></div>
-        <div><strong>Total</strong><strong>${money(entry.total)}</strong></div>
+      <div class="amount-words-row">
+        <span>Amount Chargeable (in words)</span>
+        <em>E. &amp; O.E</em>
+        <strong>${escapeHtml(amountInWords(entry.total))}</strong>
       </div>
+      ${invoiceTaxSummary(entry)}
+      <div class="tax-words-row">
+        <span>Tax Amount (in words) :</span>
+        <strong>${escapeHtml(amountInWords(entry.gst))}</strong>
+      </div>
+      <div class="invoice-footer-grid">
+        <div>
+          <span>Declaration</span>
+          <p>We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</p>
+        </div>
+        <div class="signature-box">
+          <strong>for ${escapeHtml(settings.businessName || settings.label)}</strong>
+          <span>Authorised Signatory</span>
+        </div>
+      </div>
+      <p class="computer-note">This is a Computer Generated Invoice</p>
     </div>
   `;
   $("#invoiceDialog").showModal();
+}
+
+function invoiceSellerBlock(profile) {
+  return `<div class="invoice-party-block seller-block">
+    <strong>${escapeHtml(profile.businessName || profile.label || "")}</strong>
+    <p>${escapeHtml(profile.address || "")}</p>
+    <p>GSTIN/UIN: ${escapeHtml(profile.gstin || "-")}</p>
+    <p>State Name : ${escapeHtml(profile.state || stateNameFromGstin(profile.gstin) || "-")}, Code : ${escapeHtml(stateCodeFromGstin(profile.gstin) || "-")}</p>
+  </div>`;
+}
+
+function invoicePartyBlock(title, party) {
+  return `<div class="invoice-party-block">
+    <span>${escapeHtml(title)}</span>
+    <strong>${escapeHtml(party.name || "")}</strong>
+    <p>${escapeHtml(party.address || party.place || "")}</p>
+    <p>GSTIN/UIN : ${escapeHtml(party.gstin || "-")}</p>
+    <p>State Name : ${escapeHtml(stateNameFromGstin(party.gstin) || party.place || "-")}, Code : ${escapeHtml(stateCodeFromGstin(party.gstin) || "-")}</p>
+  </div>`;
+}
+
+function invoiceMetaCell(labelA, valueA, labelB, valueB) {
+  return `<div><span>${escapeHtml(labelA)}</span><strong>${escapeHtml(valueA)}</strong></div>
+    <div><span>${escapeHtml(labelB)}</span><strong>${escapeHtml(valueB)}</strong></div>`;
+}
+
+function invoiceOutputTaxRows(entry, roundOff) {
+  const rows = [];
+  if (num(entry.igst)) rows.push(["Output IGST", entry.igst]);
+  if (num(entry.cgst)) rows.push(["Output CGST", entry.cgst]);
+  if (num(entry.sgst)) rows.push(["Output SGST", entry.sgst]);
+  if (roundOff) rows.push(["Round Off", roundOff]);
+  return rows.map(([label, amount]) => `<tr class="tax-line-row">
+    <td></td><td class="tax-label">${escapeHtml(label)}</td><td></td><td></td><td></td><td></td><td></td>
+    <td class="num strong">${formatInvoiceMoney(amount)}</td>
+  </tr>`).join("");
+}
+
+function invoiceTaxSummary(entry) {
+  const groups = invoiceTaxGroups(entry);
+  const isIgst = num(entry.igst) > 0;
+  if (isIgst) {
+    return `<table class="tax-summary-table">
+      <thead>
+        <tr><th rowspan="2">HSN/SAC</th><th rowspan="2" class="num">Taxable<br>Value</th><th colspan="2">IGST</th><th rowspan="2" class="num">Total<br>Tax Amount</th></tr>
+        <tr><th class="num">Rate</th><th class="num">Amount</th></tr>
+      </thead>
+      <tbody>
+        ${groups.map(group => `<tr><td>${escapeHtml(group.hsn)}</td><td class="num">${formatInvoiceMoney(group.taxable)}</td><td class="num">${group.rate}%</td><td class="num">${formatInvoiceMoney(group.tax)}</td><td class="num">${formatInvoiceMoney(group.tax)}</td></tr>`).join("")}
+        <tr class="summary-total"><td>Total</td><td class="num">${formatInvoiceMoney(entry.taxable)}</td><td></td><td class="num">${formatInvoiceMoney(entry.igst)}</td><td class="num">${formatInvoiceMoney(entry.igst)}</td></tr>
+      </tbody>
+    </table>`;
+  }
+  return `<table class="tax-summary-table">
+    <thead>
+      <tr><th rowspan="2">HSN/SAC</th><th rowspan="2" class="num">Taxable<br>Value</th><th colspan="2">CGST</th><th colspan="2">SGST</th><th rowspan="2" class="num">Total<br>Tax Amount</th></tr>
+      <tr><th class="num">Rate</th><th class="num">Amount</th><th class="num">Rate</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      ${groups.map(group => {
+        const halfRate = group.rate / 2;
+        const halfTax = group.tax / 2;
+        return `<tr><td>${escapeHtml(group.hsn)}</td><td class="num">${formatInvoiceMoney(group.taxable)}</td><td class="num">${halfRate}%</td><td class="num">${formatInvoiceMoney(halfTax)}</td><td class="num">${halfRate}%</td><td class="num">${formatInvoiceMoney(halfTax)}</td><td class="num">${formatInvoiceMoney(group.tax)}</td></tr>`;
+      }).join("")}
+      <tr class="summary-total"><td>Total</td><td class="num">${formatInvoiceMoney(entry.taxable)}</td><td></td><td class="num">${formatInvoiceMoney(entry.cgst)}</td><td></td><td class="num">${formatInvoiceMoney(entry.sgst)}</td><td class="num">${formatInvoiceMoney(entry.gst)}</td></tr>
+    </tbody>
+  </table>`;
+}
+
+function invoiceTaxGroups(entry) {
+  const map = new Map();
+  entry.lines.forEach(line => {
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    const hsn = item.hsn || "NA";
+    const key = `${hsn}-${num(line.gstRate)}`;
+    const taxable = num(line.qty) * num(line.rate);
+    const existing = map.get(key) || { hsn, rate: num(line.gstRate), taxable: 0, tax: 0 };
+    existing.taxable += taxable;
+    existing.tax += taxable * num(line.gstRate) / 100;
+    map.set(key, existing);
+  });
+  return Array.from(map.values()).map(group => ({
+    ...group,
+    taxable: round2(group.taxable),
+    tax: round2(group.tax)
+  }));
+}
+
+function formatInvoiceMoney(value) {
+  return Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatQty(value) {
+  return `${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })} Pcs`;
+}
+
+function formatInvoiceDate(value) {
+  if (!value) return "";
+  const date = new Date(`${value}T00:00:00`);
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }).replace(/ /g, "-");
+}
+
+function stateNameFromGstin(gstin) {
+  const states = {
+    "07": "Delhi",
+    "27": "Maharashtra",
+    "29": "Karnataka",
+    "33": "Tamil Nadu",
+    "36": "Telangana",
+    "37": "Andhra Pradesh"
+  };
+  return states[stateCodeFromGstin(gstin)] || "";
+}
+
+function amountInWords(value) {
+  const totalPaise = Math.round(num(value) * 100);
+  const rupees = Math.floor(totalPaise / 100);
+  const paise = totalPaise % 100;
+  const rupeeWords = indianNumberWords(rupees);
+  if (paise) return `INR ${rupeeWords} and ${indianNumberWords(paise)} paise Only`;
+  return `INR ${rupeeWords} Only`;
+}
+
+function indianNumberWords(value) {
+  const ones = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const twoDigits = number => {
+    if (number < 20) return ones[number];
+    return `${tens[Math.floor(number / 10)]}${number % 10 ? ` ${ones[number % 10]}` : ""}`;
+  };
+  const threeDigits = number => {
+    const hundred = Math.floor(number / 100);
+    const rest = number % 100;
+    return `${hundred ? `${ones[hundred]} Hundred` : ""}${hundred && rest ? " " : ""}${rest ? twoDigits(rest) : ""}`.trim();
+  };
+  let number = Math.floor(num(value));
+  if (!number) return "Zero";
+  const parts = [];
+  const crore = Math.floor(number / 10000000);
+  number %= 10000000;
+  const lakh = Math.floor(number / 100000);
+  number %= 100000;
+  const thousand = Math.floor(number / 1000);
+  number %= 1000;
+  if (crore) parts.push(`${threeDigits(crore)} Crore`);
+  if (lakh) parts.push(`${threeDigits(lakh)} Lakh`);
+  if (thousand) parts.push(`${threeDigits(thousand)} Thousand`);
+  if (number) parts.push(threeDigits(number));
+  return parts.join(" ");
 }
 
 function renderReport() {
