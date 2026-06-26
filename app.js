@@ -126,6 +126,7 @@ const GST_PROFILE_ALIASES = {
 };
 
 const AMBIGUOUS_PROFILE_ALIASES = new Set(["lakshmi", "s lakshmi"]);
+const GENERIC_PARTY_ALIASES = new Set(["cash", "cash customer", "customer", "supplier", "default", "default supplier"]);
 
 function createDefaultProfiles() {
   return clone(OFFICIAL_GST_PROFILES);
@@ -243,7 +244,7 @@ function normalizeState(value) {
     value.settings.activeProfileId = profiles[0].id;
   }
   value.items = Array.isArray(value.items) ? value.items : [];
-  value.parties = Array.isArray(value.parties) ? value.parties : [];
+  value.parties = Array.isArray(value.parties) ? value.parties.map(normalizePartyForState) : [];
   value.sales = Array.isArray(value.sales) ? value.sales : [];
   value.purchases = Array.isArray(value.purchases) ? value.purchases : [];
   [...value.sales, ...value.purchases].forEach(entry => {
@@ -252,6 +253,19 @@ function normalizeState(value) {
   value.sales.forEach(entry => normalizeEntryForState(entry, "sale"));
   value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase"));
   return value;
+}
+
+function normalizePartyForState(party) {
+  return {
+    id: party.id || uid(),
+    name: party.name || "",
+    type: party.type || "Customer",
+    gstin: party.gstin || "",
+    phone: party.phone || "",
+    place: party.place || "",
+    address: party.address || "",
+    aliases: party.aliases || ""
+  };
 }
 
 function normalizeEntryForState(entry, kind) {
@@ -854,6 +868,7 @@ function renderParties() {
       <td>${escapeHtml(party.name)}</td>
       <td>${escapeHtml(party.type)}</td>
       <td>${escapeHtml(party.gstin)}</td>
+      <td>${escapeHtml(partyAliasList(party).join(", "))}</td>
       <td>${escapeHtml(party.phone)}</td>
       <td>${escapeHtml(party.place)}</td>
       <td><div class="row-actions">
@@ -861,7 +876,7 @@ function renderParties() {
         <button class="mini-btn" title="Delete" onclick="deleteParty('${party.id}')"><i data-lucide="trash-2"></i></button>
       </div></td>
     </tr>
-  `).join("") || emptyRow(6, "No parties");
+  `).join("") || emptyRow(7, "No parties");
 }
 
 function renderSettings() {
@@ -1131,7 +1146,7 @@ function openParty(id = null) {
   const party = state.parties.find(row => row.id === id);
   const form = $("#partyForm");
   form.reset();
-  ["name", "type", "gstin", "phone", "place", "address"].forEach(key => {
+  ["name", "type", "gstin", "aliases", "phone", "place", "address"].forEach(key => {
     form.elements[key].value = party?.[key] ?? (key === "type" ? "Customer" : "");
   });
   $("#partyDialog").showModal();
@@ -1146,6 +1161,7 @@ function saveParty(event) {
     name: form.elements.name.value.trim(),
     type: form.elements.type.value,
     gstin: form.elements.gstin.value.trim(),
+    aliases: form.elements.aliases.value.trim(),
     phone: form.elements.phone.value.trim(),
     place: form.elements.place.value.trim(),
     address: form.elements.address.value.trim()
@@ -1769,6 +1785,7 @@ async function parseSaleChatWithCloud(message) {
         activeProfileId: state.settings.activeProfileId,
         profiles: state.settings.profiles,
         profileAliases: buildProfileAliasPayload(),
+        partyAliases: buildPartyAliasPayload(),
         items: state.items,
         parties: state.parties
       }
@@ -1782,10 +1799,12 @@ async function parseSaleChatWithCloud(message) {
 }
 
 function parseSaleChatLocal(message) {
+  const explicitGstin = normalizeGstin(message.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0] || "");
   const internalBuyer = extractInternalBuyerProfileFromMessage(message);
-  const gstin = normalizeGstin(internalBuyer?.gstin || message.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0] || "");
+  const savedBuyer = internalBuyer ? null : extractBuyerPartyFromMessage(message, explicitGstin);
+  const gstin = normalizeGstin(internalBuyer?.gstin || savedBuyer?.gstin || explicitGstin);
   const profile = extractSellerProfileFromMessage(message, internalBuyer) || activeProfile();
-  const customerName = internalBuyer?.businessName || internalBuyer?.label || extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
+  const customerName = internalBuyer?.businessName || internalBuyer?.label || savedBuyer?.name || extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
   const status = /unpaid|credit|due/i.test(message) ? "Unpaid" : /partial/i.test(message) ? "Partial" : "Paid";
   const lines = parseSaleLines(message);
   return {
@@ -1801,8 +1820,8 @@ function parseSaleChatLocal(message) {
       rate: lastAmount(message) || 0,
       gstRate: extractGstRate(message)
     }],
-    customerAddress: internalBuyer?.address || "",
-    customerPlace: internalBuyer?.state || "",
+    customerAddress: internalBuyer?.address || savedBuyer?.address || "",
+    customerPlace: internalBuyer?.state || savedBuyer?.place || "",
     reviewMessages: gstin ? [] : ["B2B customer GSTIN not found in chat. Please add GSTIN before final billing."]
   };
 }
@@ -1858,6 +1877,27 @@ function extractInternalBuyerProfileFromMessage(message) {
   if (explicit) return explicit;
   const mentions = profileMentions(message);
   return mentions.length > 1 ? mentions[1] : null;
+}
+
+function extractBuyerPartyFromMessage(message, explicitGstin = "") {
+  if (explicitGstin) {
+    const byGstin = customerParties().find(party => normalizeGstin(party.gstin) === explicitGstin);
+    if (byGstin) return byGstin;
+  }
+  return extractPartyNearKeyword(message, ["bill to", "ship to", "buyer", "customer", "party", "to"]) || partyMentions(message)[0] || null;
+}
+
+function extractPartyNearKeyword(message, keywords) {
+  for (const keyword of keywords) {
+    const pattern = new RegExp(`\\b${escapeRegExp(keyword).replace(/\s+/g, "\\s+")}\\b`, "ig");
+    let keywordMatch;
+    while ((keywordMatch = pattern.exec(message))) {
+      const afterKeyword = message.slice(keywordMatch.index + keywordMatch[0].length, keywordMatch.index + keywordMatch[0].length + 140);
+      const match = partyMentions(afterKeyword)[0];
+      if (match) return match;
+    }
+  }
+  return null;
 }
 
 function extractProfileNearKeyword(message, keywords) {
@@ -1945,6 +1985,73 @@ function normalizeForAlias(value) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function customerParties() {
+  return state.parties.filter(party => ["Customer", "Both"].includes(party.type));
+}
+
+function partyMentions(message) {
+  return customerParties()
+    .map(party => ({ party, ...partyAliasMatch(party, message) }))
+    .filter(row => row.index >= 0)
+    .sort((a, b) => a.index - b.index || b.score - a.score)
+    .map(row => row.party);
+}
+
+function partyAliasMatch(party, message) {
+  const rawMessage = String(message || "");
+  const normalizedText = ` ${normalizeForAlias(rawMessage)} `;
+  const rawUpper = rawMessage.toUpperCase();
+  const gstin = normalizeGstin(party.gstin);
+  let best = { index: -1, score: 0 };
+  if (gstin) {
+    const gstIndex = rawUpper.indexOf(gstin);
+    if (gstIndex >= 0) best = { index: gstIndex, score: 1000 };
+  }
+  partyAliases(party).forEach(alias => {
+    const normalizedAlias = normalizeForAlias(alias);
+    if (!normalizedAlias || GENERIC_PARTY_ALIASES.has(normalizedAlias)) return;
+    const search = ` ${normalizedAlias} `;
+    const aliasIndex = normalizedText.indexOf(search);
+    if (aliasIndex < 0) return;
+    const score = normalizedAlias.length;
+    const plainIndex = Math.max(0, aliasIndex - 1);
+    if (best.index < 0 || plainIndex < best.index || (plainIndex === best.index && score > best.score)) {
+      best = { index: plainIndex, score };
+    }
+  });
+  return best;
+}
+
+function buildPartyAliasPayload() {
+  return customerParties().map(party => ({
+    id: party.id,
+    name: party.name || "",
+    gstin: normalizeGstin(party.gstin),
+    phone: party.phone || "",
+    place: party.place || "",
+    address: party.address || "",
+    aliases: partyAliases(party)
+  }));
+}
+
+function partyAliases(party) {
+  return uniqueMessages([
+    party.name,
+    party.gstin,
+    ...partyAliasList(party)
+  ]).filter(alias => {
+    const normalized = normalizeForAlias(alias);
+    return normalized && !GENERIC_PARTY_ALIASES.has(normalized);
+  });
+}
+
+function partyAliasList(party) {
+  return String(party.aliases || "")
+    .split(/[\n,;]/)
+    .map(alias => alias.trim())
+    .filter(Boolean);
 }
 
 function extractCustomerName(message, gstin) {
