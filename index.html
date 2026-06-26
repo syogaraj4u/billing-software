@@ -10,13 +10,38 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260626-buyer-aliases">
+  <link rel="stylesheet" href="styles.css?v=20260626-company-selector">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
 </head>
 <body>
-  <div class="app-shell">
+  <section class="company-selector" id="companySelector">
+    <div class="company-selector-bar">
+      <div class="selector-brand">
+        <div class="brand-mark">B</div>
+        <div>
+          <h1>Billing</h1>
+          <p>Choose GST company</p>
+        </div>
+      </div>
+      <div class="company-selector-actions">
+        <button class="secondary-btn" id="companyCloudBtn" title="Cloud account"><i data-lucide="cloud"></i><span id="companyCloudBtnText">Local</span></button>
+        <button class="icon-btn" id="companyBackupBtn" title="Export backup"><i data-lucide="download"></i></button>
+        <label class="icon-btn file-btn" title="Import backup">
+          <i data-lucide="upload"></i>
+          <input id="companyRestoreInput" type="file" accept="application/json">
+        </label>
+      </div>
+    </div>
+    <div class="company-selector-copy">
+      <p class="eyebrow">Select Company</p>
+      <h2>Which GST company are you working on?</h2>
+    </div>
+    <div class="company-grid" id="companyCards"></div>
+  </section>
+
+  <div class="app-shell" id="appShell" hidden>
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">B</div>
@@ -44,9 +69,10 @@
         </div>
         <div class="topbar-actions">
           <button class="secondary-btn" id="cloudBtn" title="Cloud account"><i data-lucide="cloud"></i><span id="cloudBtnText">Local</span></button>
-          <label class="topbar-profile">GST
-            <select id="activeProfileSelect"></select>
-          </label>
+          <button class="company-switcher" id="changeCompanyBtn" type="button" title="Change company">
+            <i data-lucide="building-2"></i>
+            <span><small>Company</small><strong id="activeCompanyName">Select company</strong></span>
+          </button>
           <button class="icon-btn" id="backupBtn" title="Export backup"><i data-lucide="download"></i></button>
           <label class="icon-btn file-btn" title="Import backup">
             <i data-lucide="upload"></i>
@@ -401,6 +427,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260626-buyer-aliases"></script>
+  <script src="app.js?v=20260626-company-selector"></script>
 </body>
 </html>

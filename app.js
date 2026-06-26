@@ -173,6 +173,7 @@ let cloudSyncTimer = null;
 let selectedPurchaseIds = new Set();
 let entryDraftMeta = {};
 let chatBillMessages = [];
+let companySelectionOpen = true;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -298,6 +299,10 @@ function activeProfile() {
   return profileById(state.settings.activeProfileId);
 }
 
+function activeProfileId() {
+  return state.settings.activeProfileId;
+}
+
 function profileById(id) {
   return state.settings.profiles.find(profile => profile.id === id) || state.settings.profiles[0];
 }
@@ -338,6 +343,10 @@ function toast(message) {
 
 function entryList(kind) {
   return kind === "sale" ? state.sales : state.purchases;
+}
+
+function activeEntries(kind) {
+  return entryList(kind).filter(entry => entry.profileId === activeProfileId());
 }
 
 function entryPrefix(kind) {
@@ -426,13 +435,13 @@ function amountsClose(a, b, tolerance = 1) {
   return Math.abs(num(a) - num(b)) <= tolerance;
 }
 
-function stockForItem(itemId) {
+function stockForItem(itemId, profileId = activeProfileId()) {
   const item = state.items.find(row => row.id === itemId);
   let stock = num(item?.openingStock);
-  state.purchases.forEach(entry => entry.lines.forEach(line => {
+  state.purchases.filter(entry => !profileId || entry.profileId === profileId).forEach(entry => entry.lines.forEach(line => {
     if (line.itemId === itemId) stock += num(line.qty);
   }));
-  state.sales.forEach(entry => entry.lines.forEach(line => {
+  state.sales.filter(entry => !profileId || entry.profileId === profileId).forEach(entry => entry.lines.forEach(line => {
     if (line.itemId === itemId) stock -= num(line.qty);
   }));
   return stock;
@@ -461,6 +470,9 @@ function registerServiceWorker() {
 }
 
 function bindEvents() {
+  $("#companyCloudBtn").addEventListener("click", openCloudDialog);
+  $("#companyBackupBtn").addEventListener("click", exportBackup);
+  $("#companyRestoreInput").addEventListener("change", importBackup);
   $$(".nav-tab").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
   $("#quickSaleBtn").addEventListener("click", () => openEntry("sale"));
@@ -481,12 +493,7 @@ function bindEvents() {
   $("#itemForm").addEventListener("submit", saveItem);
   $("#partyForm").addEventListener("submit", saveParty);
   $("#saveSettingsBtn").addEventListener("click", saveSettings);
-  $("#activeProfileSelect").addEventListener("change", event => {
-    state.settings.activeProfileId = event.target.value;
-    saveState();
-    renderAll();
-    toast("GST profile changed");
-  });
+  $("#changeCompanyBtn").addEventListener("click", openCompanySelector);
   $("#settingsForm").elements.profileId.addEventListener("change", renderSettings);
   $("#backupBtn").addEventListener("click", exportBackup);
   $("#restoreInput").addEventListener("change", importBackup);
@@ -531,6 +538,8 @@ function showView(view) {
 }
 
 function renderAll() {
+  renderCompanySelector();
+  renderAppVisibility();
   renderProfileSelectors();
   renderDashboard();
   renderEntries("sale");
@@ -544,7 +553,58 @@ function renderAll() {
 }
 
 function renderProfileSelectors() {
-  $("#activeProfileSelect").innerHTML = profileOptions(state.settings.activeProfileId);
+  $("#activeCompanyName").textContent = profileName(activeProfileId());
+  $("#companyCloudBtnText").textContent = $("#cloudBtnText").textContent || "Local";
+}
+
+function renderAppVisibility() {
+  $("#companySelector").hidden = !companySelectionOpen;
+  $("#appShell").hidden = companySelectionOpen;
+}
+
+function renderCompanySelector() {
+  const activeId = activeProfileId();
+  $("#companyCards").innerHTML = state.settings.profiles.map(profile => {
+    const salesCount = state.sales.filter(entry => entry.profileId === profile.id).length;
+    const purchaseCount = state.purchases.filter(entry => entry.profileId === profile.id).length;
+    const initials = companyInitials(profile.businessName || profile.label);
+    return `
+      <button class="company-card ${profile.id === activeId ? "selected" : ""}" type="button" data-profile-id="${profile.id}">
+        <span class="company-initial">${escapeHtml(initials)}</span>
+        <span class="company-card-main">
+          <strong>${escapeHtml(profile.businessName || profile.label || "")}</strong>
+          <small>${escapeHtml(profile.gstin || "GSTIN not entered")}</small>
+          <em>${escapeHtml(profile.state || stateNameFromGstin(profile.gstin) || "-")}</em>
+        </span>
+        <span class="company-card-meta">
+          <span>${salesCount} sales</span>
+          <span>${purchaseCount} purchases</span>
+        </span>
+      </button>
+    `;
+  }).join("");
+  $$(".company-card").forEach(card => card.addEventListener("click", () => selectCompany(card.dataset.profileId)));
+}
+
+function companyInitials(value) {
+  const words = String(value || "Company").replace(/[^A-Za-z0-9 ]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  return (words[0]?.[0] || "C") + (words[1]?.[0] || "");
+}
+
+function openCompanySelector() {
+  companySelectionOpen = true;
+  renderAll();
+}
+
+function selectCompany(profileId) {
+  const profile = state.settings.profiles.find(row => row.id === profileId);
+  if (!profile) return;
+  state.settings.activeProfileId = profileId;
+  selectedPurchaseIds.clear();
+  companySelectionOpen = false;
+  saveState();
+  showView("dashboard");
+  toast(`${profileName(profileId)} selected`);
 }
 
 function cloudConfig() {
@@ -591,6 +651,7 @@ function renderCloudUi() {
   const signedIn = Boolean(cloudSession);
   const email = cloudSession?.user?.email || "-";
   $("#cloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
+  $("#companyCloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
   $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
   $("#cloudWorkspaceLabel").textContent = cloudWorkspace?.name || "Not connected";
   $("#cloudLastSyncLabel").textContent = cloudWorkspace?.updated_at ? new Date(cloudWorkspace.updated_at).toLocaleString("en-IN") : "-";
@@ -755,18 +816,20 @@ async function syncCloudNow(showToast) {
 }
 
 function renderDashboard() {
-  const salesTotal = state.sales.reduce((sum, entry) => sum + entry.total, 0);
-  const purchaseTotal = state.purchases.reduce((sum, entry) => sum + entry.total, 0);
+  const sales = activeEntries("sale");
+  const purchases = activeEntries("purchase");
+  const salesTotal = sales.reduce((sum, entry) => sum + entry.total, 0);
+  const purchaseTotal = purchases.reduce((sum, entry) => sum + entry.total, 0);
   const stockValue = state.items.reduce((sum, item) => sum + stockForItem(item.id) * num(item.purchaseRate), 0);
-  const receivable = state.sales.filter(entry => entry.status !== "Paid").reduce((sum, entry) => sum + entry.total, 0);
+  const receivable = sales.filter(entry => entry.status !== "Paid").reduce((sum, entry) => sum + entry.total, 0);
   $("#metricSales").textContent = money(salesTotal);
   $("#metricPurchases").textContent = money(purchaseTotal);
   $("#metricStock").textContent = money(stockValue);
   $("#metricReceivable").textContent = money(receivable);
 
   const combined = [
-    ...state.sales.map(entry => ({ ...entry, kind: "Sale" })),
-    ...state.purchases.map(entry => ({ ...entry, kind: "Purchase" }))
+    ...sales.map(entry => ({ ...entry, kind: "Sale" })),
+    ...purchases.map(entry => ({ ...entry, kind: "Purchase" }))
   ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
   $("#recentEntries").innerHTML = combined.length ? combined.map(entry => `
     <tr><td>${entry.date}</td><td>${entry.kind}</td><td>${escapeHtml(entry.number)}</td><td>${escapeHtml(profileName(entry.profileId))}</td><td>${escapeHtml(partyName(entry.partyId))}</td><td class="num">${money(entry.total)}</td></tr>
@@ -779,7 +842,7 @@ function renderDashboard() {
 }
 
 function renderEntries(kind) {
-  const rows = entryList(kind).sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
+  const rows = activeEntries(kind).sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
     const purchaseSelect = kind === "purchase" ? `
       <td><input class="purchase-select" type="checkbox" aria-label="Select ${escapeHtml(entry.number)}" data-purchase-id="${entry.id}" ${selectedPurchaseIds.has(entry.id) ? "checked" : ""}></td>
     ` : "";
@@ -834,14 +897,14 @@ function bindPurchaseSelectors() {
 function updateSelectAllPurchases() {
   const control = $("#selectAllPurchases");
   if (!control) return;
-  const ids = state.purchases.map(entry => entry.id);
+  const ids = activeEntries("purchase").map(entry => entry.id);
   const selectedCount = ids.filter(id => selectedPurchaseIds.has(id)).length;
   control.checked = ids.length > 0 && selectedCount === ids.length;
   control.indeterminate = selectedCount > 0 && selectedCount < ids.length;
 }
 
 function toggleAllPurchases(event) {
-  selectedPurchaseIds = event.target.checked ? new Set(state.purchases.map(entry => entry.id)) : new Set();
+  selectedPurchaseIds = event.target.checked ? new Set(activeEntries("purchase").map(entry => entry.id)) : new Set();
   renderEntries("purchase");
 }
 
@@ -927,6 +990,7 @@ function openEntry(kind, id = null, draft = null) {
   form.elements.date.value = source?.date || today();
   form.elements.number.value = source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId);
   form.elements.profileId.innerHTML = profileOptions(source?.profileId || state.settings.activeProfileId);
+  form.elements.profileId.disabled = true;
   form.elements.profileId.onchange = () => {
     if (!editingEntryId) form.elements.number.value = nextEntryNumber(kind, form.elements.profileId.value);
     updateEntryTotals();
@@ -1473,8 +1537,9 @@ function renderReport() {
   const from = $("#reportFrom").value || "0000-01-01";
   const to = $("#reportTo").value || "9999-12-31";
   const inRange = entry => entry.date >= from && entry.date <= to;
-  const sales = state.sales.filter(inRange);
-  const purchases = state.purchases.filter(inRange);
+  const profile = activeProfile();
+  const sales = activeEntries("sale").filter(inRange);
+  const purchases = activeEntries("purchase").filter(inRange);
   const output = $("#reportOutput");
   if (activeReport === "stock") {
     output.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Purchase Rate</th><th class="num">Stock Value</th></tr></thead><tbody>
@@ -1488,13 +1553,7 @@ function renderReport() {
   if (activeReport === "gst") {
     const saleGst = sales.reduce((sum, entry) => sum + entry.gst, 0);
     const purchaseGst = purchases.reduce((sum, entry) => sum + entry.gst, 0);
-    const rows = state.settings.profiles.map(profile => {
-      const profileSales = sales.filter(entry => entry.profileId === profile.id);
-      const profilePurchases = purchases.filter(entry => entry.profileId === profile.id);
-      const outputGst = profileSales.reduce((sum, entry) => sum + entry.gst, 0);
-      const inputGst = profilePurchases.reduce((sum, entry) => sum + entry.gst, 0);
-      return `<tr><td>${escapeHtml(profileName(profile.id))}</td><td class="num">${money(outputGst)}</td><td class="num">${money(inputGst)}</td><td class="num">${money(outputGst - inputGst)}</td></tr>`;
-    }).join("");
+    const rows = `<tr><td>${escapeHtml(profileName(profile.id))}</td><td class="num">${money(saleGst)}</td><td class="num">${money(purchaseGst)}</td><td class="num">${money(saleGst - purchaseGst)}</td></tr>`;
     output.innerHTML = `<div class="report-grid">
       <div class="report-card"><span>Output GST</span><strong>${money(saleGst)}</strong></div>
       <div class="report-card"><span>Input GST</span><strong>${money(purchaseGst)}</strong></div>
@@ -1519,7 +1578,7 @@ function renderReport() {
 }
 
 function exportSelectedEwayJson() {
-  const purchases = state.purchases.filter(entry => selectedPurchaseIds.has(entry.id));
+  const purchases = activeEntries("purchase").filter(entry => selectedPurchaseIds.has(entry.id));
   if (!purchases.length) return toast("Select purchase bills first");
   const reviewMeta = [];
   const billLists = purchases.map(entry => {
@@ -1630,7 +1689,7 @@ function validateEwayBill(bill) {
 function exportPurchaseRegister() {
   const from = $("#reportFrom").value || "0000-01-01";
   const to = $("#reportTo").value || "9999-12-31";
-  const rows = state.purchases
+  const rows = activeEntries("purchase")
     .filter(entry => entry.date >= from && entry.date <= to)
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(entry => {
@@ -1656,7 +1715,7 @@ function exportPurchaseRegister() {
       ];
     });
   const header = ["Date", "Bill No", "Buyer Business", "Buyer GSTIN", "Supplier", "Supplier GSTIN", "Tax Mode", "Taxable", "CGST", "SGST", "IGST", "GST", "Total", "Review Status", "Review Notes", "Invoice Soft Copy"];
-  downloadCsv([header, ...rows], `purchase-register-${today()}.csv`);
+  downloadCsv([header, ...rows], `purchase-register-${profileName(activeProfileId()).replace(/[^A-Za-z0-9]+/g, "-")}-${today()}.csv`);
   toast("Purchase register downloaded");
 }
 
@@ -1803,10 +1862,17 @@ function parseSaleChatLocal(message) {
   const internalBuyer = extractInternalBuyerProfileFromMessage(message);
   const savedBuyer = internalBuyer ? null : extractBuyerPartyFromMessage(message, explicitGstin);
   const gstin = normalizeGstin(internalBuyer?.gstin || savedBuyer?.gstin || explicitGstin);
-  const profile = extractSellerProfileFromMessage(message, internalBuyer) || activeProfile();
+  const profile = activeProfile();
+  const mentionedSeller = extractSellerProfileFromMessage(message, internalBuyer);
   const customerName = internalBuyer?.businessName || internalBuyer?.label || savedBuyer?.name || extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
   const status = /unpaid|credit|due/i.test(message) ? "Unpaid" : /partial/i.test(message) ? "Partial" : "Paid";
   const lines = parseSaleLines(message);
+  const reviewMessages = uniqueMessages([
+    gstin ? "" : "B2B customer GSTIN not found in chat. Please add GSTIN before final billing.",
+    mentionedSeller && mentionedSeller.id !== profile.id
+      ? `Chat mentioned seller ${profileName(mentionedSeller.id)}, but selected company is ${profileName(profile.id)}. Draft kept under selected company.`
+      : ""
+  ]);
   return {
     profileId: profile.id,
     customerName,
@@ -1822,7 +1888,7 @@ function parseSaleChatLocal(message) {
     }],
     customerAddress: internalBuyer?.address || savedBuyer?.address || "",
     customerPlace: internalBuyer?.state || savedBuyer?.place || "",
-    reviewMessages: gstin ? [] : ["B2B customer GSTIN not found in chat. Please add GSTIN before final billing."]
+    reviewMessages
   };
 }
 
@@ -2088,9 +2154,19 @@ function applySaleChatDefaults(parsed, sourceMessage) {
   const explicitHsn = extractHsnCode(sourceMessage);
   const explicitGstRate = extractExplicitGstRate(sourceMessage);
   const lines = Array.isArray(draft.lines) ? draft.lines : [];
+  const selectedProfileId = activeProfileId();
+  const parsedProfile = state.settings.profiles.find(profile => profile.id === draft.profileId);
+  const reviewMessages = uniqueMessages([
+    ...(Array.isArray(draft.reviewMessages) ? draft.reviewMessages : []),
+    parsedProfile && parsedProfile.id !== selectedProfileId
+      ? `Chat mentioned seller ${profileName(parsedProfile.id)}, but selected company is ${profileName(selectedProfileId)}. Draft kept under selected company.`
+      : ""
+  ]);
   return {
     ...draft,
+    profileId: selectedProfileId,
     status: draft.status || "Paid",
+    reviewMessages,
     lines: lines.map(line => ({
       ...line,
       hsn: resolveSaleLineHsn(line, explicitHsn),
@@ -2219,6 +2295,7 @@ function isApplePhoneItem(name) {
 }
 
 function buildChatSaleDraft(parsed, sourceMessage) {
+  const profileId = activeProfileId();
   const partyId = ensureChatCustomer(parsed);
   const lines = parsed.lines.map(line => {
     const item = ensureChatItem(line);
@@ -2230,9 +2307,9 @@ function buildChatSaleDraft(parsed, sourceMessage) {
     };
   });
   return {
-    profileId: parsed.profileId || state.settings.activeProfileId,
+    profileId,
     date: today(),
-    number: nextEntryNumber("sale", parsed.profileId || state.settings.activeProfileId),
+    number: nextEntryNumber("sale", profileId),
     partyId,
     status: parsed.status || "Paid",
     notes: parsed.notes || `Prepared from chat: ${sourceMessage.slice(0, 160)}`,
@@ -2356,6 +2433,7 @@ async function extractPurchaseInvoiceWithCloud(file) {
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
         base64,
+        activeProfileId: activeProfileId(),
         profiles: state.settings.profiles
       }
     });
@@ -2590,6 +2668,19 @@ function inferGstRate(taxable, gstAmount) {
 }
 
 function buildPurchaseDraft(parsed) {
+  const selectedProfile = activeProfile();
+  const parsedProfile = state.settings.profiles.find(profile => profile.id === parsed.profileId);
+  const parsedBuyerGstin = normalizeGstin(parsed.buyerGstin || parsedProfile?.gstin);
+  const selectedBuyerGstin = normalizeGstin(selectedProfile.gstin);
+  const contextMessages = uniqueMessages([
+    parsedProfile && parsedProfile.id !== selectedProfile.id
+      ? `Uploaded invoice buyer matched ${profileName(parsedProfile.id)}, but selected company is ${profileName(selectedProfile.id)}. Draft kept under selected company.`
+      : "",
+    parsedBuyerGstin && selectedBuyerGstin && parsedBuyerGstin !== selectedBuyerGstin
+      ? `Uploaded buyer GSTIN ${parsedBuyerGstin} differs from selected company GSTIN ${selectedBuyerGstin}. Confirm before saving.`
+      : ""
+  ]);
+  const reviewMessages = uniqueMessages([...(parsed.reviewMessages || []), ...contextMessages]);
   const partyId = ensureImportedSupplier(parsed);
   const lines = parsed.lines.map(line => {
     const item = ensureImportedItem(line);
@@ -2601,7 +2692,7 @@ function buildPurchaseDraft(parsed) {
     };
   });
   return {
-    profileId: parsed.profileId,
+    profileId: selectedProfile.id,
     date: parsed.invoiceDate,
     number: parsed.invoiceNumber,
     partyId,
@@ -2611,9 +2702,9 @@ function buildPurchaseDraft(parsed) {
     attachments: clone(parsed.attachments || []),
     extractedTaxes: clone(parsed.extractedTaxes || null),
     sellerGstin: parsed.supplierGstin || "",
-    buyerGstin: parsed.buyerGstin || normalizeGstin(profileById(parsed.profileId)?.gstin),
-    reviewMessages: clone(parsed.reviewMessages || []),
-    reviewStatus: parsed.reviewMessages?.length ? "Needs Review" : "Ready",
+    buyerGstin: selectedBuyerGstin,
+    reviewMessages,
+    reviewStatus: reviewMessages.length ? "Needs Review" : "Ready",
     source: "purchase-upload"
   };
 }
