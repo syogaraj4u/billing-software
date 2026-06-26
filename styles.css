@@ -533,6 +533,13 @@ dialog::backdrop {
   width: min(900px, calc(100vw - 28px));
 }
 
+.invoice-dialog[open] {
+  height: min(900px, calc(100dvh - 28px));
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
 .chat-dialog {
   width: min(760px, calc(100vw - 28px));
 }
@@ -786,7 +793,9 @@ textarea { resize: vertical; }
 
 #invoicePrintArea {
   padding: 24px;
-  overflow-x: auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1848,8 +1857,25 @@ textarea { resize: vertical; }
 
 @media print {
   body * { visibility: hidden; }
+  body.invoice-print-mode #invoiceDialog,
+  body.invoice-print-mode #invoiceDialog * {
+    visibility: visible;
+  }
   #invoicePrintArea, #invoicePrintArea *, #reportOutput, #reportOutput * {
     visibility: visible;
+  }
+  body.invoice-print-mode #invoiceDialog {
+    display: block !important;
+    position: static !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
   }
   #invoicePrintArea, #reportOutput {
     position: absolute;
@@ -1857,5 +1883,19 @@ textarea { resize: vertical; }
     padding: 0;
     overflow: visible;
   }
-  .dialog-actions { display: none; }
+  body.invoice-print-mode #invoicePrintArea {
+    position: static !important;
+    width: 100% !important;
+    min-height: 0 !important;
+  }
+  body.invoice-print-mode .modern-invoice {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+  }
+  body.invoice-print-mode .invoice-items-table,
+  body.invoice-print-mode .tax-summary-table {
+    page-break-inside: auto;
+  }
+  .dialog-actions { display: none !important; }
 }

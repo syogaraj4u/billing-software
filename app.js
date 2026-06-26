@@ -518,8 +518,9 @@ function bindEvents() {
   $("#cloudSyncNowBtn").addEventListener("click", () => syncCloudNow(true));
   $("#cloudSaveWorkspaceBtn").addEventListener("click", saveCloudWorkspaceSettings);
   $("#closeInvoiceBtn").addEventListener("click", () => $("#invoiceDialog").close());
-  $("#printInvoiceBtn").addEventListener("click", () => window.print());
+  $("#printInvoiceBtn").addEventListener("click", printInvoice);
   $("#printReportBtn").addEventListener("click", () => window.print());
+  window.addEventListener("afterprint", clearInvoicePrintMode);
   $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
   $("#reportFrom").addEventListener("change", renderReport);
   $("#reportTo").addEventListener("change", renderReport);
@@ -1442,6 +1443,21 @@ function showInvoice(id, kind) {
     </div>
   `;
   $("#invoiceDialog").showModal();
+}
+
+function printInvoice() {
+  const dialog = $("#invoiceDialog");
+  const printArea = $("#invoicePrintArea");
+  if (!dialog?.open || !printArea?.textContent.trim()) {
+    toast("Open an invoice before printing");
+    return;
+  }
+  document.body.classList.add("invoice-print-mode");
+  window.print();
+}
+
+function clearInvoicePrintMode() {
+  document.body.classList.remove("invoice-print-mode");
 }
 
 function invoiceSellerBlock(profile) {
