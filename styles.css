@@ -1123,6 +1123,60 @@ textarea { resize: vertical; }
   min-height: 96px;
 }
 
+.chat-attachment-row {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-attach-btn {
+  width: fit-content;
+}
+
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-chip {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 5px 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.attachment-chip svg {
+  width: 15px;
+  height: 15px;
+  color: var(--primary-dark);
+}
+
+.attachment-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attachment-chip .mini-btn {
+  width: 26px;
+  height: 26px;
+  background: #fff;
+}
+
 .chat-message {
   max-width: 92%;
   color: var(--ink);
@@ -1391,6 +1445,13 @@ textarea { resize: vertical; }
   .chat-input-label textarea {
     min-height: min(34dvh, 220px);
     padding: 12px;
+  }
+  .chat-attach-btn {
+    width: 100%;
+  }
+  .chat-attachments {
+    display: grid;
+    grid-template-columns: 1fr;
   }
   .chat-message {
     max-width: 96%;

@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260626-slide-company-4">
+  <link rel="stylesheet" href="styles.css?v=20260626-chat-attachments">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -253,6 +253,13 @@
       <div class="chat-bill-body">
         <div class="chat-thread" id="chatBillThread"></div>
         <label class="chat-input-label">Bill details<textarea id="chatBillInput" rows="4" placeholder="ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 @65000"></textarea></label>
+        <div class="chat-attachment-row">
+          <label class="secondary-btn upload-btn chat-attach-btn" title="Attach bill-to or ship-to screenshot">
+            <i data-lucide="image-plus"></i><span>Add image</span>
+            <input id="chatBillAttachmentInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple>
+          </label>
+          <div class="chat-attachments" id="chatBillAttachments"></div>
+        </div>
         <div class="chat-summary" id="chatBillSummary"></div>
       </div>
       <menu class="dialog-actions">
@@ -405,6 +412,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260626-slide-company-4"></script>
+  <script src="app.js?v=20260626-chat-attachments"></script>
 </body>
 </html>

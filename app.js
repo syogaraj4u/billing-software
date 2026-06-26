@@ -6,6 +6,9 @@ const PURCHASE_ATTACHMENT_BUCKET = "purchase-invoices";
 const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
 const DEFAULT_SALE_GST_RATE = 18;
+const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const MAX_CHAT_BILL_ATTACHMENTS = 4;
+const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
 
 const OFFICIAL_GST_PROFILES = [
   {
@@ -173,6 +176,7 @@ let cloudSyncTimer = null;
 let selectedPurchaseIds = new Set();
 let entryDraftMeta = {};
 let chatBillMessages = [];
+let chatBillAttachments = [];
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
 
@@ -488,6 +492,7 @@ function bindEvents() {
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryForm").addEventListener("submit", saveEntry);
   $("#chatBillForm").addEventListener("submit", event => event.preventDefault());
+  $("#chatBillAttachmentInput").addEventListener("change", handleChatBillAttachmentInput);
   $("#chatSampleBtn").addEventListener("click", fillChatBillSample);
   $("#prepareChatBillBtn").addEventListener("click", prepareChatBillDraft);
   $("#itemForm").addEventListener("submit", saveItem);
@@ -1841,9 +1846,12 @@ function importBackup(event) {
 
 function openChatBillDialog() {
   chatBillMessages = [];
+  chatBillAttachments = [];
   $("#chatBillInput").value = "";
+  $("#chatBillAttachmentInput").value = "";
   $("#chatBillThread").innerHTML = "";
-  appendChatBillMessage("assistant", "Send customer, GSTIN, item, qty and rate.");
+  appendChatBillMessage("assistant", "Send customer, GSTIN, item, qty and rate. You can also attach bill-to or ship-to screenshots.");
+  renderChatBillAttachments();
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
   setTimeout(() => {
@@ -1860,15 +1868,82 @@ function fillChatBillSample() {
   $("#chatBillInput").value = "ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 @65000";
 }
 
+async function handleChatBillAttachmentInput(event) {
+  const files = Array.from(event.target.files || []);
+  event.target.value = "";
+  if (!files.length) return;
+  const openSlots = Math.max(0, MAX_CHAT_BILL_ATTACHMENTS - chatBillAttachments.length);
+  if (!openSlots) return toast(`Attach up to ${MAX_CHAT_BILL_ATTACHMENTS} images`);
+  for (const file of files.slice(0, openSlots)) {
+    if (!CHAT_BILL_IMAGE_TYPES.includes(file.type)) {
+      toast("Use PNG, JPG or WebP screenshots");
+      continue;
+    }
+    if (file.size > MAX_CHAT_BILL_ATTACHMENT_BYTES) {
+      toast(`${file.name} is too large. Use image below 6 MB.`);
+      continue;
+    }
+    chatBillAttachments.push({
+      id: uid(),
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      base64: await fileToBase64(file)
+    });
+  }
+  renderChatBillAttachments();
+}
+
+function renderChatBillAttachments() {
+  const holder = $("#chatBillAttachments");
+  if (!holder) return;
+  holder.innerHTML = chatBillAttachments.map(file => `
+    <span class="attachment-chip" title="${escapeHtml(file.name)}">
+      <i data-lucide="image"></i>
+      <span>${escapeHtml(file.name)}</span>
+      <small>${escapeHtml(formatFileSize(file.size))}</small>
+      <button type="button" class="mini-btn" data-chat-attachment-id="${escapeHtml(file.id)}" title="Remove"><i data-lucide="x"></i></button>
+    </span>
+  `).join("");
+  $$("[data-chat-attachment-id]", holder).forEach(button => {
+    button.addEventListener("click", () => {
+      chatBillAttachments = chatBillAttachments.filter(file => file.id !== button.dataset.chatAttachmentId);
+      renderChatBillAttachments();
+    });
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+function formatFileSize(size) {
+  const bytes = num(size);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
 async function prepareChatBillDraft() {
   const message = $("#chatBillInput").value.trim();
-  if (!message) return toast("Enter sale details");
-  appendChatBillMessage("user", message);
+  const attachments = chatBillAttachments.slice();
+  if (!message && !attachments.length) return toast("Enter sale details or attach image");
+  const userMessage = message || "Please read bill-to and ship-to details from attached screenshot.";
+  appendChatBillMessage("user", formatChatBillUserMessage(userMessage, attachments), attachments, message);
   $("#chatBillInput").value = "";
+  chatBillAttachments = [];
+  renderChatBillAttachments();
   $("#chatBillSummary").innerHTML = `<span class="help-text">Checking details...</span>`;
   const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
-  const cloudResult = await parseSaleChatWithCloud(fullMessage);
-  const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(fullMessage), fullMessage);
+  const typedMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.rawText || "").join("\n").trim();
+  const allAttachments = chatBillMessages.filter(row => row.role === "user").flatMap(row => row.attachments || []);
+  const cloudResult = await parseSaleChatWithCloud(fullMessage, allAttachments);
+  if (allAttachments.length && !cloudResult) {
+    appendChatBillMessage("assistant", "I could not read the attached image now. Please sign in to Cloud and make sure the ChatGPT API function is deployed, or type the bill-to and ship-to details here.");
+    if (!typedMessage) {
+      $("#chatBillSummary").innerHTML = `<strong>Image reading unavailable</strong><span class="help-text">Type the address details or try again after Cloud is ready.</span>`;
+      return;
+    }
+  }
+  const sourceMessage = cloudResult ? fullMessage : (typedMessage || fullMessage);
+  const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(sourceMessage), sourceMessage);
   const missing = cloudResult
     ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
     : missingSaleBillDetails(parsed, fullMessage);
@@ -1889,8 +1964,13 @@ async function prepareChatBillDraft() {
   toast("Sale draft prepared. Please review and save.");
 }
 
-function appendChatBillMessage(role, text) {
-  chatBillMessages.push({ role, text });
+function formatChatBillUserMessage(message, attachments = []) {
+  const names = attachments.map(file => file.name).filter(Boolean);
+  return names.length ? `${message}\nAttached image${names.length > 1 ? "s" : ""}: ${names.join(", ")}` : message;
+}
+
+function appendChatBillMessage(role, text, attachments = [], rawText = text) {
+  chatBillMessages.push({ role, text, attachments, rawText });
   const node = document.createElement("div");
   node.className = `chat-message ${role}`;
   node.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
@@ -1898,12 +1978,17 @@ function appendChatBillMessage(role, text) {
   $("#chatBillThread").scrollTop = $("#chatBillThread").scrollHeight;
 }
 
-async function parseSaleChatWithCloud(message) {
+async function parseSaleChatWithCloud(message, attachments = []) {
   if (!cloudClient || !cloudSession) return null;
   try {
     const { data, error } = await cloudClient.functions.invoke("parse-sale-chat", {
       body: {
         message,
+        attachments: attachments.map(file => ({
+          fileName: file.name,
+          mimeType: file.type,
+          base64: file.base64
+        })),
         activeProfileId: state.settings.activeProfileId,
         profiles: state.settings.profiles,
         profileAliases: buildProfileAliasPayload(),
