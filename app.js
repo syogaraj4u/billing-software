@@ -5,6 +5,7 @@ const CLOUD_SELECTED_WORKSPACE_KEY = "billingSoftware.cloudWorkspaceId";
 const PURCHASE_ATTACHMENT_BUCKET = "purchase-invoices";
 const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
+const DEFAULT_SALE_GST_RATE = 18;
 
 const OFFICIAL_GST_PROFILES = [
   {
@@ -1731,7 +1732,7 @@ async function prepareChatBillDraft() {
   const cloudResult = await parseSaleChatWithCloud(fullMessage);
   const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(fullMessage), fullMessage);
   const missing = cloudResult
-    ? uniqueMessages(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
+    ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
     : missingSaleBillDetails(parsed, fullMessage);
   if (missing.length) {
     const question = cloudResult?.assistantMessage || buildMissingSaleQuestion(missing, parsed);
@@ -1808,8 +1809,6 @@ function missingSaleBillDetails(parsed, sourceMessage) {
   const missing = [];
   const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
   const hasPaymentStatus = /\b(paid|unpaid|partial|credit|due|cash|upi|bank|card)\b/i.test(sourceMessage);
-  const hasGstRateText = /\b(?:gst|tax)\s*(?:rate)?\s*[:\-]?\s*(0|3|5|12|18|28)\s*%?\b/i.test(sourceMessage) || /\b(0|3|5|12|18|28)\s*%\b/.test(sourceMessage);
-  const hasApplePhoneDefaults = lines.length && lines.every(line => isApplePhoneItem(line.name) && num(line.gstRate) === 18);
   if (!String(parsed.customerName || "").trim() || /^chat customer$/i.test(parsed.customerName)) missing.push("customer business name");
   if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
   if (!lines.length || lines.every(line => !num(line.rate))) missing.push("item name, quantity and rate");
@@ -1820,7 +1819,6 @@ function missingSaleBillDetails(parsed, sourceMessage) {
     if (!num(line.rate)) missing.push(`${label} rate`);
     if (!String(line.hsn || "").trim()) missing.push(`${label} HSN/SAC`);
   });
-  if (!hasGstRateText && !hasApplePhoneDefaults) missing.push("GST rate");
   if (!hasPaymentStatus) missing.push("payment status");
   return uniqueMessages(missing);
 }
@@ -1835,6 +1833,10 @@ function buildMissingSaleQuestion(missing, parsed) {
   };
   const readable = missing.map(item => examples[item] || item);
   return `Please share the missing detail${missing.length > 1 ? "s" : ""}: ${readable.join(", ")}.\nExample: ${parsed.customerName || "ABC Traders"} GSTIN 29ABCDE1234F1Z5, HSN 85171300, payment unpaid.`;
+}
+
+function saleChatMissingDetails(details) {
+  return uniqueMessages(details).filter(detail => !/\bgst\s*(rate|percentage|%)?\b/i.test(detail));
 }
 
 function extractProfileFromMessage(message) {
@@ -1953,9 +1955,15 @@ function extractCustomerName(message, gstin) {
 }
 
 function extractGstRate(text) {
-  const match = text.match(/\b(?:gst|tax)\s*(?:rate)?\s*[:\-]?\s*(0|3|5|12|18|28)\s*%?/i)
-    || text.match(/\b(0|3|5|12|18|28)\s*%\b/);
-  return match ? Number(match[1]) : 18;
+  return extractExplicitGstRate(text) || DEFAULT_SALE_GST_RATE;
+}
+
+function extractExplicitGstRate(text) {
+  const value = String(text || "");
+  const match = value.match(/\b(?:gst|tax)\s*(?:rate)?\s*[:\-]?\s*(0|3|5|12|18|28)\s*%?/i)
+    || value.match(/\b(0|3|5|12|18|28)\s*%\s*(?:gst|tax)\b/i)
+    || value.match(/\b(0|3|5|12|18|28)\s*%\b/i);
+  return match ? Number(match[1]) : 0;
 }
 
 function extractHsnCode(text) {
@@ -1968,13 +1976,14 @@ function extractHsnCode(text) {
 function applySaleChatDefaults(parsed, sourceMessage) {
   const draft = parsed || {};
   const explicitHsn = extractHsnCode(sourceMessage);
+  const explicitGstRate = extractExplicitGstRate(sourceMessage);
   const lines = Array.isArray(draft.lines) ? draft.lines : [];
   return {
     ...draft,
     lines: lines.map(line => ({
       ...line,
       hsn: resolveSaleLineHsn(line, explicitHsn),
-      gstRate: num(line.gstRate) || inferGstRateFromItemName(line.name) || extractGstRate(sourceMessage)
+      gstRate: resolveSaleLineGstRate(line, explicitGstRate)
     }))
   };
 }
@@ -1983,6 +1992,11 @@ function resolveSaleLineHsn(line, explicitHsn = "") {
   const lineHsn = String(line?.hsn || "").trim();
   if (explicitHsn && (!lineHsn || lineHsn === DEFAULT_SALE_HSN)) return explicitHsn;
   return lineHsn || explicitHsn || inferHsnFromItemName(line?.name);
+}
+
+function resolveSaleLineGstRate(line, explicitGstRate = 0) {
+  if (explicitGstRate) return explicitGstRate;
+  return DEFAULT_SALE_GST_RATE;
 }
 
 function parseSaleLines(message) {
@@ -2032,7 +2046,7 @@ function parseStockStyleSaleLines(message) {
       hsn: hsnForSaleLine(baseName, line, message),
       qty: num(match[2]) || 1,
       rate,
-      gstRate: inferGstRateFromItemName(baseName) || extractGstRate(line)
+      gstRate: extractGstRate(line)
     });
   });
   return lines;
@@ -2086,7 +2100,7 @@ function inferHsnFromItemName(name) {
 }
 
 function inferGstRateFromItemName(name) {
-  return isApplePhoneItem(name) ? 18 : 0;
+  return DEFAULT_SALE_GST_RATE;
 }
 
 function isApplePhoneItem(name) {
