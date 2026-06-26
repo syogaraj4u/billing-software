@@ -1363,7 +1363,7 @@ function showInvoice(id, kind) {
         </div>
         <div class="modern-header-metrics">
           ${invoiceMetaCell("Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
-          ${invoiceMetaCell("e-Way Bill No.", entry.ewayBillNo || "-", "Mode/Terms of Payment", entry.status || "-")}
+          ${invoiceMetaCell("e-Way Bill No.", entry.ewayBillNo || "-", "Place of Supply", party.place || stateNameFromGstin(party.gstin) || "-")}
         </div>
       </div>
       <div class="modern-party-grid">
