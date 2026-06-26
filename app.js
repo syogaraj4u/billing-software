@@ -1704,7 +1704,7 @@ function openChatBillDialog() {
 }
 
 function fillChatBillSample() {
-  $("#chatBillInput").value = "Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each, GST 18%, unpaid";
+  $("#chatBillInput").value = "Bill to ABC Traders GSTIN 29ABCDE1234F1Z5, 2 iPhone 15 at 65000 each, HSN 85171300, GST 18%, unpaid";
 }
 
 async function prepareChatBillDraft() {
@@ -1714,11 +1714,13 @@ async function prepareChatBillDraft() {
   $("#chatBillInput").value = "";
   $("#chatBillSummary").innerHTML = `<span class="help-text">Checking details...</span>`;
   const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
-  let parsed = await parseSaleChatWithCloud(fullMessage);
-  if (!parsed) parsed = parseSaleChatLocal(fullMessage);
-  const missing = missingSaleBillDetails(parsed, fullMessage);
+  const cloudResult = await parseSaleChatWithCloud(fullMessage);
+  const parsed = cloudResult?.draft || parseSaleChatLocal(fullMessage);
+  const missing = cloudResult
+    ? uniqueMessages(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
+    : missingSaleBillDetails(parsed, fullMessage);
   if (missing.length) {
-    const question = buildMissingSaleQuestion(missing, parsed);
+    const question = cloudResult?.assistantMessage || buildMissingSaleQuestion(missing, parsed);
     appendChatBillMessage("assistant", question);
     $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply in the box and click Send Details.</span>`;
     return;
@@ -1747,13 +1749,14 @@ async function parseSaleChatWithCloud(message) {
     const { data, error } = await cloudClient.functions.invoke("parse-sale-chat", {
       body: {
         message,
+        activeProfileId: state.settings.activeProfileId,
         profiles: state.settings.profiles,
         items: state.items,
         parties: state.parties
       }
     });
     if (error) throw error;
-    return data?.draft || data;
+    return data;
   } catch (error) {
     console.warn("Cloud sale parser unavailable", error);
     return null;

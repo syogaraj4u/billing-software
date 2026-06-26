@@ -12,6 +12,19 @@ type SaleLine = {
   gstRate: number;
 };
 
+const saleLineSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "hsn", "qty", "rate", "gstRate"],
+  properties: {
+    name: { type: "string" },
+    hsn: { type: "string" },
+    qty: { type: "number" },
+    rate: { type: "number" },
+    gstRate: { type: "number" }
+  }
+};
+
 const saleDraftSchema = {
   type: "object",
   additionalProperties: false,
@@ -25,19 +38,20 @@ const saleDraftSchema = {
     reviewMessages: { type: "array", items: { type: "string" } },
     lines: {
       type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["name", "hsn", "qty", "rate", "gstRate"],
-        properties: {
-          name: { type: "string" },
-          hsn: { type: "string" },
-          qty: { type: "number" },
-          rate: { type: "number" },
-          gstRate: { type: "number" }
-        }
-      }
+      items: saleLineSchema
     }
+  }
+};
+
+const responsiveSaleChatSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["ready", "assistantMessage", "missingDetails", "draft"],
+  properties: {
+    ready: { type: "boolean" },
+    assistantMessage: { type: "string" },
+    missingDetails: { type: "array", items: { type: "string" } },
+    draft: saleDraftSchema
   }
 };
 
@@ -56,7 +70,7 @@ Deno.serve(async request => {
       return json({ error: "OPENAI_API_KEY and OPENAI_MODEL must be configured" }, 500);
     }
 
-    const { message, profiles = [], items = [], parties = [] } = await request.json();
+    const { message, profiles = [], items = [], parties = [], activeProfileId = "" } = await request.json();
     if (!message || typeof message !== "string") {
       return json({ error: "message is required" }, 400);
     }
@@ -68,7 +82,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "Extract a B2B Indian GST sale bill draft. Match profileId only from the provided GST profiles. Use reviewMessages for missing GSTIN, unclear item, missing HSN, or uncertain tax rate. Return only schema fields."
+              text: "You are a responsive B2B Indian GST sale bill assistant. Read the full conversation text and decide if the sale bill has enough details to create a draft. Required details: seller GST profileId from provided profiles, customer business name, customer GSTIN, item name, HSN/SAC, quantity, rate, GST rate, and payment status Paid/Unpaid/Partial. Do not invent unknown values. If anything is missing, set ready false, list missingDetails, and write assistantMessage as a short follow-up question asking only for missing details. If complete, set ready true and assistantMessage to a short confirmation. Return only schema fields."
             }
           ]
         },
@@ -77,7 +91,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: JSON.stringify({ message, profiles, items, parties })
+              text: JSON.stringify({ message, activeProfileId, profiles, items, parties })
             }
           ]
         }
@@ -85,23 +99,30 @@ Deno.serve(async request => {
       text: {
         format: {
           type: "json_schema",
-          name: "sale_bill_draft",
+          name: "responsive_sale_bill_chat",
           strict: true,
-          schema: saleDraftSchema
+          schema: responsiveSaleChatSchema
         }
       }
     });
 
-    const draft = parseJsonOutput(response);
+    const result = parseJsonOutput(response);
+    const draft = result.draft || {};
+    if (!draft.profileId && activeProfileId) draft.profileId = activeProfileId;
     draft.lines = (draft.lines || []).map((line: SaleLine) => ({
-      name: line.name || "Sale Item",
+      name: line.name || "",
       hsn: line.hsn || "",
-      qty: Number(line.qty) || 1,
+      qty: Number(line.qty) || 0,
       rate: Number(line.rate) || 0,
-      gstRate: Number(line.gstRate) || 18
+      gstRate: Number(line.gstRate) || 0
     }));
 
-    return json({ draft });
+    return json({
+      ready: Boolean(result.ready),
+      assistantMessage: result.assistantMessage || "",
+      missingDetails: Array.isArray(result.missingDetails) ? result.missingDetails : [],
+      draft
+    });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Unexpected error" }, 500);
   }
