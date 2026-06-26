@@ -156,6 +156,7 @@ let cloudLoading = false;
 let cloudSyncTimer = null;
 let selectedPurchaseIds = new Set();
 let entryDraftMeta = {};
+let chatBillMessages = [];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -1693,10 +1694,10 @@ function importBackup(event) {
 }
 
 function openChatBillDialog() {
+  chatBillMessages = [];
   $("#chatBillInput").value = "";
-  $("#chatBillThread").innerHTML = `
-    <div class="chat-message system">Type the customer, GSTIN, items, qty, rate and GST %. I will prepare a sale draft for review.</div>
-  `;
+  $("#chatBillThread").innerHTML = "";
+  appendChatBillMessage("assistant", "Tell me the customer, GSTIN, item, qty, rate and GST %. If anything is missing, I will ask before creating the draft.");
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
   if (window.lucide) lucide.createIcons();
@@ -1709,16 +1710,35 @@ function fillChatBillSample() {
 async function prepareChatBillDraft() {
   const message = $("#chatBillInput").value.trim();
   if (!message) return toast("Enter sale details");
-  $("#chatBillSummary").innerHTML = `<span class="help-text">Preparing draft...</span>`;
-  let parsed = await parseSaleChatWithCloud(message);
-  if (!parsed) parsed = parseSaleChatLocal(message);
-  const draft = buildChatSaleDraft(parsed, message);
+  appendChatBillMessage("user", message);
+  $("#chatBillInput").value = "";
+  $("#chatBillSummary").innerHTML = `<span class="help-text">Checking details...</span>`;
+  const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
+  let parsed = await parseSaleChatWithCloud(fullMessage);
+  if (!parsed) parsed = parseSaleChatLocal(fullMessage);
+  const missing = missingSaleBillDetails(parsed, fullMessage);
+  if (missing.length) {
+    const question = buildMissingSaleQuestion(missing, parsed);
+    appendChatBillMessage("assistant", question);
+    $("#chatBillSummary").innerHTML = `<strong>Need ${missing.length} more detail${missing.length > 1 ? "s" : ""}</strong><span class="help-text">Reply in the box and click Send Details.</span>`;
+    return;
+  }
+  const draft = buildChatSaleDraft(parsed, fullMessage);
   $("#chatBillSummary").innerHTML = renderChatBillSummary(parsed, draft);
   saveState();
   renderAll();
   $("#chatBillDialog").close();
   openEntry("sale", null, draft);
   toast("Sale draft prepared. Please review and save.");
+}
+
+function appendChatBillMessage(role, text) {
+  chatBillMessages.push({ role, text });
+  const node = document.createElement("div");
+  node.className = `chat-message ${role}`;
+  node.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
+  $("#chatBillThread").appendChild(node);
+  $("#chatBillThread").scrollTop = $("#chatBillThread").scrollHeight;
 }
 
 async function parseSaleChatWithCloud(message) {
@@ -1761,6 +1781,38 @@ function parseSaleChatLocal(message) {
     }],
     reviewMessages: gstin ? [] : ["B2B customer GSTIN not found in chat. Please add GSTIN before final billing."]
   };
+}
+
+function missingSaleBillDetails(parsed, sourceMessage) {
+  const missing = [];
+  const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
+  const hasPaymentStatus = /\b(paid|unpaid|partial|credit|due|cash|upi|bank|card)\b/i.test(sourceMessage);
+  const hasGstRateText = /\b(?:gst|tax)\s*(?:rate)?\s*[:\-]?\s*(0|3|5|12|18|28)\s*%?\b/i.test(sourceMessage) || /\b(0|3|5|12|18|28)\s*%\b/.test(sourceMessage);
+  if (!String(parsed.customerName || "").trim() || /^chat customer$/i.test(parsed.customerName)) missing.push("customer business name");
+  if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
+  if (!lines.length || lines.every(line => !num(line.rate))) missing.push("item name, quantity and rate");
+  lines.forEach((line, index) => {
+    const label = line.name && !/^chat sale item$/i.test(line.name) ? line.name : `item ${index + 1}`;
+    if (!line.name || /^chat sale item$/i.test(line.name)) missing.push(`${label} name`);
+    if (!num(line.qty)) missing.push(`${label} quantity`);
+    if (!num(line.rate)) missing.push(`${label} rate`);
+    if (!String(line.hsn || "").trim()) missing.push(`${label} HSN/SAC`);
+  });
+  if (!hasGstRateText) missing.push("GST rate");
+  if (!hasPaymentStatus) missing.push("payment status");
+  return uniqueMessages(missing);
+}
+
+function buildMissingSaleQuestion(missing, parsed) {
+  const examples = {
+    "customer business name": "customer business name",
+    "customer GSTIN": "customer GSTIN",
+    "item name, quantity and rate": "item, quantity and rate",
+    "GST rate": "GST rate",
+    "payment status": "paid, unpaid, or partial"
+  };
+  const readable = missing.map(item => examples[item] || item);
+  return `Please share the missing detail${missing.length > 1 ? "s" : ""}: ${readable.join(", ")}.\nExample: ${parsed.customerName || "ABC Traders"} GSTIN 29ABCDE1234F1Z5, HSN 85171300, payment unpaid.`;
 }
 
 function extractProfileFromMessage(message) {

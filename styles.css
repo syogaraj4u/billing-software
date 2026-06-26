@@ -940,23 +940,38 @@ textarea { resize: vertical; }
 
 .chat-thread {
   min-height: 74px;
-  max-height: 180px;
+  max-height: 240px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfc;
   padding: 12px;
+  display: grid;
+  gap: 8px;
 }
 
 .chat-message {
-  max-width: 760px;
+  max-width: min(760px, 86%);
   color: var(--ink);
   line-height: 1.45;
   font-size: 14px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
 }
 
+.chat-message.assistant,
 .chat-message.system {
   color: var(--muted);
+  justify-self: start;
+}
+
+.chat-message.user {
+  justify-self: end;
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
 }
 
 .chat-summary {
