@@ -38,68 +38,22 @@ button {
 
 .company-selector {
   min-height: 100vh;
-  padding: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
-.company-selector-bar {
-  display: flex;
+  padding: 24px;
+  display: grid;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.selector-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.selector-brand h1,
-.selector-brand p,
-.company-selector-copy h2,
-.company-selector-copy p {
-  margin: 0;
-}
-
-.selector-brand h1 {
-  font-size: 20px;
-  line-height: 1.15;
-}
-
-.selector-brand p {
-  color: var(--muted);
-  font-size: 13px;
-  margin-top: 2px;
-}
-
-.company-selector-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.company-selector-copy {
-  max-width: 720px;
-}
-
-.company-selector-copy h2 {
-  font-size: 30px;
-  letter-spacing: 0;
 }
 
 .company-grid {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
   display: grid;
   grid-template-columns: repeat(4, minmax(190px, 1fr));
   gap: 14px;
 }
 
 .company-card {
-  min-height: 178px;
+  min-height: 138px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -107,8 +61,9 @@ button {
   box-shadow: var(--shadow);
   padding: 16px;
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 14px;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
   text-align: left;
 }
 
@@ -141,25 +96,10 @@ button {
 }
 
 .company-card-main small,
-.company-card-main em,
-.company-card-meta {
+.company-card-main em {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
-}
-
-.company-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.company-card-meta span {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 4px 8px;
-  background: #fbfcfc;
 }
 
 .sidebar {
@@ -1253,25 +1193,18 @@ textarea { resize: vertical; }
     justify-content: flex-start;
   }
   .company-selector {
-    padding: 18px;
-  }
-  .company-selector-bar {
-    align-items: stretch;
-    flex-direction: column;
+    padding: 12px;
+    align-items: start;
   }
   .company-grid {
     grid-template-columns: 1fr;
     gap: 10px;
   }
-  .company-selector-copy h2 {
-    font-size: 24px;
-  }
   .company-card {
-    min-height: 0;
+    min-height: 78px;
     grid-template-columns: 44px minmax(0, 1fr);
-    grid-template-rows: auto auto;
     align-items: center;
-    gap: 10px 12px;
+    gap: 12px;
     padding: 12px;
   }
   .company-card-main {
@@ -1279,13 +1212,6 @@ textarea { resize: vertical; }
   }
   .company-card-main strong {
     font-size: 15px;
-  }
-  .company-card-meta {
-    grid-column: 2;
-    gap: 6px;
-  }
-  .company-card-meta span {
-    padding: 3px 7px;
   }
   .company-switcher {
     width: 100%;

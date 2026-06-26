@@ -470,9 +470,6 @@ function registerServiceWorker() {
 }
 
 function bindEvents() {
-  $("#companyCloudBtn").addEventListener("click", openCloudDialog);
-  $("#companyBackupBtn").addEventListener("click", exportBackup);
-  $("#companyRestoreInput").addEventListener("change", importBackup);
   $$(".nav-tab").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
   $("#quickSaleBtn").addEventListener("click", () => openEntry("sale"));
@@ -554,7 +551,6 @@ function renderAll() {
 
 function renderProfileSelectors() {
   $("#activeCompanyName").textContent = profileName(activeProfileId());
-  $("#companyCloudBtnText").textContent = $("#cloudBtnText").textContent || "Local";
 }
 
 function renderAppVisibility() {
@@ -565,8 +561,6 @@ function renderAppVisibility() {
 function renderCompanySelector() {
   const activeId = activeProfileId();
   $("#companyCards").innerHTML = state.settings.profiles.map(profile => {
-    const salesCount = state.sales.filter(entry => entry.profileId === profile.id).length;
-    const purchaseCount = state.purchases.filter(entry => entry.profileId === profile.id).length;
     const initials = companyInitials(profile.businessName || profile.label);
     return `
       <button class="company-card ${profile.id === activeId ? "selected" : ""}" type="button" data-profile-id="${profile.id}">
@@ -575,10 +569,6 @@ function renderCompanySelector() {
           <strong>${escapeHtml(profile.businessName || profile.label || "")}</strong>
           <small>${escapeHtml(profile.gstin || "GSTIN not entered")}</small>
           <em>${escapeHtml(profile.state || stateNameFromGstin(profile.gstin) || "-")}</em>
-        </span>
-        <span class="company-card-meta">
-          <span>${salesCount} sales</span>
-          <span>${purchaseCount} purchases</span>
         </span>
       </button>
     `;
@@ -651,7 +641,6 @@ function renderCloudUi() {
   const signedIn = Boolean(cloudSession);
   const email = cloudSession?.user?.email || "-";
   $("#cloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
-  $("#companyCloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
   $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
   $("#cloudWorkspaceLabel").textContent = cloudWorkspace?.name || "Not connected";
   $("#cloudLastSyncLabel").textContent = cloudWorkspace?.updated_at ? new Date(cloudWorkspace.updated_at).toLocaleString("en-IN") : "-";
