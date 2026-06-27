@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260626-core-improvements">
+  <link rel="stylesheet" href="styles.css?v=20260627-whatsapp-share">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -407,6 +407,7 @@
     <menu class="dialog-actions">
       <button class="secondary-btn" id="closeInvoiceBtn">Close</button>
       <button class="secondary-btn" id="downloadInvoicePdfBtn"><i data-lucide="download"></i><span>PDF</span></button>
+      <button class="secondary-btn whatsapp-btn" id="shareInvoiceWhatsappBtn"><i data-lucide="message-circle"></i><span>WhatsApp</span></button>
       <button class="secondary-btn" id="shareInvoicePdfBtn"><i data-lucide="share-2"></i><span>Share</span></button>
       <button class="primary-btn" id="printInvoiceBtn"><i data-lucide="printer"></i><span>Print</span></button>
     </menu>
@@ -416,6 +417,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260626-core-improvements"></script>
+  <script src="app.js?v=20260627-whatsapp-share"></script>
 </body>
 </html>

@@ -350,6 +350,12 @@ button > *,
   color: var(--ink);
 }
 
+.whatsapp-btn {
+  border-color: #b9e5c8;
+  color: #146c3a;
+  background: #effaf3;
+}
+
 .ghost-btn {
   background: transparent;
   color: var(--primary);

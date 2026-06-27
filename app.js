@@ -240,6 +240,7 @@ let pendingSmartBillReview = null;
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
 let currentInvoiceFileName = "invoice.pdf";
+let currentInvoiceShareContext = null;
 
 const COMPANY_PAGE_TRANSITION_MS = 460;
 
@@ -578,6 +579,7 @@ function bindEvents() {
   $("#closeInvoiceBtn").addEventListener("click", () => $("#invoiceDialog").close());
   $("#printInvoiceBtn").addEventListener("click", printInvoice);
   $("#downloadInvoicePdfBtn").addEventListener("click", downloadInvoicePdf);
+  $("#shareInvoiceWhatsappBtn").addEventListener("click", shareInvoiceToWhatsApp);
   $("#shareInvoicePdfBtn").addEventListener("click", shareInvoicePdf);
   $("#printReportBtn").addEventListener("click", () => window.print());
   window.addEventListener("afterprint", clearInvoicePrintMode);
@@ -1478,6 +1480,7 @@ function showInvoice(id, kind) {
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   const roundOff = round2(num(entry.total) - num(entry.taxable) - num(entry.gst));
   currentInvoiceFileName = invoicePdfFileName(entry, party);
+  currentInvoiceShareContext = { entry, party, settings };
   $("#invoicePrintArea").innerHTML = `
     <div class="invoice-sheet modern-invoice">
       <div class="modern-invoice-head">
@@ -1626,6 +1629,80 @@ async function shareInvoicePdf() {
   }
 }
 
+async function shareInvoiceToWhatsApp() {
+  if (!currentInvoiceShareContext?.entry) {
+    toast("Open an invoice before sharing");
+    return;
+  }
+  const message = invoiceWhatsAppMessage(currentInvoiceShareContext);
+  const phone = whatsappPhoneNumber(currentInvoiceShareContext.party?.phone);
+  try {
+    setInvoicePdfBusy(true);
+    const blob = await buildInvoicePdfBlob();
+    const file = new File([blob], currentInvoiceFileName, { type: "application/pdf" });
+    if (shouldUseNativeInvoiceShare() && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({
+        title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
+        text: message,
+        files: [file]
+      });
+      toast("Invoice ready to share on WhatsApp");
+      return;
+    }
+    downloadBlob(blob, currentInvoiceFileName);
+    openWhatsAppMessage(phone, message);
+    toast("PDF downloaded. WhatsApp opened.");
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      console.error(error);
+      openWhatsAppMessage(phone, message);
+      toast("WhatsApp opened. Attach PDF if needed.");
+    }
+  } finally {
+    setInvoicePdfBusy(false);
+  }
+}
+
+function invoiceWhatsAppMessage({ entry, party, settings }) {
+  const sellerName = settings.businessName || settings.label || "Nirvana Solutions";
+  const buyerName = party.name || "Customer";
+  const amount = `${state.settings.currency || "Rs."} ${formatInvoiceMoney(entry.total)}`;
+  return [
+    `Dear ${buyerName},`,
+    `Please find Tax Invoice ${entry.number || ""} dated ${formatInvoiceDate(entry.date)} from ${sellerName}.`,
+    `Invoice amount: ${amount}.`,
+    "Please find the invoice PDF attached.",
+    "Thank you."
+  ].join("\n");
+}
+
+function openWhatsAppMessage(phone, message) {
+  const baseUrl = phone ? `https://wa.me/${phone}` : "https://wa.me/";
+  const url = `${baseUrl}?text=${encodeURIComponent(message)}`;
+  const opened = window.open(url, "_blank");
+  if (opened) {
+    try {
+      opened.opener = null;
+    } catch {}
+  } else {
+    window.location.href = url;
+  }
+}
+
+function whatsappPhoneNumber(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 11 && digits.startsWith("0")) return `91${digits.slice(1)}`;
+  if (digits.length === 12 && digits.startsWith("91")) return digits;
+  return digits.length >= 10 ? digits : "";
+}
+
+function shouldUseNativeInvoiceShare() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "")
+    || (navigator.maxTouchPoints > 1 && window.innerWidth <= 900);
+}
+
 async function buildInvoicePdfBlob() {
   const sheet = $("#invoicePrintArea .modern-invoice");
   if (!sheet) throw new Error("Invoice is not open");
@@ -1659,7 +1736,7 @@ async function buildInvoicePdfBlob() {
 }
 
 function setInvoicePdfBusy(isBusy) {
-  ["#downloadInvoicePdfBtn", "#shareInvoicePdfBtn"].forEach(selector => {
+  ["#downloadInvoicePdfBtn", "#shareInvoiceWhatsappBtn", "#shareInvoicePdfBtn"].forEach(selector => {
     const button = $(selector);
     if (button) button.disabled = isBusy;
   });
