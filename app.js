@@ -2287,7 +2287,6 @@ function openChatBillDialog() {
   $("#chatBillInput").value = "";
   $("#chatBillAttachmentInput").value = "";
   $("#chatBillThread").innerHTML = "";
-  appendChatBillMessage("assistant", "Ready for sale bill details.");
   renderChatBillAttachments();
   $("#chatBillSummary").innerHTML = "";
   $("#chatBillDialog").showModal();
