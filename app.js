@@ -187,6 +187,61 @@ const GST_PROFILE_ALIASES = {
 const HOME_COMPANY_PROFILE_ORDER = ["gst-1", "gst-2", "gst-7", "gst-5", "gst-6", "gst-8", "gst-4", "gst-3"];
 const AMBIGUOUS_PROFILE_ALIASES = new Set(["lakshmi", "s lakshmi"]);
 const GENERIC_PARTY_ALIASES = new Set(["cash", "cash customer", "customer", "supplier", "default", "default supplier"]);
+const TALLY_BUYER_MASTER_VERSION = "2026-06-27-tally-gst-buyers-v2";
+const TALLY_BUYER_MASTER = [
+  {"name": "DGB Agency - Chennai", "gstin": "33AEWPM2560B1ZL", "place": "Chennai", "address": "Jones Street,Mannady,12,Chennai, Chennai, Tamil Nadu, 600001", "aliases": ["DGB Agency", "DGB Agency - Chennai"]},
+  {"name": "HARSHITH ENTERPRISES - Andhra Pradesh", "gstin": "37ALHPP0600M1Z2", "place": "Chittoor", "address": "AIR BYPASS ROAD,TIRUPATHI,PLOT NO 166,Chittoor, Chittoor, Andhra Pradesh, 517501", "aliases": ["HARSHITH ENTERPRISES", "HARSHITH ENTERPRISES - Andhra Pradesh"]},
+  {"name": "I P Express Cargo", "gstin": "07AAEFI4310H1ZR", "place": "New Delhi", "address": "ROAD NO. - 6,New Delhi,H. NO. A-125, G/F KH. NO. 1028/1,New Delhi, New Delhi, Delhi, 110037", "aliases": ["I P Express Cargo"]},
+  {"name": "IP Express Cargo - Bangalore", "gstin": "29AAEFI4310H1ZL", "place": "Bengaluru Urban", "address": "3rd Cross, 4th Main Road,Sampangiramnagar,KH Road,Bengaluru,34, Ground Floor,Bengaluru Urban, Bengaluru Urban, Karnataka, 560027", "aliases": ["IP Express Cargo", "I P EXPRESS CARGO", "IP Express Cargo - Bangalore"]},
+  {"name": "Kalakriti - Tamilnadu", "gstin": "33AENPD8305E1ZU", "place": "Chennai", "address": "SUNKURAMA STREET,PARRYS CORNER,NO 3,Chennai, Chennai, Tamil Nadu, 600001", "aliases": ["Kalakriti", "Kalakriti - Tamilnadu"]},
+  {"name": "Lotus Lakshmi Marketing - Andhra Pradesh", "gstin": "37AMQPP4019E1ZV", "place": "Chittoor", "address": "TILAK ROAD,TIRUPATI,13-3-397,Chittoor, Chittoor, Andhra Pradesh, 517501", "aliases": ["Lotus Lakshmi Marketing", "Lotus Lakshmi Marketing - Andhra Pradesh"]},
+  {"name": "Mega Deals - Andhra Pradesh", "gstin": "37APYPV7867D1ZR", "place": "Kurnool", "address": "First Floor,Skanda Business Park,Abdullah Khan Estate Lane,Kurnool,40/321-FF-22,Kurnool, Kurnool, Andhra Pradesh, 518001", "aliases": ["Mega Deals", "Mega Deals - Andhra Pradesh"]},
+  {"name": "Nirvana Solutions - Andra Pradesh", "gstin": "37DPPPS0884K2ZX", "place": "Tirupati", "address": "1st Floor,SivaSri Nilayam,Kranthi Nagar,Tirupati,21-10-518/a,Tirupati, Tirupati, Andhra Pradesh, 517507", "aliases": ["Nirvana Solutions", "Nirvana Solutions - Andra Pradesh"]},
+  {"name": "Purohit Enterprise - Gujarat", "gstin": "24CRYPR9557C1ZZ", "place": "Ahmedabad", "address": "SHOP NO G-3,Jayanti Dalal Road,Ahmedabad,296-A-1,Ahmedabad, Ahmedabad, Gujarat, 380001", "aliases": ["Purohit Enterprise", "Purohit Enterprise - Gujarat"]},
+  {"name": "Reliable Sales", "gstin": "07BFPPS9749B1ZT", "place": "West Delhi", "address": "Basement, First Floor, Second Floor & Third Floor,C-297 & 300,SHIV VIHAR,New Delhi,C-297 & 300,West Delhi, West Delhi, Delhi, 110059", "aliases": ["Reliable Sales"]},
+  {"name": "Sama Distributor", "gstin": "27AAHPK5099E1ZH", "place": "Pune", "address": "1st Floor,Shreenath Plaza,Shivajinagar,Pune,Office No. C/23,Pune, Pune, Maharashtra, 411005", "aliases": ["Sama Distributor"]},
+  {"name": "Shiva Nandi Communications - Andhra Pradesh", "gstin": "37BRVPN4137L1ZZ", "place": "Tirupati", "address": "2nd Floor,SivaSri Illam,Kranthi Nagar,Tirupati,21-10-518/A,Tirupati, Tirupati, Andhra Pradesh, 517507", "aliases": ["Shiva Nandi Communications", "Shiva Nandi Communications - Andhra Pradesh"]},
+  {"name": "Shree Mangalam Communication Private Limited", "gstin": "22ABKCS3913J1ZB", "place": "Raipur", "address": "FIRST FLOOR,EDGE COMPLEX,MOWA,Raipur,shop no. 109&115,Raipur, Raipur, Chhattisgarh, 492001", "aliases": ["Shree Mangalam Communication Private Limited"]},
+  {"name": "Sri Lakshmi Digitals - Andhra Pradesh", "gstin": "37CGUPD8962N1ZB", "place": "Chittoor", "address": "Prakasam Road,Nagari,10-8-349,Chittoor, Chittoor, Andhra Pradesh, 517590", "aliases": ["Sri Lakshmi Digitals", "Sri Lakshmi Digitals - Andhra Pradesh"]},
+  {"name": "Talk Time Mobile Store", "gstin": "24AAIFT2603G1ZI", "place": "Vadodara", "address": "TULIP COMPLEX,RACE COURSE,ALKAPURI,SR-01/SR-02 AND FF-101,Vadodara, Vadodara, Gujarat, 390007", "aliases": ["Talk Time Mobile Store"]},
+  {"name": "United Mobiles", "gstin": "33AQQPM7959N1ZS", "place": "Chennai", "address": "Anna Main Road,Chennai,Old No.58 New No.52/A,Chennai, Chennai, Tamil Nadu, 600078", "aliases": ["United Mobiles"]},
+  {"name": "HARINI MOBILES LLP - Karnataka", "gstin": "29AAQFH1863E1Z4", "place": "Bengaluru Urban", "address": "K.C.Nilayam,Bengaluru,#44,Bengaluru Urban, Bengaluru Urban, Karnataka, 560016", "aliases": ["HARINI MOBILES LLP", "HARINI MOBILES LLP - Karnataka"]},
+  {"name": "IP Express Cargo - Chennai", "gstin": "27AAEFI4310H1ZP", "place": "Pune", "address": "1st Floor,Shreenath Plaza,Gopal Krishna Gokhale Path,Pune,Office No. C/22,Pune, Pune, Maharashtra, 411005", "aliases": ["IP Express Cargo", "I P EXPRESS CARGO", "IP Express Cargo - Chennai"]},
+  {"name": "Iswarya Enterprises", "gstin": "37AXIPB1254E3ZU", "place": "Visakhapatnam", "address": "TSR Apartment,Sivajipalem Road,Visakhapatnam,9-5-67/3(56),Visakhapatnam, Visakhapatnam, Andhra Pradesh, 530017", "aliases": ["Iswarya Enterprises"]},
+  {"name": "Kala Nirvana", "gstin": "37ALHPV7427Q1Z1", "place": "Tirupati", "address": "Ground floor,Sivasri Nilayam,Kranthi Nagar,Tirupati,21-10-518/A,Tirupati, Tirupati, Andhra Pradesh, 517507", "aliases": ["Kala Nirvana"]},
+  {"name": "Khairanya Infotech", "gstin": "37FADPS7142R1ZS", "place": "Tirupati", "address": "Ground Floor,Upadyay Nagar 11th Cross,Tirupati,22-8-97/2,Tirupati, Tirupati, Andhra Pradesh, 517507", "aliases": ["Khairanya Infotech"]},
+  {"name": "Lakshmi Jeyapandi Traders - Tamil Nadu", "gstin": "33BKJPL1188C1ZD", "place": "Chennai", "address": "Ground floor,Lakshmi Jeyapandi Traders,Grace Garden 4th Lane,Chennai,No 5/3,Chennai, Chennai, Tamil Nadu, 600021", "aliases": ["Lakshmi Jeyapandi Traders", "Lakshmi Jeyapandi Traders - Tamil Nadu"]},
+  {"name": "Lakshya Enterprise", "gstin": "07AXFPP6207L1Z6", "place": "West Delhi", "address": "FIRST FLOOR,Prem Nagar,PREM NAGAR,New Delhi,HOUSE NO. 71/20,West Delhi, West Delhi, Delhi, 110058", "aliases": ["Lakshya Enterprise"]},
+  {"name": "Reliance Retail Limited - Bangalore", "gstin": "29AABCR1718E1ZL", "place": "Bengaluru Urban", "address": "2ND FLOOR,RIL BUILDING,RICHMOND ROAD,BANGALORE,NO 62/2,,Bengaluru Urban, Bengaluru Urban, Karnataka, 560025", "aliases": ["Reliance Retail Limited", "Reliance Retail Limited - Bangalore"]},
+  {"name": "SAMA DISTRIBUTORS DELHI", "gstin": "07AAHPK5099E1ZJ", "place": "New Delhi", "address": "Ground Floor,Malik Pur Kohi Rangpuri,New Delhi,RP-41258, H. No. 597,New Delhi, New Delhi, Delhi, 110037", "aliases": ["SAMA DISTRIBUTORS DELHI", "SAMA DISTRIBUTOR"]},
+  {"name": "Shree Mangalam Telecom Llp", "gstin": "22AFCFS5432D1ZG", "place": "Raipur", "address": "FIRST FLOOR,EDGE COMPLEX,MOWA,Raipur,SHOP NO. 109& 115,Raipur, Raipur, Chhattisgarh, 492004", "aliases": ["Shree Mangalam Telecom Llp"]},
+  {"name": "Superdeals Trading House - Bangaluru", "gstin": "29ADVFS4000N1ZG", "place": "Bengaluru Urban", "address": "ALSA GLENRIDGE,OPP TO ST JOSEPH COLLEGE LANGFORD ROAD SHANTHI NAGAR,BANGALORE,2/3 PORTION OF 2D WEST PART,Bengaluru Urban, Bengaluru Urban, Karnataka, 560025", "aliases": ["Superdeals Trading House", "Superdeals Trading House - Bangaluru"]},
+  {"name": "Turbo Trade - TamilNadu", "gstin": "33AARFT7837K1ZF", "place": "Chennai", "address": "Anthony nagar,Chennai,14,Chennai, Chennai, Tamil Nadu, 600099", "aliases": ["Turbo Trade", "Turbo Trade - TamilNadu"]},
+  {"name": "Unikorn Distribution Private Limited - Telangana", "gstin": "36ABICS9486L1ZC", "place": "Hyderabad", "address": "Second Floor,Aashreya Heights,Shalivahana Nagar Road,Hyderabad,8-3-720/6,Hyderabad, Hyderabad, Telangana, 500073", "aliases": ["Unikorn Distribution Private Limited", "Unikorn Distribution Private Limited - Telangana"]},
+  {"name": "Wireless India - Telangana", "gstin": "36AAEFW7661D1Z0", "place": "Mancherial", "address": "shop no 2,near royal gardens x road,Abdul Gaffar Road,Naspur,10-172/4,Mancherial, Mancherial, Telangana, 504302", "aliases": ["Wireless India", "Wireless India - Telangana"]},
+  {"name": "CELL POINT (INDIA) LIMITED - Tirupati", "gstin": "37AAFCC2148H1ZR", "place": "Visakhapatnam", "address": "RAMS ARCADE,DABAGARDENS,30-15-139,Visakhapatnam, Visakhapatnam, Andhra Pradesh, 530020", "aliases": ["CELL POINT (INDIA) LIMITED", "CELL POINT (INDIA) LIMITED - Tirupati"]},
+  {"name": "Mangalam Traders", "gstin": "22CWOPA2445K2ZL", "place": "Raipur", "address": "1ST FLOOR,EDGE COMPLEX,Vidhan Sabha Road,Raipur,SHOP NO 109 & 115,Raipur, Raipur, Chhattisgarh, 492005", "aliases": ["Mangalam Traders"]},
+  {"name": "Poorvika Mobiles Private Limited - Tamil Nadu", "gstin": "33AAECP9975G1Z0", "place": "Chennai", "address": "ARCOT ROAD,KODAMBAKKAM,53/30A-30B,Chennai, Chennai, Tamil Nadu, 600024", "aliases": ["Poorvika Mobiles Private Limited", "Poorvika Mobiles Private Limited - Tamil Nadu"]},
+  {"name": "Sathya Agencies Pvt Ltd - Tamil Nadu", "gstin": "33AAICS8948L1ZN", "place": "Thoothukudi", "address": "PALAYAMCOTTAI ROAD,THOOTHUKUDI,370,Thoothukudi, Thoothukudi, Tamil Nadu, 628002", "aliases": ["Sathya Agencies Pvt Ltd", "SATHYA AGENCIES LIMITED", "Sathya Agencies Pvt Ltd - Tamil Nadu"]},
+  {"name": "Skanda Digitals", "gstin": "37BSFPB1088P1ZD", "place": "Tirupati", "address": "Ground Floor,Grand world road,Tirupati,22-8-97/2A,Tirupati, Tirupati, Andhra Pradesh, 517507", "aliases": ["Skanda Digitals"]},
+  {"name": "AASHREYA COMMUNICATIONS LLP - Telangana", "gstin": "36AAFFU0823Q1ZS", "place": "Hyderabad", "address": "First Floor,Aashrey,Road Number 7,Hyderabad,8-2-293/82/W/82 Flat No-101,Hyderabad, Hyderabad, Telangana, 500033", "aliases": ["AASHREYA COMMUNICATIONS LLP", "AASHREYA COMMUNICATION", "AASHREYA COMMUNICATIONS LLP - Telangana"]},
+  {"name": "CITIFONE DEALS - MUMBAI", "gstin": "27AACFC0029R1ZC", "place": "Mumbai Suburban", "address": "7TH FLOOR,Neelkanth Business Park,OPPOSITE VIDYAVIHAR STATION, NATHANI ROAD,VDYAVIHAR WEST, MUMBAI,C-705,Mumbai Suburban, Mumbai Suburban, Maharashtra, 400086", "aliases": ["CITIFONE DEALS", "CITIFONE DEALS - MUMBAI"]},
+  {"name": "Connectivity -Tamilnadu", "gstin": "33BDSPM6331A1ZR", "place": "Chennai", "address": "KARIKALAN STREET,ADAMBAKKAM,NO.3,Chennai, Chennai, Tamil Nadu, 600088", "aliases": ["Connectivity", "Connectivity -Tamilnadu"]},
+  {"name": "GLOBE MOBILITY PRIVATE LIMITED - PUNE", "gstin": "27AAFCG3554M1Z9", "place": "Pune", "address": "4th FLOOR,VIKRAM GOLDMINE,CTS NO 1225/C, PLOT NO 606/C,PUNE CITY,OFFICE NO,402, 403,Pune, Pune, Maharashtra, 411004", "aliases": ["GLOBE MOBILITY PRIVATE LIMITED", "GLOBE MOBILITY PRIVATE LIMITED - PUNE"]},
+  {"name": "House Of Electronics - Telangana", "gstin": "36AAJFH8661H1Z0", "place": "Hyderabad", "address": "4TH FLOOR,SREE ARCADE,S D ROAD,SECUNDERABAD,UNIT 4A-1, H.NO.1-2-271,Hyderabad, Hyderabad, Telangana, 500003", "aliases": ["House Of Electronics", "House Of Electronics - Telangana"]},
+  {"name": "Kgr Enterprises Private Limited", "gstin": "27AAFCK1308M1ZH", "place": "Mumbai", "address": "4TH FLOOR,CORPORATE CENTRE NIRMAL LIFESTYL,LBS MARG MULUND WEST,MUMBAI,401-405,Mumbai, Mumbai, Maharashtra, 400080", "aliases": ["Kgr Enterprises Private Limited"]},
+  {"name": "Kothari Agency - Maharashtra", "gstin": "27AMZPK2173K1ZC", "place": "Jalgaon", "address": "1ST Floor,Plot No. 27,Adarsh Nagar Road,JALGAON,Manisha Colony,Jalgaon, Jalgaon, Maharashtra, 425001", "aliases": ["Kothari Agency - Maharashtra", "KOTHARI AGENCIES"]},
+  {"name": "Likeon Trading International Private Limited", "gstin": "06AADCL7793B1ZG", "place": "Gurugram", "address": "GROUND FLOOR,HOUSE NO 14,Gali Number 4,Gurugram,PHASE 2,Gurugram, Gurugram, Haryana, 122001", "aliases": ["Likeon Trading International Private Limited"]},
+  {"name": "Maximo Ventures LLP - Tamilnadu", "gstin": "33ABZFM0417D1ZD", "place": "Chennai", "address": "JEHANGIR STREET (2nd LINE BEACH ROAD),Chennai,28/4 (12/4),Chennai, Chennai, Tamil Nadu, 600001", "aliases": ["Maximo Ventures LLP", "Maximo Ventures LLP - Tamilnadu"]},
+  {"name": "Mobi Impex - Hyderbad", "gstin": "36ABOFM0423E1ZI", "place": "Hyderabad", "address": "1st Floor,Chikoti Garden,Hyderabad,H No 1-10-68/1, Plot No 18,19,Hyderabad, Hyderabad, Telangana, 500016", "aliases": ["Mobi Impex", "Mobi Impex - Hyderbad"]},
+  {"name": "Naidu Communications - Andhra Pradesh", "gstin": "37AHOPA1384J1Z6", "place": "Chittoor", "address": "GROUND,NIMMAKAYALA STREET,TIRUPATI,12-2-118,Chittoor, Chittoor, Andhra Pradesh, 517501", "aliases": ["Naidu Communications", "Naidu Communications - Andhra Pradesh"]},
+  {"name": "Pannest Integrated Services Private Limited", "gstin": "33AAGCP7171G1ZE", "place": "Chennai", "address": "Mosque Street,Chennai,26/67,Chennai, Chennai, Tamil Nadu, 600015", "aliases": ["Pannest Integrated Services Private Limited"]},
+  {"name": "S R Agencies -Andhra Pradesh", "gstin": "37AINPJ5601P1ZR", "place": "Andhra Pradesh", "address": "", "aliases": ["S R Agencies", "S R Agencies -Andhra Pradesh"]},
+  {"name": "Aadarsh Telelink Private Limited", "gstin": "07AAYCA6815A1ZL", "place": "West Delhi", "address": "SECOND FLOOR,VILLAGE ASALATPUR,New Delhi,WZ-14B,West Delhi, West Delhi, Delhi, 110058", "aliases": ["Aadarsh Telelink Private Limited"]},
+  {"name": "NIVI MOBILE AGENCIES - Tirupati", "gstin": "37AWTPC5562C1ZF", "place": "Tirupati", "address": "REVENUE WARD NO 7,RTC BUS STAND ROAD,Srikalahasti,7-647,Tirupati, Tirupati, Andhra Pradesh, 517644", "aliases": ["NIVI MOBILE AGENCIES", "NIVI MOBILE AGENCIES - Tirupati"]},
+  {"name": "SANGEETHA MOBILES PRIVATE LIMITED - Tamil Nadu", "gstin": "33AAMCS5916J1Z1", "place": "Chennai", "address": "Plot No 2,4rthMain Road,V G N Nagar,ayyapanathagal,Door No 2/109,Chennai, Chennai, Tamil Nadu, 600056", "aliases": ["SANGEETHA MOBILES PRIVATE LIMITED", "SANGEETHA MOBILES PRIVATE LIMITED - Tamil Nadu"]},
+  {"name": "Shakti Marketing", "gstin": "24ANTPP1226D1Z4", "place": "Ahmedabad", "address": "Sun West Bank,Ashram Road,Ahmedabad,A-822,Ahmedabad, Ahmedabad, Gujarat, 380009", "aliases": ["Shakti Marketing"]},
+];
 
 function createDefaultProfiles() {
   return clone(OFFICIAL_GST_PROFILES);
@@ -303,6 +358,7 @@ function normalizeState(value) {
     profiles,
     gstProfilesLoadedVersion: GST_PROFILE_VERSION,
     reportEmails: value.settings.reportEmails || "",
+    tallyBuyerMasterVersion: value.settings.tallyBuyerMasterVersion || "",
     ewayDefaults: {
       vehicleNo: existingEwayDefaults.vehicleNo || "",
       distanceKm: num(existingEwayDefaults.distanceKm),
@@ -316,6 +372,7 @@ function normalizeState(value) {
   }
   value.items = Array.isArray(value.items) ? value.items : [];
   value.parties = Array.isArray(value.parties) ? value.parties.map(normalizePartyForState) : [];
+  mergeTallyBuyerMaster(value);
   value.sales = Array.isArray(value.sales) ? value.sales : [];
   value.purchases = Array.isArray(value.purchases) ? value.purchases : [];
   [...value.sales, ...value.purchases].forEach(entry => {
@@ -337,6 +394,60 @@ function normalizePartyForState(party) {
     address: party.address || "",
     aliases: party.aliases || ""
   };
+}
+
+function mergeTallyBuyerMaster(value) {
+  if (value.settings.tallyBuyerMasterVersion === TALLY_BUYER_MASTER_VERSION) return;
+  TALLY_BUYER_MASTER.forEach(buyer => {
+    const buyerGstin = normalizeGstin(buyer.gstin);
+    if (!buyerGstin) return;
+    const existing = value.parties.find(party => normalizeGstin(party.gstin) === buyerGstin);
+    if (existing) {
+      mergeTallyBuyerIntoParty(existing, buyer);
+      return;
+    }
+    value.parties.push({
+      id: `tally-buyer-${buyerGstin}`,
+      name: buyer.name,
+      type: "Customer",
+      gstin: buyerGstin,
+      phone: "",
+      place: buyer.place || stateNameFromGstin(buyerGstin) || "",
+      address: buyer.address || "",
+      aliases: tallyBuyerAliases(buyer).join("\n")
+    });
+  });
+  value.settings.tallyBuyerMasterVersion = TALLY_BUYER_MASTER_VERSION;
+}
+
+function mergeTallyBuyerIntoParty(party, buyer) {
+  party.type = party.type === "Supplier" ? "Both" : (party.type || "Customer");
+  if (!String(party.name || "").trim() || /^customer\s/i.test(party.name)) party.name = buyer.name;
+  if (!normalizeGstin(party.gstin)) party.gstin = normalizeGstin(buyer.gstin);
+  if (!String(party.place || "").trim()) party.place = buyer.place || stateNameFromGstin(buyer.gstin) || "";
+  if (!String(party.address || "").trim()) party.address = buyer.address || "";
+  party.aliases = cleanPartyAliasList([
+    ...partyAliasList(party),
+    ...tallyBuyerAliases(buyer)
+  ]).join("\n");
+}
+
+function tallyBuyerAliases(buyer) {
+  const aliases = cleanPartyAliasList(buyer.aliases || []);
+  return cleanPartyAliasList([
+    ...aliases,
+    ...aliases.map(initialsAlias).filter(Boolean)
+  ]);
+}
+
+function initialsAlias(value) {
+  const initials = normalizeForAlias(value)
+    .split(" ")
+    .filter(word => word.length > 1)
+    .map(word => word[0])
+    .join("")
+    .toUpperCase();
+  return initials.length >= 3 ? initials : "";
 }
 
 function normalizeEntryForState(entry, kind) {
