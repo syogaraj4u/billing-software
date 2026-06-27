@@ -1155,7 +1155,10 @@ function renderPurchaseUploadReview(kind, source) {
   const supplier = partyById(source.partyId) || {};
   const calculated = calculateEntryTotals(source.lines || [], profile, supplier, "purchase");
   const extracted = source.extractedTaxes || {};
-  const messages = uniqueMessages(source.reviewMessages || []);
+  const messages = uniqueMessages([
+    ...activePurchaseReviewMessages(source.reviewMessages || []),
+    ...purchaseDuplicateReviewMessages(source, source.id || editingEntryId)
+  ]);
   const attachments = source.attachments || [];
   return `<section class="purchase-review-panel">
     <div class="purchase-review-head">
@@ -1296,6 +1299,53 @@ function purchaseTaxReviewMessages(extractedTaxes, calculated) {
   return messages;
 }
 
+function purchaseDuplicateReviewMessages(source, excludeId = "") {
+  const duplicate = findDuplicatePurchaseInvoice(source, excludeId);
+  return duplicate ? [duplicatePurchaseInvoiceMessage(duplicate)] : [];
+}
+
+function activePurchaseReviewMessages(messages) {
+  return (messages || []).filter(message => !isDuplicatePurchaseWarning(message));
+}
+
+function isDuplicatePurchaseWarning(message) {
+  return String(message || "").startsWith("Duplicate purchase invoice warning:");
+}
+
+function findDuplicatePurchaseInvoice(source, excludeId = "") {
+  const invoiceNumber = normalizePurchaseInvoiceNumber(source?.number);
+  if (!invoiceNumber) return null;
+  const supplierKey = purchaseSupplierKey(source);
+  if (!supplierKey) return null;
+  return state.purchases.find(entry => {
+    if (entry.id === excludeId) return false;
+    if (normalizePurchaseInvoiceNumber(entry.number) !== invoiceNumber) return false;
+    return purchaseSupplierKey(entry) === supplierKey;
+  }) || null;
+}
+
+function purchaseSupplierKey(source) {
+  const party = partyById(source?.partyId) || {};
+  const gstin = normalizeGstin(source?.sellerGstin || party.gstin);
+  if (gstin) return `gstin:${gstin}`;
+  if (source?.partyId) return `party:${source.partyId}`;
+  return "";
+}
+
+function normalizePurchaseInvoiceNumber(value) {
+  return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function duplicatePurchaseInvoiceMessage(duplicate) {
+  const supplier = partyById(duplicate.partyId) || {};
+  const profile = profileById(duplicate.profileId);
+  const supplierName = supplier.name || "this supplier";
+  const invoiceNo = duplicate.number || "this invoice number";
+  const date = formatInvoiceDate(duplicate.date) || duplicate.date || "saved earlier";
+  const profileLabel = profile?.businessName || profile?.label || "selected GST";
+  return `Duplicate purchase invoice warning: ${supplierName} invoice ${invoiceNo} already exists on ${date} under ${profileLabel}.`;
+}
+
 function saveEntry(event) {
   event.preventDefault();
   const form = $("#entryForm");
@@ -1309,7 +1359,7 @@ function saveEntry(event) {
   const calculated = calculateEntryTotals(lines, profile, party, entryMode);
   const reviewMessages = uniqueMessages([
     ...calculated.reviewMessages,
-    ...(entryDraftMeta.reviewMessages || []),
+    ...(entryMode === "purchase" ? activePurchaseReviewMessages(entryDraftMeta.reviewMessages) : (entryDraftMeta.reviewMessages || [])),
     ...(entryMode === "purchase" ? purchaseTaxReviewMessages(entryDraftMeta.extractedTaxes, calculated) : [])
   ]);
   const entry = {
@@ -1330,6 +1380,15 @@ function saveEntry(event) {
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
   };
+  if (entryMode === "purchase") {
+    const duplicate = findDuplicatePurchaseInvoice(entry, editingEntryId);
+    if (duplicate) {
+      const duplicateMessage = duplicatePurchaseInvoiceMessage(duplicate);
+      entry.reviewMessages = uniqueMessages([...entry.reviewMessages, duplicateMessage]);
+      entry.reviewStatus = "Needs Review";
+      if (!confirm(`${duplicateMessage}\n\nSave this purchase anyway?`)) return;
+    }
+  }
   const list = entryList(entryMode);
   const index = list.findIndex(row => row.id === entry.id);
   if (index >= 0) list[index] = entry;
