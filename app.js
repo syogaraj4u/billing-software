@@ -291,6 +291,7 @@ let chatBillMessages = [];
 let chatBillAttachments = [];
 let chatBillPreparing = false;
 let chatBillHistoryActive = false;
+let lastSaleChatCloudError = "";
 let pendingSmartBillReview = null;
 let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
@@ -2633,8 +2634,13 @@ async function prepareChatBillDraft() {
     const typedMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.rawText || "").join("\n").trim();
     const allAttachments = chatBillMessages.filter(row => row.role === "user").flatMap(row => row.attachments || []);
     const cloudResult = await parseSaleChatWithCloud(fullMessage, allAttachments);
+    const cloudError = lastSaleChatCloudError;
+    if (!cloudResult && cloudError && !allAttachments.length) {
+      appendChatBillMessage("assistant", `ChatGPT is not connected now. ${cloudError} I used basic local parsing for this typed message.`);
+    }
     if (allAttachments.length && !cloudResult) {
-      appendChatBillMessage("assistant", "I could not read the attached image now. Please sign in to Cloud and make sure the ChatGPT API function is deployed, or type the bill-to and ship-to details here.");
+      const reason = cloudError ? ` Reason: ${cloudError}` : "";
+      appendChatBillMessage("assistant", `ChatGPT image reading is not connected now.${reason} Type the bill-to and ship-to details here, then I can continue with basic local parsing.`);
       if (!typedMessage) {
         $("#chatBillSummary").innerHTML = `<strong>Image reading unavailable</strong><span class="help-text">Type the address details or try again after Cloud is ready.</span>`;
         return;
@@ -2675,7 +2681,19 @@ function appendChatBillMessage(role, text, attachments = [], rawText = text) {
 }
 
 async function parseSaleChatWithCloud(message, attachments = []) {
-  if (!cloudClient || !cloudSession) return null;
+  lastSaleChatCloudError = "";
+  if (!cloudConfigured()) {
+    lastSaleChatCloudError = "Cloud login is not loaded on this page.";
+    return null;
+  }
+  if (!cloudClient) {
+    lastSaleChatCloudError = "Cloud client is not ready. Refresh and login again.";
+    return null;
+  }
+  if (!cloudSession) {
+    lastSaleChatCloudError = "Please login to the billing app first.";
+    return null;
+  }
   try {
     const { data, error } = await cloudClient.functions.invoke("parse-sale-chat", {
       body: {
@@ -2694,11 +2712,32 @@ async function parseSaleChatWithCloud(message, attachments = []) {
       }
     });
     if (error) throw error;
+    if (data?.error) throw new Error(data.error);
     return data;
   } catch (error) {
+    lastSaleChatCloudError = await saleChatCloudErrorMessage(error);
     console.warn("Cloud sale parser unavailable", error);
     return null;
   }
+}
+
+async function saleChatCloudErrorMessage(error) {
+  let responseMessage = "";
+  try {
+    const response = error?.context;
+    if (response && typeof response.clone === "function") {
+      const body = await response.clone().json();
+      responseMessage = body?.error || body?.message || "";
+    }
+  } catch {}
+  const message = [responseMessage, error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (/OPENAI_API_KEY|OPENAI_MODEL/i.test(message)) return "OpenAI API key/model is not configured in Supabase.";
+  if (/Failed to fetch|NetworkError|Could not resolve|resolve host|Load failed|fetch/i.test(message)) return "Cloud function could not be reached from this browser.";
+  if (/401|403|JWT|auth|login|session/i.test(message)) return "Cloud login/session is not valid. Please logout and login again.";
+  return message || "Cloud function did not return a valid response.";
 }
 
 function parseSaleChatLocal(message) {
