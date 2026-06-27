@@ -2614,7 +2614,8 @@ async function prepareChatBillDraft() {
       : missingSaleBillDetails(parsed, fullMessage);
     if (missing.length) {
       const nextMissing = nextSaleMissingDetail(missing);
-      const question = buildMissingSaleQuestion(nextMissing, parsed);
+      const question = (cloudResult && cleanSaleAssistantMessage(cloudResult.assistantMessage))
+        || buildMissingSaleQuestion(nextMissing, parsed);
       appendChatBillMessage("assistant", question);
       $("#chatBillSummary").innerHTML = `<strong>Need 1 more detail</strong><span class="help-text">${escapeHtml(shortMissingDetailLabel(nextMissing))}</span>`;
       return;
