@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260627-login-gate">
+  <link rel="stylesheet" href="styles.css?v=20260627-enter-send">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -281,7 +281,7 @@
             <i data-lucide="image-plus"></i>
             <input id="chatBillAttachmentInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple>
           </label>
-          <textarea id="chatBillInput" rows="1" aria-label="Smart Bill details" placeholder="Message Smart Bill"></textarea>
+          <textarea id="chatBillInput" rows="1" aria-label="Smart Bill details" placeholder="Message Smart Bill" enterkeyhint="send"></textarea>
           <button class="icon-btn" id="chatSampleBtn" type="button" title="Example"><i data-lucide="wand-sparkles"></i></button>
           <button class="icon-btn chat-send-btn" id="prepareChatBillBtn" type="button" title="Send"><i data-lucide="send"></i></button>
         </div>
@@ -448,6 +448,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260627-login-gate"></script>
+  <script src="app.js?v=20260627-enter-send"></script>
 </body>
 </html>

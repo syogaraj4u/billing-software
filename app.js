@@ -2542,7 +2542,6 @@ function fillChatBillSample() {
 
 function handleChatBillInputKeydown(event) {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-  if (window.matchMedia?.("(max-width: 820px)").matches) return;
   event.preventDefault();
   prepareChatBillDraft();
 }
