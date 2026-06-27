@@ -680,11 +680,11 @@ function bindEvents() {
   $("#settingsForm").elements.profileId.addEventListener("change", renderSettings);
   $("#backupBtn").addEventListener("click", exportBackup);
   $("#restoreInput").addEventListener("change", importBackup);
+  $("#appLoginForm").addEventListener("submit", signInToBillingApp);
   $("#cloudBtn").addEventListener("click", openCloudDialog);
   $("#openCloudSettingsBtn").addEventListener("click", openCloudDialog);
   $("#cloudForm").addEventListener("submit", event => event.preventDefault());
   $("#cloudSignInBtn").addEventListener("click", signInToCloud);
-  $("#cloudSignUpBtn").addEventListener("click", signUpForCloud);
   $("#cloudSignOutBtn").addEventListener("click", signOutFromCloud);
   $("#cloudWorkspaceSelect").addEventListener("change", event => selectCloudWorkspace(event.target.value));
   $("#cloudNewWorkspaceBtn").addEventListener("click", () => createCloudWorkspace("New Workspace"));
@@ -745,6 +745,14 @@ function renderProfileSelectors() {
 }
 
 function renderAppVisibility() {
+  const locked = !cloudConfigured() || !cloudSession;
+  $("#loginGate").hidden = !locked;
+  if (locked) {
+    clearCompanyPageTransition();
+    $("#companySelector").hidden = true;
+    $("#appShell").hidden = true;
+    return;
+  }
   if (document.body.classList.contains("company-page-transitioning")) return;
   $("#companySelector").hidden = !companySelectionOpen;
   $("#appShell").hidden = companySelectionOpen;
@@ -883,11 +891,14 @@ async function initCloud() {
   cloudSession = data.session;
   cloudClient.auth.onAuthStateChange(async (_event, session) => {
     cloudSession = session;
-    if (session) await loadCloudWorkspaces();
+    if (session) {
+      await loadCloudWorkspaces();
+      renderAll();
+    }
     else {
       cloudWorkspaces = [];
       cloudWorkspace = null;
-      renderCloudUi();
+      renderAll();
     }
   });
   if (cloudSession) await loadCloudWorkspaces();
@@ -904,6 +915,8 @@ function renderCloudUi() {
   const configured = cloudConfigured();
   const signedIn = Boolean(cloudSession);
   const email = cloudSession?.user?.email || "-";
+  $("#appLoginFields").hidden = !configured || signedIn;
+  $("#appLoginNotConfigured").hidden = configured;
   $("#cloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
   $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
   $("#cloudWorkspaceLabel").textContent = cloudWorkspace?.name || "Not connected";
@@ -917,16 +930,37 @@ function renderCloudUi() {
   `).join("");
   $("#cloudWorkspaceName").value = cloudWorkspace?.name || "";
   $("#cloudMemberEmails").value = (cloudWorkspace?.member_emails || []).join("\n");
+  renderAppVisibility();
+}
+
+async function signInToBillingApp(event) {
+  event.preventDefault();
+  await signInWithCredentials({
+    email: $("#appLoginEmail").value.trim(),
+    password: $("#appLoginPassword").value,
+    button: $("#appLoginBtn")
+  });
 }
 
 async function signInToCloud() {
-  if (!cloudClient) return toast("Cloud is not configured");
-  const email = $("#cloudEmail").value.trim();
-  const password = $("#cloudPassword").value;
+  await signInWithCredentials({
+    email: $("#cloudEmail").value.trim(),
+    password: $("#cloudPassword").value,
+    button: $("#cloudSignInBtn")
+  });
+}
+
+async function signInWithCredentials({ email, password, button }) {
+  if (!cloudClient) return toast("Login is not configured");
   if (!email || !password) return toast("Enter email and password");
+  button.disabled = true;
   const { error } = await cloudClient.auth.signInWithPassword({ email, password });
+  button.disabled = false;
   if (error) return toast(error.message);
-  toast("Signed in");
+  $("#cloudDialog")?.close();
+  $("#appLoginPassword").value = "";
+  $("#cloudPassword").value = "";
+  toast("Logged in");
 }
 
 async function signUpForCloud() {

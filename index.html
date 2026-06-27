@@ -10,13 +10,34 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260627-alias-manager">
+  <link rel="stylesheet" href="styles.css?v=20260627-login-gate">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
 </head>
 <body>
-  <section class="company-selector" id="companySelector" aria-label="Select GST company">
+  <section class="login-gate" id="loginGate" aria-label="Billing login" hidden>
+    <form class="login-panel" id="appLoginForm">
+      <div class="login-brand">
+        <div class="brand-mark">B</div>
+        <div>
+          <h1>Billing</h1>
+          <p>Sign in to continue</p>
+        </div>
+      </div>
+      <div class="login-fields" id="appLoginFields">
+        <label>Email<input id="appLoginEmail" type="email" autocomplete="email" required></label>
+        <label>Password<input id="appLoginPassword" type="password" autocomplete="current-password" required></label>
+        <button class="primary-btn" id="appLoginBtn" type="submit"><i data-lucide="log-in"></i><span>Login</span></button>
+      </div>
+      <div class="auth-panel" id="appLoginNotConfigured" hidden>
+        <h4>Login is not configured</h4>
+        <p>Add Supabase details in <strong>cloud-config.js</strong>, then refresh the app.</p>
+      </div>
+    </form>
+  </section>
+
+  <section class="company-selector" id="companySelector" aria-label="Select GST company" hidden>
     <div class="company-grid" id="companyCards"></div>
   </section>
 
@@ -384,7 +405,6 @@
           <label>Email<input id="cloudEmail" type="email" autocomplete="email"></label>
           <label>Password<input id="cloudPassword" type="password" autocomplete="current-password"></label>
           <div class="dialog-actions inline-actions">
-            <button class="secondary-btn" id="cloudSignUpBtn" type="button">Create Account</button>
             <button class="primary-btn" id="cloudSignInBtn" type="button"><i data-lucide="log-in"></i><span>Sign In</span></button>
           </div>
         </div>
@@ -428,6 +448,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260627-tally-buyers"></script>
+  <script src="app.js?v=20260627-login-gate"></script>
 </body>
 </html>
