@@ -616,6 +616,80 @@ textarea { resize: vertical; }
 
 .span-2 { grid-column: span 2; }
 
+.alias-manager-field {
+  display: grid;
+  gap: 6px;
+}
+
+.alias-manager-field > label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.alias-manager {
+  display: grid;
+  gap: 8px;
+}
+
+.alias-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.alias-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 5px 4px 9px;
+  border: 1px solid #c7ded8;
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.alias-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alias-chip .mini-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--primary-dark);
+}
+
+.alias-empty,
+.alias-help {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.alias-empty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.alias-help {
+  margin: 0;
+  line-height: 1.35;
+}
+
 .line-editor {
   padding: 0 20px 18px;
 }
@@ -1782,6 +1856,9 @@ textarea { resize: vertical; }
   }
   .purchase-review-head > div:last-child {
     text-align: left;
+  }
+  .alias-input-row {
+    grid-template-columns: 1fr;
   }
   .chat-dialog .dialog-actions {
     display: grid;

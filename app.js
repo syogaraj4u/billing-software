@@ -241,6 +241,7 @@ let companySelectionOpen = true;
 let companyPageTransitionTimer = null;
 let currentInvoiceFileName = "invoice.pdf";
 let currentInvoiceShareContext = null;
+let partyAliasDraft = [];
 
 const COMPANY_PAGE_TRANSITION_MS = 460;
 
@@ -561,6 +562,8 @@ function bindEvents() {
   $("#prepareChatBillBtn").addEventListener("click", prepareChatBillDraft);
   $("#itemForm").addEventListener("submit", saveItem);
   $("#partyForm").addEventListener("submit", saveParty);
+  $("#addPartyAliasBtn").addEventListener("click", addPartyAliasFromInput);
+  $("#partyAliasInput").addEventListener("keydown", handlePartyAliasInputKeydown);
   $("#saveSettingsBtn").addEventListener("click", saveSettings);
   $("#changeCompanyBtn").addEventListener("click", openCompanySelector);
   $("#settingsForm").elements.profileId.addEventListener("change", renderSettings);
@@ -1404,22 +1407,136 @@ function openParty(id = null) {
   const party = state.parties.find(row => row.id === id);
   const form = $("#partyForm");
   form.reset();
-  ["name", "type", "gstin", "aliases", "phone", "place", "address"].forEach(key => {
+  ["name", "type", "gstin", "phone", "place", "address"].forEach(key => {
     form.elements[key].value = party?.[key] ?? (key === "type" ? "Customer" : "");
   });
+  partyAliasDraft = partyAliasList(party || {});
+  renderPartyAliasManager();
   $("#partyDialog").showModal();
   if (window.lucide) lucide.createIcons();
+}
+
+function handlePartyAliasInputKeydown(event) {
+  if (event.key !== "Enter" && event.key !== ",") return;
+  event.preventDefault();
+  addPartyAliasFromInput();
+}
+
+function addPartyAliasFromInput() {
+  commitPendingPartyAliasInput();
+}
+
+function commitPendingPartyAliasInput() {
+  const input = $("#partyAliasInput");
+  const values = splitPartyAliases(input.value);
+  if (!values.length) {
+    renderPartyAliasManager("Enter a short name first");
+    return false;
+  }
+  let added = false;
+  let blocked = false;
+  values.forEach(alias => {
+    if (addPartyAlias(alias)) added = true;
+    else blocked = true;
+  });
+  input.value = "";
+  if (added) renderPartyAliasManager("Alias added");
+  return !blocked;
+}
+
+function addPartyAlias(alias) {
+  const cleaned = cleanPartyAlias(alias);
+  if (!cleaned) return false;
+  const normalized = normalizeForAlias(cleaned);
+  if (GENERIC_PARTY_ALIASES.has(normalized)) {
+    renderPartyAliasManager("That short name is too common");
+    return false;
+  }
+  if (partyAliasDraft.some(item => normalizeForAlias(item) === normalized)) {
+    renderPartyAliasManager("Short name already added");
+    return false;
+  }
+  const conflict = partyAliasConflict(cleaned, editingPartyId);
+  if (conflict) {
+    renderPartyAliasManager(`Already used by ${conflict.name}`);
+    return false;
+  }
+  partyAliasDraft.push(cleaned);
+  return true;
+}
+
+function renderPartyAliasManager(message = "") {
+  const form = $("#partyForm");
+  const aliases = cleanPartyAliasList(partyAliasDraft);
+  partyAliasDraft = aliases;
+  form.elements.aliases.value = aliases.join("\n");
+  const chipHolder = $("#partyAliasChips");
+  chipHolder.innerHTML = aliases.map(alias => `
+    <span class="alias-chip">
+      <span>${escapeHtml(alias)}</span>
+      <button type="button" class="mini-btn" data-party-alias="${escapeHtml(alias)}" title="Remove ${escapeHtml(alias)}"><i data-lucide="x"></i></button>
+    </span>
+  `).join("") || `<span class="alias-empty">No short names added</span>`;
+  $$("[data-party-alias]", chipHolder).forEach(button => {
+    button.addEventListener("click", () => {
+      removePartyAlias(button.dataset.partyAlias);
+    });
+  });
+  $("#partyAliasHint").textContent = message || aliasManagerHint();
+  if (window.lucide) lucide.createIcons();
+}
+
+function removePartyAlias(alias) {
+  const normalized = normalizeForAlias(alias);
+  partyAliasDraft = partyAliasDraft.filter(item => normalizeForAlias(item) !== normalized);
+  renderPartyAliasManager("Alias removed");
+}
+
+function aliasManagerHint() {
+  return "Example: Lakshmi, LJT, Lakshmi Jeyapandi.";
+}
+
+function partyAliasConflict(alias, ownerId = editingPartyId) {
+  const normalized = normalizeForAlias(alias);
+  if (!normalized) return null;
+  return state.parties.find(party => party.id !== ownerId && partyAliases(party).some(existing => normalizeForAlias(existing) === normalized)) || null;
+}
+
+function splitPartyAliases(value) {
+  return String(value || "")
+    .split(/[\n,;]/)
+    .map(cleanPartyAlias)
+    .filter(Boolean);
+}
+
+function cleanPartyAlias(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanPartyAliasList(value) {
+  const aliases = Array.isArray(value) ? value : splitPartyAliases(value);
+  const seen = new Set();
+  return aliases.map(cleanPartyAlias).filter(alias => {
+    const normalized = normalizeForAlias(alias);
+    if (!normalized || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
 }
 
 function saveParty(event) {
   event.preventDefault();
   const form = $("#partyForm");
+  if ($("#partyAliasInput").value.trim() && !commitPendingPartyAliasInput()) return;
+  renderPartyAliasManager();
   const party = {
     id: editingPartyId || uid(),
     name: form.elements.name.value.trim(),
     type: form.elements.type.value,
     gstin: form.elements.gstin.value.trim(),
-    aliases: form.elements.aliases.value.trim(),
+    aliases: cleanPartyAliasList(form.elements.aliases.value).join("\n"),
     phone: form.elements.phone.value.trim(),
     place: form.elements.place.value.trim(),
     address: form.elements.address.value.trim()
@@ -2625,7 +2742,16 @@ function escapeRegExp(value) {
 }
 
 function customerParties() {
-  return state.parties.filter(party => ["Customer", "Both"].includes(party.type));
+  return partiesForRole("Customer");
+}
+
+function supplierParties() {
+  return partiesForRole("Supplier");
+}
+
+function partiesForRole(role) {
+  const wanted = role === "Supplier" ? ["Supplier", "Both"] : ["Customer", "Both"];
+  return state.parties.filter(party => wanted.includes(party.type));
 }
 
 function partyMentions(message) {
@@ -2699,10 +2825,7 @@ function derivedPartyAliases(name) {
 }
 
 function partyAliasList(party) {
-  return String(party.aliases || "")
-    .split(/[\n,;]/)
-    .map(alias => alias.trim())
-    .filter(Boolean);
+  return cleanPartyAliasList(party?.aliases || "");
 }
 
 function extractCustomerName(message, gstin) {
@@ -2962,9 +3085,10 @@ function buildChatSaleDraft(parsed, sourceMessage) {
 
 function ensureChatCustomer(parsed) {
   const normalizedGstin = normalizeGstin(parsed.customerGstin);
-  const existing = state.parties.find(party => (
+  const customerName = String(parsed.customerName || "").trim();
+  const existing = customerParties().find(party => (
     normalizedGstin && normalizeGstin(party.gstin) === normalizedGstin
-  ) || party.name.toLowerCase() === String(parsed.customerName || "").toLowerCase());
+  ) || party.name.toLowerCase() === customerName.toLowerCase() || partyAliasMatch(party, customerName).index >= 0);
   if (existing) {
     updateExistingChatCustomer(existing, parsed, normalizedGstin);
     return existing.id;
@@ -2988,9 +3112,7 @@ function updateExistingChatCustomer(party, parsed, normalizedGstin) {
   if (!String(party.place || "").trim()) {
     party.place = parsed.customerPlace || stateNameFromGstin(normalizedGstin) || stateCodeFromGstin(normalizedGstin) || "";
   }
-  if (!String(party.aliases || "").trim() && parsed.customerName && parsed.customerName !== party.name) {
-    party.aliases = parsed.customerName;
-  }
+  if (parsed.customerName) appendPartyAlias(party, parsed.customerName);
 }
 
 function ensureChatItem(line) {
@@ -3483,21 +3605,41 @@ function buildPurchaseDraft(parsed) {
 }
 
 function ensureImportedSupplier(parsed) {
-  const existing = state.parties.find(party => (
-    parsed.supplierGstin && party.gstin.toUpperCase() === parsed.supplierGstin.toUpperCase()
-  ) || party.name.toLowerCase() === parsed.supplierName.toLowerCase());
-  if (existing) return existing.id;
+  const supplierName = parsed.supplierName || "Imported Supplier";
+  const supplierGstin = normalizeGstin(parsed.supplierGstin);
+  const existing = supplierParties().find(party => (
+    supplierGstin && normalizeGstin(party.gstin) === supplierGstin
+  ) || party.name.toLowerCase() === supplierName.toLowerCase() || partyAliasMatch(party, supplierName).index >= 0);
+  if (existing) {
+    updateExistingImportedSupplier(existing, parsed, supplierGstin);
+    return existing.id;
+  }
   const party = {
     id: uid(),
-    name: parsed.supplierName,
+    name: supplierName,
     type: "Supplier",
-    gstin: parsed.supplierGstin,
+    gstin: supplierGstin,
     phone: "",
     place: "",
-    address: ""
+    address: "",
+    aliases: ""
   };
   state.parties.push(party);
   return party.id;
+}
+
+function updateExistingImportedSupplier(party, parsed, supplierGstin) {
+  if (!normalizeGstin(party.gstin) && supplierGstin) party.gstin = supplierGstin;
+  if (parsed.supplierName) appendPartyAlias(party, parsed.supplierName);
+}
+
+function appendPartyAlias(party, alias) {
+  const cleaned = cleanPartyAlias(alias);
+  if (!cleaned || normalizeForAlias(cleaned) === normalizeForAlias(party.name)) return;
+  if (GENERIC_PARTY_ALIASES.has(normalizeForAlias(cleaned))) return;
+  if (partyAliasConflict(cleaned, party.id)) return;
+  const aliases = cleanPartyAliasList([...(partyAliasList(party) || []), cleaned]);
+  party.aliases = aliases.join("\n");
 }
 
 function ensureImportedItem(line) {

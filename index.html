@@ -10,7 +10,7 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260627-whatsapp-share">
+  <link rel="stylesheet" href="styles.css?v=20260627-alias-manager">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -342,7 +342,18 @@
         <label class="span-2">Name<input name="name" required></label>
         <label>Type<select name="type"><option>Customer</option><option>Supplier</option><option>Both</option></select></label>
         <label>GSTIN<input name="gstin"></label>
-        <label class="span-2">Short Names<textarea name="aliases" rows="2" placeholder="ABC&#10;ABC Traders"></textarea></label>
+        <div class="span-2 alias-manager-field">
+          <label for="partyAliasInput">Short Names</label>
+          <input name="aliases" type="hidden">
+          <div class="alias-manager">
+            <div class="alias-input-row">
+              <input id="partyAliasInput" type="text" placeholder="Lakshmi, LJT, Lakshmi Jeyapandi">
+              <button class="secondary-btn" id="addPartyAliasBtn" type="button"><i data-lucide="plus"></i><span>Add</span></button>
+            </div>
+            <div class="alias-chip-list" id="partyAliasChips"></div>
+            <p class="alias-help" id="partyAliasHint">Add short names you use in Smart Bill or purchase uploads.</p>
+          </div>
+        </div>
         <label>Phone<input name="phone"></label>
         <label>Place<input name="place"></label>
         <label class="span-2">Address<textarea name="address" rows="3"></textarea></label>
@@ -417,6 +428,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260627-whatsapp-share"></script>
+  <script src="app.js?v=20260627-alias-manager"></script>
 </body>
 </html>
