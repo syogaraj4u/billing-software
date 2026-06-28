@@ -2631,26 +2631,17 @@ async function prepareChatBillDraft() {
   $("#chatBillSummary").innerHTML = `<span class="help-text">Checking details...</span>`;
   try {
     const fullMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.text).join("\n");
-    const typedMessage = chatBillMessages.filter(row => row.role === "user").map(row => row.rawText || "").join("\n").trim();
     const allAttachments = chatBillMessages.filter(row => row.role === "user").flatMap(row => row.attachments || []);
     const cloudResult = await parseSaleChatWithCloud(fullMessage, allAttachments);
     const cloudError = lastSaleChatCloudError;
-    if (!cloudResult && cloudError && !allAttachments.length) {
-      appendChatBillMessage("assistant", `ChatGPT is not connected now. ${cloudError} I used basic local parsing for this typed message.`);
+    if (!cloudResult) {
+      const reason = cloudError || "ChatGPT did not return a response.";
+      appendChatBillMessage("assistant", `Smart Bill needs ChatGPT for this. ${reason} Please fix the Cloud/OpenAI connection and send again.`);
+      $("#chatBillSummary").innerHTML = `<strong>ChatGPT not connected</strong><span class="help-text">${escapeHtml(reason)}</span>`;
+      return;
     }
-    if (allAttachments.length && !cloudResult) {
-      const reason = cloudError ? ` Reason: ${cloudError}` : "";
-      appendChatBillMessage("assistant", `ChatGPT image reading is not connected now.${reason} Type the bill-to and ship-to details here, then I can continue with basic local parsing.`);
-      if (!typedMessage) {
-        $("#chatBillSummary").innerHTML = `<strong>Image reading unavailable</strong><span class="help-text">Type the address details or try again after Cloud is ready.</span>`;
-        return;
-      }
-    }
-    const sourceMessage = cloudResult ? fullMessage : (typedMessage || fullMessage);
-    const parsed = applySaleChatDefaults(cloudResult?.draft || parseSaleChatLocal(sourceMessage), sourceMessage);
-    const missing = cloudResult
-      ? saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]))
-      : missingSaleBillDetails(parsed, fullMessage);
+    const parsed = applySaleChatDefaults(cloudResult.draft || {}, fullMessage);
+    const missing = saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]));
     if (missing.length) {
       const nextMissing = nextSaleMissingDetail(missing);
       const question = (cloudResult && cleanSaleAssistantMessage(cloudResult.assistantMessage))
