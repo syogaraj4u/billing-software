@@ -883,7 +883,12 @@ async function initCloud() {
   renderCloudUi();
   if (!cloudConfigured()) return;
   const config = cloudConfig();
-  cloudClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey);
+  cloudClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: {
+      storage: window.sessionStorage,
+      persistSession: true
+    }
+  });
   const { data, error } = await cloudClient.auth.getSession();
   if (error) {
     toast("Cloud session could not be loaded");
