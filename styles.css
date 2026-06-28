@@ -698,6 +698,23 @@ textarea { resize: vertical; }
 
 .span-2 { grid-column: span 2; }
 
+.entry-party-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.entry-party-field label {
+  min-width: 0;
+}
+
+.entry-party-field .secondary-btn {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
 .alias-manager-field {
   display: grid;
   gap: 6px;
@@ -2246,9 +2263,10 @@ textarea { resize: vertical; }
   #partyRows td:nth-child(1)::before { content: "Name"; }
   #partyRows td:nth-child(2)::before { content: "Type"; }
   #partyRows td:nth-child(3)::before { content: "GSTIN"; }
-  #partyRows td:nth-child(4)::before { content: "Short Names"; }
-  #partyRows td:nth-child(5)::before { content: "Phone"; }
+  #partyRows td:nth-child(4)::before { content: "Address"; }
+  #partyRows td:nth-child(5)::before { content: "Contact"; }
   #partyRows td:nth-child(6)::before { content: "Place"; }
+  #partyRows td:nth-child(7)::before { content: "Short Names"; }
   #salesRows td:last-child::before,
   #purchaseRows td:last-child::before,
   #itemRows td:last-child::before,
@@ -2272,6 +2290,12 @@ textarea { resize: vertical; }
   #invoicePrintArea {
     padding-left: 14px;
     padding-right: 14px;
+  }
+  .entry-party-field {
+    grid-template-columns: 1fr;
+  }
+  .entry-party-field .secondary-btn {
+    width: 100%;
   }
   .dialog-actions {
     display: grid;

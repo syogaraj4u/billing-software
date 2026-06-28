@@ -302,6 +302,7 @@ let selectedPurchaseIds = new Set();
 let purchaseUploadQueue = [];
 let purchaseUploadBusy = false;
 let entryDraftMeta = {};
+let partyDialogContext = null;
 let chatBillMessages = [];
 let chatBillAttachments = [];
 let chatBillPreparing = false;
@@ -406,6 +407,7 @@ function normalizePartyForState(party) {
     type: party.type || "Customer",
     gstin: party.gstin || "",
     phone: party.phone || "",
+    email: party.email || "",
     place: party.place || "",
     address: party.address || "",
     aliases: party.aliases || ""
@@ -758,8 +760,9 @@ function bindEvents() {
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
   $("#newItemBtn").addEventListener("click", () => openItem());
-  $("#newPartyBtn").addEventListener("click", () => openParty());
+  $("#newPartyBtn").addEventListener("click", () => openParty(null, { type: "Customer", title: "New Buyer", saveLabel: "Save Buyer" }));
   $("#addLineBtn").addEventListener("click", () => addLineRow());
+  $("#entryAddBuyerBtn").addEventListener("click", openBuyerFromEntry);
   $("#entryForm").addEventListener("submit", saveEntry);
   $("#chatBillForm").addEventListener("submit", event => event.preventDefault());
   $("#closeChatBillBtn").addEventListener("click", closeChatBillDialog);
@@ -826,7 +829,7 @@ function showView(view) {
     sales: "Sales",
     purchases: "Purchases",
     items: "Items",
-    parties: "Parties",
+    parties: "Buyer Master",
     reports: "Reports",
     settings: "Settings"
   }[view];
@@ -1413,20 +1416,40 @@ function renderItems() {
 }
 
 function renderParties() {
-  $("#partyRows").innerHTML = state.parties.map(party => `
+  $("#partyRows").innerHTML = partyMasterRows().map(party => `
     <tr>
       <td>${escapeHtml(party.name)}</td>
       <td>${escapeHtml(party.type)}</td>
       <td>${escapeHtml(party.gstin)}</td>
-      <td>${escapeHtml(partyAliasList(party).join(", "))}</td>
-      <td>${escapeHtml(party.phone)}</td>
+      <td>${escapeHtml(party.address || "-")}</td>
+      <td>${renderPartyContact(party)}</td>
       <td>${escapeHtml(party.place)}</td>
+      <td>${escapeHtml(partyAliasList(party).join(", "))}</td>
       <td><div class="row-actions">
         <button class="mini-btn" title="Edit" onclick="openParty('${party.id}')"><i data-lucide="pencil"></i></button>
         <button class="mini-btn" title="Delete" onclick="deleteParty('${party.id}')"><i data-lucide="trash-2"></i></button>
       </div></td>
     </tr>
-  `).join("") || emptyRow(7, "No parties");
+  `).join("") || emptyRow(8, "No buyers added");
+}
+
+function partyMasterRows() {
+  return [...state.parties].sort((a, b) => {
+    const typeRank = partyTypeRank(a.type) - partyTypeRank(b.type);
+    if (typeRank) return typeRank;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+function partyTypeRank(type) {
+  if (type === "Customer") return 0;
+  if (type === "Both") return 1;
+  return 2;
+}
+
+function renderPartyContact(party) {
+  const values = [party.phone, party.email].map(value => String(value || "").trim()).filter(Boolean);
+  return values.length ? values.map(escapeHtml).join("<br>") : "-";
 }
 
 function renderSettings() {
@@ -1448,7 +1471,12 @@ function emptyRow(colspan, label) {
 
 function partyOptions(kind, selected = "") {
   const wanted = kind === "sale" ? ["Customer", "Both"] : ["Supplier", "Both"];
-  const choices = state.parties.filter(party => wanted.includes(party.type));
+  const choices = state.parties
+    .filter(party => wanted.includes(party.type))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  if (!choices.length) {
+    return `<option value="">${kind === "sale" ? "Add buyer first" : "Add supplier first"}</option>`;
+  }
   return choices.map(party => `<option value="${party.id}" ${party.id === selected ? "selected" : ""}>${escapeHtml(party.name)}</option>`).join("");
 }
 
@@ -1486,6 +1514,8 @@ function openEntry(kind, id = null, draft = null) {
   };
   form.elements.status.value = source?.status || "Paid";
   form.elements.notes.value = source?.notes || "";
+  $("#entryPartyLabelText").textContent = kind === "sale" ? "Buyer" : "Supplier";
+  $("#entryAddBuyerBtn").hidden = kind !== "sale";
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
   form.elements.partyId.onchange = updateEntryTotals;
   $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview(kind, source);
@@ -1922,13 +1952,26 @@ function deleteItem(id) {
   toast("Item deleted");
 }
 
-function openParty(id = null) {
+function openBuyerFromEntry() {
+  if (entryMode !== "sale") return;
+  openParty(null, {
+    type: "Customer",
+    title: "New Buyer",
+    saveLabel: "Save Buyer",
+    context: "entry-buyer"
+  });
+}
+
+function openParty(id = null, options = {}) {
   editingPartyId = id;
+  partyDialogContext = options.context ? { source: options.context } : null;
   const party = state.parties.find(row => row.id === id);
   const form = $("#partyForm");
   form.reset();
-  ["name", "type", "gstin", "phone", "place", "address"].forEach(key => {
-    form.elements[key].value = party?.[key] ?? (key === "type" ? "Customer" : "");
+  $("#partyDialogTitle").textContent = party ? "Edit Buyer / Supplier" : (options.title || "New Buyer");
+  $("#savePartyBtn span").textContent = options.saveLabel || (party ? "Save Party" : "Save Buyer");
+  ["name", "type", "gstin", "phone", "email", "place", "address"].forEach(key => {
+    form.elements[key].value = party?.[key] ?? (key === "type" ? (options.type || "Customer") : "");
   });
   partyAliasDraft = partyAliasList(party || {});
   renderPartyAliasManager();
@@ -2051,15 +2094,32 @@ function saveParty(event) {
   const form = $("#partyForm");
   if ($("#partyAliasInput").value.trim() && !commitPendingPartyAliasInput()) return;
   renderPartyAliasManager();
+  const type = form.elements.type.value;
+  const gstin = normalizeGstin(form.elements.gstin.value);
+  const address = form.elements.address.value.trim();
+  if (isBuyerType(type) && !isValidGstin(gstin)) {
+    toast("Buyer GSTIN is required");
+    return;
+  }
+  if (isBuyerType(type) && !address) {
+    toast("Buyer address is required");
+    return;
+  }
+  const duplicate = findPartyByGstin(gstin, editingPartyId);
+  if (duplicate) {
+    toast(`GSTIN already exists for ${duplicate.name}`);
+    return;
+  }
   const party = {
     id: editingPartyId || uid(),
     name: form.elements.name.value.trim(),
-    type: form.elements.type.value,
-    gstin: form.elements.gstin.value.trim(),
+    type,
+    gstin,
     aliases: cleanPartyAliasList(form.elements.aliases.value).join("\n"),
     phone: form.elements.phone.value.trim(),
-    place: form.elements.place.value.trim(),
-    address: form.elements.address.value.trim()
+    email: form.elements.email.value.trim(),
+    place: form.elements.place.value.trim() || stateNameFromGstin(gstin) || "",
+    address
   };
   const index = state.parties.findIndex(row => row.id === party.id);
   if (index >= 0) state.parties[index] = party;
@@ -2067,7 +2127,27 @@ function saveParty(event) {
   saveState();
   $("#partyDialog").close();
   renderAll();
-  toast("Party saved");
+  selectSavedPartyInOpenEntry(party);
+  toast(isBuyerType(party.type) ? "Buyer saved for all GST companies" : "Party saved");
+  partyDialogContext = null;
+}
+
+function isBuyerType(type) {
+  return type === "Customer" || type === "Both";
+}
+
+function findPartyByGstin(gstin, excludeId = "") {
+  const normalized = normalizeGstin(gstin);
+  if (!normalized) return null;
+  return state.parties.find(party => party.id !== excludeId && normalizeGstin(party.gstin) === normalized) || null;
+}
+
+function selectSavedPartyInOpenEntry(party) {
+  if (partyDialogContext?.source !== "entry-buyer" || !$("#entryDialog")?.open || entryMode !== "sale") return;
+  const form = $("#entryForm");
+  form.elements.partyId.innerHTML = partyOptions("sale", party.id);
+  form.elements.partyId.value = party.id;
+  updateEntryTotals();
 }
 
 function deleteParty(id) {
@@ -3422,6 +3502,7 @@ function buildPartyAliasPayload() {
     name: party.name || "",
     gstin: normalizeGstin(party.gstin),
     phone: party.phone || "",
+    email: party.email || "",
     place: party.place || "",
     address: party.address || "",
     aliases: partyAliases(party)
