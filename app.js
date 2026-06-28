@@ -1511,7 +1511,9 @@ function openEntry(kind, id = null, draft = null) {
     source: source?.source || (draft ? "imported" : "manual"),
     extractedTaxes: clone(source?.extractedTaxes || null),
     sellerGstin: source?.sellerGstin || "",
-    buyerGstin: source?.buyerGstin || ""
+    buyerGstin: source?.buyerGstin || "",
+    purchaseReviewAccepted: false,
+    purchaseReviewSignature: ""
   };
   const form = $("#entryForm");
   form.reset();
@@ -1534,6 +1536,7 @@ function openEntry(kind, id = null, draft = null) {
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
   form.elements.partyId.onchange = updateEntryTotals;
   $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview(kind, source);
+  bindPurchaseReviewControls();
   $("#lineRows").innerHTML = "";
   (source?.lines?.length ? source.lines : [blankLine(kind)]).forEach(line => addLineRow(line));
   updateEntryTotals();
@@ -1542,7 +1545,7 @@ function openEntry(kind, id = null, draft = null) {
 }
 
 function renderPurchaseUploadReview(kind, source) {
-  if (kind !== "purchase" || !source || source.source !== "purchase-upload") return "";
+  if (kind !== "purchase" || !source) return "";
   const profile = profileById(source.profileId || activeProfileId());
   const supplier = partyById(source.partyId) || {};
   const calculated = calculateEntryTotals(source.lines || [], profile, supplier, "purchase");
@@ -1553,12 +1556,15 @@ function renderPurchaseUploadReview(kind, source) {
     ...purchaseTaxReviewMessages(extracted, calculated),
     ...purchaseDuplicateReviewMessages(source, source.id || editingEntryId)
   ]);
+  const hasUploadContext = source.source === "purchase-upload" || (source.attachments || []).length || Object.values(extracted).some(value => num(value));
+  if (!hasUploadContext && !messages.length) return "";
+  syncPurchaseReviewAcceptance(messages);
   const attachments = source.attachments || [];
   const taxModeLabel = calculated.taxMode === "IGST" ? "IGST" : "CGST/SGST";
   return `<section class="purchase-review-panel">
     <div class="purchase-review-head">
       <div>
-        <span>Purchase Upload Review</span>
+        <span>${source.source === "purchase-upload" ? "Purchase Upload Review" : "Purchase Review"}</span>
         <strong>${escapeHtml(source.number || "-")}</strong>
       </div>
       <div>
@@ -1583,7 +1589,42 @@ function renderPurchaseUploadReview(kind, source) {
     ${renderExtractedTaxReview(extracted)}
     ${renderPurchaseAttachmentReview(attachments)}
     ${messages.length ? `<div class="purchase-review-warnings">${messages.map(message => `<span>${escapeHtml(message)}</span>`).join("")}</div>` : ""}
+    ${renderPurchaseReviewAcceptance(messages)}
   </section>`;
+}
+
+function syncPurchaseReviewAcceptance(messages = []) {
+  const signature = messages.join(" | ");
+  if (!signature) {
+    entryDraftMeta.purchaseReviewSignature = "";
+    entryDraftMeta.purchaseReviewAccepted = false;
+    return;
+  }
+  if (entryDraftMeta.purchaseReviewSignature !== signature) {
+    entryDraftMeta.purchaseReviewSignature = signature;
+    entryDraftMeta.purchaseReviewAccepted = false;
+  }
+}
+
+function renderPurchaseReviewAcceptance(messages = []) {
+  if (!messages.length) return "";
+  return `<label class="purchase-review-accept">
+    <input id="purchaseReviewAccept" type="checkbox" ${entryDraftMeta.purchaseReviewAccepted ? "checked" : ""}>
+    <span>I reviewed these warnings and want to save this purchase.</span>
+  </label>`;
+}
+
+function bindPurchaseReviewControls() {
+  const control = $("#purchaseReviewAccept");
+  if (!control) return;
+  control.addEventListener("change", event => {
+    entryDraftMeta.purchaseReviewAccepted = event.target.checked;
+  });
+}
+
+function rememberPurchaseReviewAcceptance() {
+  const control = $("#purchaseReviewAccept");
+  if (control) entryDraftMeta.purchaseReviewAccepted = control.checked;
 }
 
 function currentPurchaseReviewSource(lines = collectLines()) {
@@ -1712,8 +1753,10 @@ function updateEntryTotals() {
   $("#entryIgst").textContent = money(calculated.igst);
   $("#entryGst").textContent = money(calculated.gst);
   $("#entryTotal").textContent = money(calculated.total);
-  if (entryMode === "purchase" && entryDraftMeta.source === "purchase-upload") {
+  if (entryMode === "purchase" && (entryDraftMeta.source === "purchase-upload" || $("#purchaseReviewPanel").innerHTML.trim())) {
+    rememberPurchaseReviewAcceptance();
     $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", currentPurchaseReviewSource());
+    bindPurchaseReviewControls();
   }
 }
 
@@ -1887,11 +1930,13 @@ function saveEntry(event) {
       entry.reviewMessages = uniqueMessages([...entry.reviewMessages, ...duplicateMessages]);
       entry.reviewStatus = "Needs Review";
     }
-    if (entry.source === "purchase-upload" && entry.reviewMessages.length) {
+    if (entry.reviewMessages.length) {
       $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", entry);
-      const previewMessages = entry.reviewMessages.slice(0, 6).map(message => `- ${message}`).join("\n");
-      const extra = entry.reviewMessages.length > 6 ? `\n- ${entry.reviewMessages.length - 6} more review note(s)` : "";
-      if (!confirm(`Purchase needs review before saving:\n\n${previewMessages}${extra}\n\nSave this purchase anyway?`)) return;
+      bindPurchaseReviewControls();
+      if (!$("#purchaseReviewAccept")?.checked) {
+        toast("Review purchase warnings and tick the checkbox before saving");
+        return;
+      }
     }
   }
   const list = entryList(entryMode);
