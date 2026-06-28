@@ -545,6 +545,10 @@ function normalizeGstin(value) {
   return String(value || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
 }
 
+function isValidGstin(value) {
+  return /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(normalizeGstin(value));
+}
+
 function stateCodeFromGstin(gstin) {
   const normalized = normalizeGstin(gstin);
   return /^\d{2}/.test(normalized) ? normalized.slice(0, 2) : "";
@@ -1510,6 +1514,10 @@ function saveEntry(event) {
   }
   const profile = profileById(form.elements.profileId.value);
   const party = partyById(form.elements.partyId.value);
+  if (entryMode === "sale" && !isValidGstin(party?.gstin)) {
+    toast("Buyer GSTIN is required for B2B sale");
+    return;
+  }
   const calculated = calculateEntryTotals(lines, profile, party, entryMode);
   const reviewMessages = uniqueMessages([
     ...calculated.reviewMessages,
@@ -1529,8 +1537,8 @@ function saveEntry(event) {
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
-    sellerGstin: entryDraftMeta.sellerGstin || normalizeGstin(party?.gstin),
-    buyerGstin: entryDraftMeta.buyerGstin || normalizeGstin(profile?.gstin),
+    sellerGstin: entryDraftMeta.sellerGstin || normalizeGstin(entryMode === "purchase" ? party?.gstin : profile?.gstin),
+    buyerGstin: entryDraftMeta.buyerGstin || normalizeGstin(entryMode === "purchase" ? profile?.gstin : party?.gstin),
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
   };
@@ -2854,7 +2862,7 @@ function missingSaleBillDetails(parsed, sourceMessage) {
   const missing = [];
   const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
   if (!String(parsed.customerName || "").trim() || /^chat customer$/i.test(parsed.customerName)) missing.push("customer business name");
-  if (!normalizeGstin(parsed.customerGstin)) missing.push("customer GSTIN");
+  if (!isValidGstin(parsed.customerGstin)) missing.push("customer GSTIN");
   if (!String(parsed.customerAddress || "").trim()) missing.push("customer address");
   if (!lines.length) {
     missing.push("item name");
@@ -2929,7 +2937,9 @@ function saleChatMissingDetails(details) {
 }
 
 function cleanSaleAssistantMessage(message) {
-  return message && !/\bgst\s*(rate|percentage|%)?\b|\b(payment\s*)?status\b|\bpaid\b|\bunpaid\b|\bpartial\b/i.test(message);
+  const cleaned = typeof message === "string" ? message.trim() : "";
+  if (!cleaned) return "";
+  return !/\bgst\s*(rate|percentage|%)?\b|\b(payment\s*)?status\b|\bpaid\b|\bunpaid\b|\bpartial\b/i.test(cleaned) ? cleaned : "";
 }
 
 function extractProfileFromMessage(message) {
@@ -3529,6 +3539,14 @@ function showSmartBillReview(parsed, sourceMessage) {
 
 function confirmSmartBillReview() {
   if (!pendingSmartBillReview) return toast("Prepare Smart Bill details first");
+  const missing = saleChatMissingDetails(missingSaleBillDetails(pendingSmartBillReview.parsed, pendingSmartBillReview.sourceMessage));
+  if (missing.length) {
+    const nextMissing = nextSaleMissingDetail(missing);
+    appendChatBillMessage("assistant", buildMissingSaleQuestion(nextMissing, pendingSmartBillReview.parsed));
+    $("#chatBillSummary").innerHTML = `<strong>Need 1 more detail</strong><span class="help-text">${escapeHtml(shortMissingDetailLabel(nextMissing))}</span>`;
+    pendingSmartBillReview = null;
+    return;
+  }
   const draft = buildChatSaleDraft(pendingSmartBillReview.parsed, pendingSmartBillReview.sourceMessage);
   saveState();
   renderAll();

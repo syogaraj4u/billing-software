@@ -110,6 +110,7 @@ Deno.serve(async request => {
                 "The user has already selected the seller GST company in the app. activeProfileId is always the seller profileId. Never choose or change the seller from chat text or screenshots.",
                 "Read the full conversation text and any attached bill-to or ship-to screenshots, then decide if the sale bill has enough details to create a draft.",
                 "Required details: customer business name, customer GSTIN, customer bill-to address, item name, quantity, and rate.",
+                "This is a B2B billing app. A valid customer GSTIN is mandatory. Never set ready true unless customerGstin is present and looks like a valid Indian GSTIN.",
                 "Always set draft.profileId to activeProfileId.",
                 "Treat phrases like bill to, buyer, customer, party, to, ship to, and screenshots as buyer/customer information only.",
                 "For internal billing between provided GST profiles, if the chat says bill to X, buyer X, customer X, or selected seller to X, X is the customer, not the seller. Fill customerName, customerGstin, customerAddress, and customerPlace from that provided profile.",
@@ -123,6 +124,7 @@ Deno.serve(async request => {
                 "If Bill To and Ship To are different, keep Bill To in the customer fields and write the Ship To name/address/GSTIN clearly in draft.notes.",
                 "Parse stock-list item formats with headings like Fresh Stock or Activated Stock and bullet lines like 'iPhone 17 256GB - 112 Qty@86000' as invoice lines: item name should include the heading prefix, quantity is the Qty number, and rate is the amount after @/at/rate.",
                 "Do not invent unknown customer values. If a short buyer name is ambiguous, ask for clarification.",
+                "If buyer name is present but GSTIN is not available in chat, screenshots, partyAliases, or profiles, set ready false and missingDetails to customer GSTIN.",
                 "If anything is missing after reading both text and images, set ready false and include only the next one missing detail in missingDetails, using this priority order: customer business name, customer GSTIN, item name, quantity, rate, customer bill-to address.",
                 "assistantMessage must ask exactly one short follow-up question for that single missing detail. Do not combine multiple missing details in one question.",
                 "If complete, set ready true and assistantMessage to a short confirmation. Return only schema fields."
@@ -165,6 +167,13 @@ Deno.serve(async request => {
     if (activeProfileId) draft.profileId = activeProfileId;
     draft.customerAddress = draft.customerAddress || "";
     draft.customerPlace = draft.customerPlace || "";
+    if (!isValidGstin(draft.customerGstin)) {
+      const buyerName = typeof draft.customerName === "string" && draft.customerName.trim() ? draft.customerName.trim() : "the buyer";
+      result.ready = false;
+      result.missingDetails = ["customer GSTIN"];
+      result.assistantMessage = `Please share the GSTIN for ${buyerName}.`;
+      draft.customerGstin = "";
+    }
     draft.lines = (draft.lines || []).map((line: SaleLine) => ({
       name: line.name || "",
       hsn: line.hsn || "",
@@ -242,6 +251,14 @@ function normalizeImageAttachments(value: unknown): ChatAttachment[] {
       };
     })
     .filter(item => ["image/png", "image/jpeg", "image/webp"].includes(item.mimeType || "") && Boolean(item.base64));
+}
+
+function normalizeGstin(value: unknown) {
+  return String(value || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+}
+
+function isValidGstin(value: unknown) {
+  return /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(normalizeGstin(value));
 }
 
 function json(payload: unknown, status = 200) {
