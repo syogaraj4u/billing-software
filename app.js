@@ -184,6 +184,17 @@ const GST_PROFILE_ALIASES = {
   "gst-8": ["sri lakshmi", "sri lakshmi digitals", "sld", "durga prasad", "durgaprasad"]
 };
 
+const FIRM_LOGOS = {
+  "gst-1": { initials: "NS", kind: "orbit", primary: "#0f766e", accent: "#1d4ed8", ink: "#0f172a" },
+  "gst-2": { initials: "KN", kind: "petal", primary: "#be123c", accent: "#f59e0b", ink: "#3f1728" },
+  "gst-3": { initials: "HM", kind: "mobile", primary: "#047857", accent: "#2563eb", ink: "#052e2b" },
+  "gst-4": { initials: "SN", kind: "signal", primary: "#4338ca", accent: "#ea580c", ink: "#111827" },
+  "gst-5": { initials: "SD", kind: "pixels", primary: "#0369a1", accent: "#14b8a6", ink: "#0f172a" },
+  "gst-6": { initials: "KI", kind: "circuit", primary: "#7c3aed", accent: "#0f766e", ink: "#111827" },
+  "gst-7": { initials: "LJT", kind: "trade", primary: "#166534", accent: "#ca8a04", ink: "#1f2937" },
+  "gst-8": { initials: "SLD", kind: "aperture", primary: "#b91c1c", accent: "#f97316", ink: "#111827" }
+};
+
 const HOME_COMPANY_PROFILE_ORDER = ["gst-1", "gst-2", "gst-7", "gst-5", "gst-6", "gst-8", "gst-4", "gst-3"];
 const AMBIGUOUS_PROFILE_ALIASES = new Set(["lakshmi", "s lakshmi"]);
 const GENERIC_PARTY_ALIASES = new Set(["cash", "cash customer", "customer", "supplier", "default", "default supplier"]);
@@ -499,6 +510,92 @@ function profileName(id) {
   return `${profile.label || profile.businessName}${gst}`;
 }
 
+function firmLogoMarkup(profile, className = "firm-logo") {
+  const logo = FIRM_LOGOS[profile?.id] || fallbackFirmLogo(profile);
+  const title = `${profile?.businessName || profile?.label || "Business"} logo`;
+  return `<span class="${escapeHtml(className)}" title="${escapeHtml(title)}">${firmLogoSvg(logo)}</span>`;
+}
+
+function fallbackFirmLogo(profile) {
+  return {
+    initials: companyInitials(profile?.businessName || profile?.label || "B"),
+    kind: "orbit",
+    primary: "#334155",
+    accent: "#0f766e",
+    ink: "#0f172a"
+  };
+}
+
+function firmLogoSvg(logo) {
+  const initials = escapeHtml(logo.initials || "");
+  const fontSize = initials.length > 2 ? 11 : 14;
+  const base = `<rect x="4" y="4" width="56" height="56" rx="15" fill="#ffffff" stroke="${logo.ink}" stroke-width="2"/>`;
+  const text = `<text x="32" y="48" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="800" fill="${logo.ink}">${initials}</text>`;
+  const mark = firmLogoMark(logo);
+  return `<svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">${base}${mark}${text}</svg>`;
+}
+
+function firmLogoMark(logo) {
+  switch (logo.kind) {
+    case "petal":
+      return `
+        <circle cx="32" cy="24" r="5" fill="${logo.ink}"/>
+        <ellipse cx="32" cy="15" rx="6" ry="11" fill="${logo.primary}"/>
+        <ellipse cx="44" cy="24" rx="6" ry="11" fill="${logo.accent}" transform="rotate(55 44 24)"/>
+        <ellipse cx="20" cy="24" rx="6" ry="11" fill="${logo.accent}" transform="rotate(-55 20 24)"/>
+        <path d="M22 34c6-8 14-8 20 0" fill="none" stroke="${logo.primary}" stroke-width="3" stroke-linecap="round"/>`;
+    case "mobile":
+      return `
+        <rect x="22" y="10" width="20" height="28" rx="5" fill="${logo.primary}"/>
+        <rect x="26" y="14" width="12" height="18" rx="2" fill="#ffffff"/>
+        <circle cx="32" cy="35" r="1.7" fill="#ffffff"/>
+        <path d="M45 15c4 3 6 7 6 12M47 25h6M18 18l-5 5 5 5" fill="none" stroke="${logo.accent}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+    case "signal":
+      return `
+        <path d="M17 28c8-8 22-8 30 0" fill="none" stroke="${logo.primary}" stroke-width="4" stroke-linecap="round"/>
+        <path d="M23 34c5-5 13-5 18 0" fill="none" stroke="${logo.accent}" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="32" cy="38" r="4" fill="${logo.ink}"/>
+        <path d="M20 14h24v10H20z" fill="${logo.primary}" opacity=".12"/>
+        <path d="M20 14h24v10H20z" fill="none" stroke="${logo.ink}" stroke-width="2"/>`;
+    case "pixels":
+      return `
+        <rect x="17" y="13" width="9" height="9" rx="2" fill="${logo.primary}"/>
+        <rect x="28" y="13" width="9" height="9" rx="2" fill="${logo.accent}"/>
+        <rect x="39" y="13" width="9" height="9" rx="2" fill="${logo.primary}"/>
+        <rect x="17" y="24" width="9" height="9" rx="2" fill="${logo.accent}"/>
+        <rect x="28" y="24" width="9" height="9" rx="2" fill="${logo.primary}"/>
+        <rect x="39" y="24" width="9" height="9" rx="2" fill="${logo.accent}"/>
+        <path d="M19 38h26" stroke="${logo.ink}" stroke-width="3" stroke-linecap="round"/>`;
+    case "circuit":
+      return `
+        <path d="M32 10l16 9v18l-16 9-16-9V19z" fill="${logo.primary}" opacity=".13" stroke="${logo.primary}" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M22 29h20M32 19v20M22 29l-5-5M42 29l5-5M32 39l-6 5" fill="none" stroke="${logo.accent}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="22" cy="29" r="3" fill="${logo.ink}"/>
+        <circle cx="42" cy="29" r="3" fill="${logo.ink}"/>
+        <circle cx="32" cy="19" r="3" fill="${logo.ink}"/>`;
+    case "trade":
+      return `
+        <path d="M17 34h30v8H17z" fill="${logo.accent}" opacity=".22" stroke="${logo.ink}" stroke-width="2"/>
+        <path d="M21 26h26v8H21z" fill="${logo.primary}" opacity=".18" stroke="${logo.ink}" stroke-width="2"/>
+        <path d="M25 18h22v8H25z" fill="${logo.accent}" opacity=".28" stroke="${logo.ink}" stroke-width="2"/>
+        <path d="M18 17c8 1 13 5 14 13-8-1-13-5-14-13z" fill="${logo.primary}"/>
+        <path d="M32 30c5-8 10-11 17-11-2 8-7 12-17 11z" fill="${logo.accent}"/>`;
+    case "aperture":
+      return `
+        <rect x="16" y="16" width="32" height="24" rx="7" fill="${logo.primary}" opacity=".14" stroke="${logo.ink}" stroke-width="2"/>
+        <circle cx="32" cy="28" r="12" fill="#ffffff" stroke="${logo.primary}" stroke-width="4"/>
+        <path d="M32 16l5 10M44 23l-11 1M42 36l-6-9M28 40l2-12M20 32l11-1M23 20l7 8" fill="none" stroke="${logo.accent}" stroke-width="3" stroke-linecap="round"/>
+        <circle cx="32" cy="28" r="4" fill="${logo.ink}"/>`;
+    case "orbit":
+    default:
+      return `
+        <circle cx="32" cy="26" r="10" fill="${logo.primary}" opacity=".16" stroke="${logo.primary}" stroke-width="4"/>
+        <path d="M15 33c9-14 25-19 36-13" fill="none" stroke="${logo.accent}" stroke-width="4" stroke-linecap="round"/>
+        <path d="M18 39c12 7 25 4 32-7" fill="none" stroke="${logo.primary}" stroke-width="3" stroke-linecap="round"/>
+        <path d="M32 13l5 9-5 9-5-9z" fill="${logo.ink}"/>`;
+  }
+}
+
 function profileOptions(selected = state.settings.activeProfileId) {
   return state.settings.profiles.map(profile => `
     <option value="${profile.id}" ${profile.id === selected ? "selected" : ""}>${escapeHtml(profileName(profile.id))}</option>
@@ -781,10 +878,9 @@ function renderAppVisibility() {
 function renderCompanySelector() {
   const activeId = activeProfileId();
   $("#companyCards").innerHTML = homeCompanyProfiles().map(profile => {
-    const initials = companyInitials(profile.businessName || profile.label);
     return `
       <button class="company-card ${profile.id === activeId ? "selected" : ""}" type="button" data-profile-id="${profile.id}">
-        <span class="company-initial">${escapeHtml(initials)}</span>
+        ${firmLogoMarkup(profile, "company-logo-mark")}
         <span class="company-card-main">
           <strong>${escapeHtml(profile.businessName || profile.label || "")}</strong>
           <small>${escapeHtml(profile.gstin || "GSTIN not entered")}</small>
@@ -2036,10 +2132,13 @@ function showInvoice(id, kind) {
     <div class="invoice-preview-frame">
       <div class="invoice-sheet modern-invoice">
       <div class="modern-invoice-head">
-        <div class="invoice-title-block">
-          <span class="invoice-kicker">Sales Bill</span>
-          <h2>Tax Invoice</h2>
-          <p>${escapeHtml(settings.businessName || settings.label || state.selectedOrg?.name || "Business")}</p>
+        <div class="invoice-brand-block">
+          ${firmLogoMarkup(settings, "invoice-firm-logo")}
+          <div class="invoice-title-block">
+            <span class="invoice-kicker">Sales Bill</span>
+            <h2>Tax Invoice</h2>
+            <p>${escapeHtml(settings.businessName || settings.label || state.selectedOrg?.name || "Business")}</p>
+          </div>
         </div>
         <div class="modern-header-metrics">
           ${invoiceMetaCell("Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
