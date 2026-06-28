@@ -1211,6 +1211,12 @@ textarea { resize: vertical; }
   width: 100%;
 }
 
+.invoice-items-table {
+  border-left: 1px solid #111827;
+  border-right: 1px solid #111827;
+  border-bottom: 1px solid #111827;
+}
+
 .invoice-items-table th,
 .invoice-items-table td {
   border-right: 1px solid #111827;
@@ -1234,6 +1240,10 @@ textarea { resize: vertical; }
 
 .invoice-items-table small {
   font-size: 11px;
+}
+
+.invoice-item-row td {
+  border-bottom: 1px solid #111827;
 }
 
 .sl-col {

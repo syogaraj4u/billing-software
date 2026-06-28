@@ -1855,7 +1855,7 @@ function showInvoice(id, kind) {
             const item = state.items.find(row => row.id === line.itemId) || {};
             const taxable = num(line.qty) * num(line.rate);
             const inclusiveRate = num(line.rate) * (1 + num(line.gstRate) / 100);
-            return `<tr>
+            return `<tr class="invoice-item-row">
               <td class="num">${index + 1}</td>
               <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}</td>
               <td>${escapeHtml(item.hsn || "")}</td>
