@@ -1,8 +1,10 @@
-const CACHE_NAME = "billing-software-v76";
+const CACHE_NAME = "billing-software-v77";
 const APP_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
+  "./desktop-view.css",
+  "./mobile-view.css",
   "./app.js",
   "./cloud-config.js",
   "./manifest.webmanifest",

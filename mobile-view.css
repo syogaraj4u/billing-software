@@ -1,0 +1,48 @@
+@media (max-width: 820px) {
+  html[data-device-view="mobile"] body {
+    background: #f6f8f8;
+    min-width: 0;
+  }
+
+  html[data-device-view="mobile"] .desktop-only {
+    display: none !important;
+  }
+
+  html[data-device-view="mobile"] .workspace {
+    width: 100%;
+    min-width: 0;
+  }
+
+  html[data-device-view="mobile"] .topbar-actions {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-device-view="mobile"] .section-actions > *,
+  html[data-device-view="mobile"] .topbar-actions > * {
+    min-width: 0;
+  }
+
+  html[data-device-view="mobile"] .metric {
+    min-width: 0;
+  }
+
+  html[data-device-view="mobile"] .panel {
+    border-radius: 8px;
+  }
+
+  html[data-device-view="mobile"] .table-wrap tbody tr {
+    box-shadow: 0 8px 20px rgba(28, 37, 38, 0.06);
+  }
+
+  html[data-device-view="mobile"] .chat-dialog,
+  html[data-device-view="mobile"] .invoice-dialog {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+  }
+
+  html[data-device-view="mobile"] .chat-composer-box {
+    width: 100%;
+  }
+}

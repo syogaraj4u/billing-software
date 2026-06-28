@@ -289,6 +289,7 @@ let entryMode = "sale";
 let editingEntryId = null;
 let editingItemId = null;
 let editingPartyId = null;
+let deviceViewMode = "";
 let activeReport = "summary";
 let cloudClient = null;
 let cloudSession = null;
@@ -737,11 +738,23 @@ function itemName(id) {
 
 async function init() {
   $("#todayLabel").textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "short", year: "numeric" });
+  updateDeviceViewMode();
   bindEvents();
   renderAll();
   registerServiceWorker();
   await initCloud();
   if (window.lucide) lucide.createIcons();
+}
+
+function updateDeviceViewMode() {
+  const nextMode = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
+  if (deviceViewMode === nextMode) return;
+  deviceViewMode = nextMode;
+  document.documentElement.dataset.deviceView = nextMode;
+  if (!document.body) return;
+  document.body.dataset.deviceView = nextMode;
+  document.body.classList.toggle("mobile-device-view", nextMode === "mobile");
+  document.body.classList.toggle("desktop-device-view", nextMode === "desktop");
 }
 
 function registerServiceWorker() {
@@ -806,7 +819,9 @@ function bindEvents() {
   $("#shareInvoicePdfBtn").addEventListener("click", shareInvoicePdf);
   $("#printReportBtn").addEventListener("click", () => window.print());
   window.addEventListener("afterprint", clearInvoicePrintMode);
+  window.addEventListener("resize", updateDeviceViewMode);
   window.addEventListener("resize", fitInvoicePreview);
+  window.addEventListener("orientationchange", updateDeviceViewMode);
   window.addEventListener("orientationchange", fitInvoicePreview);
   $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
   $("#reportFrom").addEventListener("change", renderReport);
