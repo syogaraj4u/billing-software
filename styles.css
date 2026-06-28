@@ -2191,6 +2191,10 @@ body.invoice-pdf-capture .invoice-preview-frame {
 }
 
 @media print {
+  @page {
+    size: A4;
+    margin: 8mm;
+  }
   body * { visibility: hidden; }
   body.invoice-print-mode #invoiceDialog,
   body.invoice-print-mode #invoiceDialog * {
@@ -2233,10 +2237,34 @@ body.invoice-pdf-capture .invoice-preview-frame {
     width: 100% !important;
     min-width: 0 !important;
     margin: 0 !important;
+    break-inside: auto;
+    page-break-inside: auto;
   }
   body.invoice-print-mode .invoice-items-table,
   body.invoice-print-mode .tax-summary-table {
+    break-inside: auto;
     page-break-inside: auto;
+  }
+  body.invoice-print-mode .invoice-items-table thead,
+  body.invoice-print-mode .tax-summary-table thead {
+    display: table-header-group;
+  }
+  body.invoice-print-mode .invoice-items-table tr,
+  body.invoice-print-mode .tax-summary-table tr,
+  body.invoice-print-mode .modern-invoice-head,
+  body.invoice-print-mode .modern-party-grid,
+  body.invoice-print-mode .amount-words-row,
+  body.invoice-print-mode .tax-words-row,
+  body.invoice-print-mode .invoice-bank-details,
+  body.invoice-print-mode .invoice-footer-grid,
+  body.invoice-print-mode .computer-note {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  body.invoice-print-mode .invoice-total-row,
+  body.invoice-print-mode .summary-total {
+    break-before: avoid;
+    page-break-before: avoid;
   }
   .dialog-actions { display: none !important; }
 }
