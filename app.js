@@ -288,6 +288,8 @@ let cloudSyncTimer = null;
 let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
+let purchaseUploadQueue = [];
+let purchaseUploadBusy = false;
 let entryDraftMeta = {};
 let chatBillMessages = [];
 let chatBillAttachments = [];
@@ -1386,7 +1388,9 @@ function openEntry(kind, id = null, draft = null) {
   $("#entryKindLabel").textContent = kind === "sale" ? "Sales Entry" : "Purchase Entry";
   $("#entryDialogTitle").textContent = id ? "Edit Entry" : "New Entry";
   form.elements.date.value = source?.date || today();
+  form.elements.date.oninput = updateEntryTotals;
   form.elements.number.value = source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId);
+  form.elements.number.oninput = updateEntryTotals;
   form.elements.profileId.innerHTML = profileOptions(source?.profileId || state.settings.activeProfileId);
   form.elements.profileId.disabled = true;
   form.elements.profileId.onchange = () => {
@@ -1413,9 +1417,12 @@ function renderPurchaseUploadReview(kind, source) {
   const extracted = source.extractedTaxes || {};
   const messages = uniqueMessages([
     ...activePurchaseReviewMessages(source.reviewMessages || []),
+    ...purchaseMissingReviewMessages(source, profile, supplier, source.lines || []),
+    ...purchaseTaxReviewMessages(extracted, calculated),
     ...purchaseDuplicateReviewMessages(source, source.id || editingEntryId)
   ]);
   const attachments = source.attachments || [];
+  const taxModeLabel = calculated.taxMode === "IGST" ? "IGST" : "CGST/SGST";
   return `<section class="purchase-review-panel">
     <div class="purchase-review-head">
       <div>
@@ -1423,7 +1430,7 @@ function renderPurchaseUploadReview(kind, source) {
         <strong>${escapeHtml(source.number || "-")}</strong>
       </div>
       <div>
-        <span>${messages.length ? "Needs Review" : "Ready"}</span>
+        <span>${messages.length ? "Needs Review" : "Ready"} | ${taxModeLabel}</span>
         <strong>${money(calculated.total)}</strong>
       </div>
     </div>
@@ -1432,6 +1439,7 @@ function renderPurchaseUploadReview(kind, source) {
       ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", source.buyerGstin || profile.gstin || "-", profile.address || profile.state || "-")}
       ${purchaseReviewCard("Invoice", source.number || "-", formatInvoiceDate(source.date || today()), attachments.map(file => file.name).join(", ") || "-")}
     </div>
+    ${renderPurchaseItemReview(source.lines || [])}
     <div class="purchase-review-totals">
       <span>Taxable</span><strong>${money(calculated.taxable)}</strong>
       <span>CGST</span><strong>${money(calculated.cgst)}</strong>
@@ -1441,8 +1449,29 @@ function renderPurchaseUploadReview(kind, source) {
       <span>Total</span><strong>${money(calculated.total)}</strong>
     </div>
     ${renderExtractedTaxReview(extracted)}
+    ${renderPurchaseAttachmentReview(attachments)}
     ${messages.length ? `<div class="purchase-review-warnings">${messages.map(message => `<span>${escapeHtml(message)}</span>`).join("")}</div>` : ""}
   </section>`;
+}
+
+function currentPurchaseReviewSource(lines = collectLines()) {
+  const form = $("#entryForm");
+  const profile = profileById(form?.elements?.profileId?.value || activeProfileId());
+  const party = partyById(form?.elements?.partyId?.value) || {};
+  return {
+    id: editingEntryId || "",
+    profileId: profile.id,
+    date: form?.elements?.date?.value || today(),
+    number: form?.elements?.number?.value?.trim() || "",
+    partyId: form?.elements?.partyId?.value || "",
+    lines,
+    attachments: clone(entryDraftMeta.attachments || []),
+    extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
+    sellerGstin: normalizeGstin(party.gstin || entryDraftMeta.sellerGstin),
+    buyerGstin: normalizeGstin(profile.gstin || entryDraftMeta.buyerGstin),
+    reviewMessages: clone(entryDraftMeta.reviewMessages || []),
+    source: entryDraftMeta.source || "manual"
+  };
 }
 
 function purchaseReviewCard(title, main, detail, extra) {
@@ -1459,6 +1488,36 @@ function renderExtractedTaxReview(extracted = {}) {
   return `<div class="purchase-review-extracted">
     <span>Uploaded Tax</span>
     <strong>Taxable ${money(extracted.taxable)} | CGST ${money(extracted.cgst)} | SGST ${money(extracted.sgst)} | IGST ${money(extracted.igst)} | GST ${money(extracted.gst)} | Total ${money(extracted.total)}</strong>
+  </div>`;
+}
+
+function renderPurchaseItemReview(lines = []) {
+  if (!lines.length) return "";
+  const rows = lines.map(line => {
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    return `<tr>
+      <td>${escapeHtml(item.name || itemName(line.itemId))}</td>
+      <td>${escapeHtml(item.hsn || "")}</td>
+      <td class="num">${num(line.qty)}</td>
+      <td class="num">${money(line.rate)}</td>
+      <td class="num">${num(line.gstRate)}%</td>
+      <td class="num">${money(num(line.qty) * num(line.rate))}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="purchase-review-items">
+    <span>Items detected from invoice</span>
+    <table>
+      <thead><tr><th>Item</th><th>HSN/SAC</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Taxable</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderPurchaseAttachmentReview(attachments = []) {
+  if (!attachments.length) return "";
+  return `<div class="purchase-review-attachments">
+    <span>Invoice Soft Copy</span>
+    ${attachments.map(file => `<strong>${escapeHtml(file.name || "Invoice file")}</strong><small>${escapeHtml(file.status || "Attached")}${file.storagePath ? ` | ${escapeHtml(file.storagePath)}` : ""}${file.error ? ` | ${escapeHtml(file.error)}` : ""}</small>`).join("")}
   </div>`;
 }
 
@@ -1521,10 +1580,43 @@ function updateEntryTotals() {
   $("#entryIgst").textContent = money(calculated.igst);
   $("#entryGst").textContent = money(calculated.gst);
   $("#entryTotal").textContent = money(calculated.total);
+  if (entryMode === "purchase" && entryDraftMeta.source === "purchase-upload") {
+    $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", currentPurchaseReviewSource());
+  }
 }
 
 function uniqueMessages(messages) {
   return [...new Set(messages.map(message => String(message || "").trim()).filter(Boolean))];
+}
+
+function purchaseMissingReviewMessages(source, profile, supplier, lines = []) {
+  if (!source || source.source !== "purchase-upload") return [];
+  const messages = [];
+  const supplierGstin = normalizeGstin(source.sellerGstin || supplier?.gstin);
+  const buyerGstin = normalizeGstin(source.buyerGstin || profile?.gstin);
+  const invoiceNumber = String(source.number || "").trim();
+  if (!invoiceNumber) messages.push("Missing detail: supplier invoice number is required.");
+  if (isGeneratedPurchaseNumber(invoiceNumber)) messages.push("Missing detail: supplier invoice number was not detected. Replace app draft number with actual invoice number.");
+  if (!source.date) messages.push("Missing detail: invoice date is required.");
+  if (!supplier?.name || /^imported supplier$/i.test(supplier.name)) messages.push("Missing detail: supplier name is required.");
+  if (!isValidGstin(supplierGstin)) messages.push("Missing detail: supplier GSTIN is required for B2B purchase.");
+  if (!isValidGstin(buyerGstin)) messages.push("Missing detail: buyer GSTIN must match one of your companies.");
+  if (!lines.length) messages.push("Missing detail: at least one purchase item is required.");
+  lines.forEach((line, index) => {
+    const label = `Item ${index + 1}`;
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    if (!item.name || /^imported purchase|imported item$/i.test(item.name)) messages.push(`Missing detail: ${label} name should be reviewed.`);
+    if (!String(item.hsn || "").trim()) messages.push(`Missing detail: ${label} HSN/SAC is required.`);
+    if (num(line.qty) <= 0) messages.push(`Missing detail: ${label} quantity is required.`);
+    if (num(line.rate) <= 0) messages.push(`Missing detail: ${label} rate is required.`);
+  });
+  if (source.attachments && !source.attachments.length) messages.push("Missing detail: invoice soft copy is not attached.");
+  if (!source.attachments) messages.push("Missing detail: invoice soft copy is not attached.");
+  return uniqueMessages(messages);
+}
+
+function isGeneratedPurchaseNumber(value) {
+  return /^PUR-\d+$/i.test(String(value || "").trim());
 }
 
 function purchaseTaxReviewMessages(extractedTaxes, calculated) {
@@ -1534,6 +1626,8 @@ function purchaseTaxReviewMessages(extractedTaxes, calculated) {
   const extractedSgst = num(extractedTaxes.sgst);
   const extractedIgst = num(extractedTaxes.igst);
   const extractedGst = num(extractedTaxes.gst) || extractedCgst + extractedSgst + extractedIgst;
+  const extractedTotal = num(extractedTaxes.total);
+  const extractedTaxable = num(extractedTaxes.taxable);
   if (calculated.taxMode === "IGST" && (extractedCgst > 0 || extractedSgst > 0)) {
     messages.push("Supplier and buyer GSTIN states differ, so IGST is expected. Uploaded invoice shows CGST/SGST.");
   }
@@ -1552,12 +1646,17 @@ function purchaseTaxReviewMessages(extractedTaxes, calculated) {
   if (extractedIgst && !amountsClose(extractedIgst, calculated.igst)) {
     messages.push(`Uploaded IGST ${money(extractedIgst)} differs from calculated IGST ${money(calculated.igst)}.`);
   }
+  if (extractedTaxable && !amountsClose(extractedTaxable, calculated.taxable)) {
+    messages.push(`Uploaded taxable value ${money(extractedTaxable)} differs from calculated taxable ${money(calculated.taxable)}.`);
+  }
+  if (extractedTotal && !amountsClose(extractedTotal, calculated.total)) {
+    messages.push(`Uploaded invoice total ${money(extractedTotal)} differs from calculated total ${money(calculated.total)}.`);
+  }
   return messages;
 }
 
 function purchaseDuplicateReviewMessages(source, excludeId = "") {
-  const duplicate = findDuplicatePurchaseInvoice(source, excludeId);
-  return duplicate ? [duplicatePurchaseInvoiceMessage(duplicate)] : [];
+  return findDuplicatePurchaseInvoices(source, excludeId).map(duplicatePurchaseInvoiceMessage);
 }
 
 function activePurchaseReviewMessages(messages) {
@@ -1569,15 +1668,23 @@ function isDuplicatePurchaseWarning(message) {
 }
 
 function findDuplicatePurchaseInvoice(source, excludeId = "") {
+  return findDuplicatePurchaseInvoices(source, excludeId)[0] || null;
+}
+
+function findDuplicatePurchaseInvoices(source, excludeId = "") {
   const invoiceNumber = normalizePurchaseInvoiceNumber(source?.number);
-  if (!invoiceNumber) return null;
+  if (!invoiceNumber) return [];
   const supplierKey = purchaseSupplierKey(source);
-  if (!supplierKey) return null;
-  return state.purchases.find(entry => {
+  if (!supplierKey) return [];
+  const sourceDate = source?.date || "";
+  const sourceTotal = num(source?.total);
+  return state.purchases.filter(entry => {
     if (entry.id === excludeId) return false;
     if (normalizePurchaseInvoiceNumber(entry.number) !== invoiceNumber) return false;
-    return purchaseSupplierKey(entry) === supplierKey;
-  }) || null;
+    if (purchaseSupplierKey(entry) !== supplierKey) return false;
+    if (sourceDate && entry.date && entry.date !== sourceDate && sourceTotal && !amountsClose(entry.total, sourceTotal, 2)) return false;
+    return true;
+  });
 }
 
 function purchaseSupplierKey(source) {
@@ -1617,9 +1724,11 @@ function saveEntry(event) {
     return;
   }
   const calculated = calculateEntryTotals(lines, profile, party, entryMode);
+  const purchaseReviewSource = entryMode === "purchase" ? currentPurchaseReviewSource(lines) : null;
   const reviewMessages = uniqueMessages([
     ...calculated.reviewMessages,
     ...(entryMode === "purchase" ? activePurchaseReviewMessages(entryDraftMeta.reviewMessages) : (entryDraftMeta.reviewMessages || [])),
+    ...(entryMode === "purchase" ? purchaseMissingReviewMessages(purchaseReviewSource, profile, party, lines) : []),
     ...(entryMode === "purchase" ? purchaseTaxReviewMessages(entryDraftMeta.extractedTaxes, calculated) : [])
   ]);
   const entry = {
@@ -1635,18 +1744,22 @@ function saveEntry(event) {
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
-    sellerGstin: entryDraftMeta.sellerGstin || normalizeGstin(entryMode === "purchase" ? party?.gstin : profile?.gstin),
-    buyerGstin: entryDraftMeta.buyerGstin || normalizeGstin(entryMode === "purchase" ? profile?.gstin : party?.gstin),
+    sellerGstin: normalizeGstin(entryMode === "purchase" ? (party?.gstin || entryDraftMeta.sellerGstin) : profile?.gstin),
+    buyerGstin: normalizeGstin(entryMode === "purchase" ? profile?.gstin : (party?.gstin || entryDraftMeta.buyerGstin)),
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
   };
   if (entryMode === "purchase") {
-    const duplicate = findDuplicatePurchaseInvoice(entry, editingEntryId);
-    if (duplicate) {
-      const duplicateMessage = duplicatePurchaseInvoiceMessage(duplicate);
-      entry.reviewMessages = uniqueMessages([...entry.reviewMessages, duplicateMessage]);
+    const duplicateMessages = purchaseDuplicateReviewMessages(entry, editingEntryId);
+    if (duplicateMessages.length) {
+      entry.reviewMessages = uniqueMessages([...entry.reviewMessages, ...duplicateMessages]);
       entry.reviewStatus = "Needs Review";
-      if (!confirm(`${duplicateMessage}\n\nSave this purchase anyway?`)) return;
+    }
+    if (entry.source === "purchase-upload" && entry.reviewMessages.length) {
+      $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", entry);
+      const previewMessages = entry.reviewMessages.slice(0, 6).map(message => `- ${message}`).join("\n");
+      const extra = entry.reviewMessages.length > 6 ? `\n- ${entry.reviewMessages.length - 6} more review note(s)` : "";
+      if (!confirm(`Purchase needs review before saving:\n\n${previewMessages}${extra}\n\nSave this purchase anyway?`)) return;
     }
   }
   const list = entryList(entryMode);
@@ -1662,6 +1775,7 @@ function saveEntry(event) {
   $("#entryDialog").close();
   renderAll();
   toast(entryMode === "sale" ? "Sale saved" : "Purchase saved");
+  if (entryMode === "purchase") processQueuedPurchaseInvoiceUpload();
 }
 
 function deleteEntry(kind, id) {
@@ -3763,35 +3877,51 @@ function smartBillPartyCard(title, name, gstin, address) {
 
 async function handlePurchaseInvoiceUpload(event) {
   const files = Array.from(event.target.files || []);
-  const file = files[0];
-  if (!file) return;
+  if (!files.length) return;
+  purchaseUploadQueue.push(...files);
+  event.target.value = "";
+  await processQueuedPurchaseInvoiceUpload();
+}
+
+async function processQueuedPurchaseInvoiceUpload() {
+  if (purchaseUploadBusy || $("#entryDialog")?.open || !purchaseUploadQueue.length) return;
+  const file = purchaseUploadQueue.shift();
   try {
-    toast("Reading purchase invoice...");
-    const attachment = await createPurchaseAttachment(file);
-    let parsed = await extractPurchaseInvoiceWithCloud(file);
-    if (!parsed && file.type === "application/pdf") {
-      const text = await extractPdfText(file);
-      if (!text.trim()) {
-        parsed = buildManualReviewPurchase(file, "No readable text found in PDF. Please review and enter values manually.");
-      } else {
-        parsed = parsePurchaseInvoiceText(text, file.name);
-      }
+    purchaseUploadBusy = true;
+    toast(`Reading ${file.name}...`);
+    const draft = await buildPurchaseDraftFromFile(file);
+    if (draft.profileId !== activeProfileId()) {
+      state.settings.activeProfileId = draft.profileId;
     }
-    if (!parsed) {
-      parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
-    }
-    parsed.attachments = [attachment];
-    const draft = buildPurchaseDraft(parsed);
     saveState();
     renderAll();
     openEntry("purchase", null, draft);
-    toast(files.length > 1 ? "First invoice opened. Upload the next after saving." : "Invoice details filled. Please review before saving.");
+    toast(purchaseUploadQueue.length ? "Invoice opened. Save it to review the next upload." : "Invoice details filled. Please review before saving.");
   } catch (error) {
     console.error(error);
     toast("Could not read this invoice");
   } finally {
-    event.target.value = "";
+    purchaseUploadBusy = false;
+    if (!$("#entryDialog")?.open && purchaseUploadQueue.length) processQueuedPurchaseInvoiceUpload();
   }
+}
+
+async function buildPurchaseDraftFromFile(file) {
+  const attachment = await createPurchaseAttachment(file);
+  let parsed = await extractPurchaseInvoiceWithCloud(file);
+  if (!parsed && file.type === "application/pdf") {
+    const text = await extractPdfText(file);
+    if (!text.trim()) {
+      parsed = buildManualReviewPurchase(file, "No readable text found in PDF. Please review and enter values manually.");
+    } else {
+      parsed = parsePurchaseInvoiceText(text, file.name);
+    }
+  }
+  if (!parsed) {
+    parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
+  }
+  parsed.attachments = [attachment];
+  return buildPurchaseDraft(parsed);
 }
 
 async function createPurchaseAttachment(file) {
@@ -3907,7 +4037,8 @@ function parsePurchaseInvoiceText(text, fileName) {
   const buyerGstin = normalizeGstin(profile.gstin);
   const supplierGstin = gstins.find(gstin => gstin !== buyerGstin) || "";
   const supplierName = findSupplierName(lines, supplierGstin) || fileName.replace(/\.pdf$/i, "");
-  const invoiceNumber = findInvoiceNumber(lines) || nextEntryNumber("purchase", profile.id);
+  const detectedInvoiceNumber = findInvoiceNumber(lines);
+  const invoiceNumber = detectedInvoiceNumber || nextEntryNumber("purchase", profile.id);
   const invoiceDate = findInvoiceDate(cleaned) || today();
   const amounts = findInvoiceAmounts(lines);
   const parsedLines = findItemLines(lines);
@@ -3916,6 +4047,7 @@ function parsePurchaseInvoiceText(text, fileName) {
   const reviewMessages = uniqueMessages([
     matchedProfile ? "" : "Buyer GSTIN did not match one of your 8 GST profiles. Confirm the business GST before saving.",
     supplierGstin ? "" : "Supplier GSTIN was not found. Confirm supplier details before saving.",
+    detectedInvoiceNumber ? "" : "Supplier invoice number was not detected. Replace the draft number before saving.",
     expectedTax.review,
     ...(expectedTax.mode === "IGST" && (amounts.cgst || amounts.sgst) ? ["Supplier and buyer GSTIN states differ, so IGST is expected. Uploaded invoice shows CGST/SGST."] : []),
     ...(expectedTax.mode === "CGST_SGST" && amounts.igst ? ["Supplier and buyer GSTIN states match, so CGST/SGST is expected. Uploaded invoice shows IGST."] : [])
@@ -4068,13 +4200,14 @@ function buildPurchaseDraft(parsed) {
   const selectedProfile = activeProfile();
   const parsedProfile = state.settings.profiles.find(profile => profile.id === parsed.profileId);
   const parsedBuyerGstin = normalizeGstin(parsed.buyerGstin || parsedProfile?.gstin);
-  const selectedBuyerGstin = normalizeGstin(selectedProfile.gstin);
+  const buyerProfile = parsedProfile || profileByGstin(parsedBuyerGstin) || selectedProfile;
+  const buyerGstin = normalizeGstin(buyerProfile.gstin);
   const contextMessages = uniqueMessages([
-    parsedProfile && parsedProfile.id !== selectedProfile.id
-      ? `Uploaded invoice buyer matched ${profileName(parsedProfile.id)}, but selected company is ${profileName(selectedProfile.id)}. Draft kept under selected company.`
+    buyerProfile.id !== selectedProfile.id
+      ? `Uploaded invoice buyer matched ${profileName(buyerProfile.id)}. Draft moved from selected company ${profileName(selectedProfile.id)} to the matched buyer GST.`
       : "",
-    parsedBuyerGstin && selectedBuyerGstin && parsedBuyerGstin !== selectedBuyerGstin
-      ? `Uploaded buyer GSTIN ${parsedBuyerGstin} differs from selected company GSTIN ${selectedBuyerGstin}. Confirm before saving.`
+    parsedBuyerGstin && buyerGstin && parsedBuyerGstin !== buyerGstin
+      ? `Uploaded buyer GSTIN ${parsedBuyerGstin} differs from matched company GSTIN ${buyerGstin}. Confirm before saving.`
       : ""
   ]);
   const reviewMessages = uniqueMessages([...(parsed.reviewMessages || []), ...contextMessages]);
@@ -4089,7 +4222,7 @@ function buildPurchaseDraft(parsed) {
     };
   });
   return {
-    profileId: selectedProfile.id,
+    profileId: buyerProfile.id,
     date: parsed.invoiceDate,
     number: parsed.invoiceNumber,
     partyId,
@@ -4099,7 +4232,7 @@ function buildPurchaseDraft(parsed) {
     attachments: clone(parsed.attachments || []),
     extractedTaxes: clone(parsed.extractedTaxes || null),
     sellerGstin: parsed.supplierGstin || "",
-    buyerGstin: selectedBuyerGstin,
+    buyerGstin,
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready",
     source: "purchase-upload"

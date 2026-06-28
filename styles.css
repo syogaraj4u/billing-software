@@ -919,6 +919,51 @@ textarea { resize: vertical; }
   line-height: 1.35;
 }
 
+.purchase-review-items,
+.purchase-review-attachments {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: auto;
+}
+
+.purchase-review-items span,
+.purchase-review-attachments span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.purchase-review-items table {
+  min-width: 620px;
+  border-collapse: collapse;
+}
+
+.purchase-review-items th,
+.purchase-review-items td {
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.purchase-review-items th {
+  color: var(--muted);
+  text-align: left;
+}
+
+.purchase-review-attachments strong {
+  font-size: 12px;
+}
+
+.purchase-review-attachments small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .purchase-review-warnings {
   display: grid;
   gap: 5px;
