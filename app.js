@@ -2725,6 +2725,9 @@ async function saleChatCloudErrorMessage(error) {
     .filter(Boolean)
     .join(" ")
     .trim();
+  if (/Invalid header value|Authorization|Bearer|api key|OPENAI_API_KEY|sk-/i.test(message)) {
+    return "OpenAI API key is invalid or has extra spaces/newlines. Reset OPENAI_API_KEY in Supabase.";
+  }
   if (/OPENAI_API_KEY|OPENAI_MODEL/i.test(message)) return "OpenAI API key/model is not configured in Supabase.";
   if (/Failed to fetch|NetworkError|Could not resolve|resolve host|Load failed|fetch/i.test(message)) return "Cloud function could not be reached from this browser.";
   if (/401|403|JWT|auth|login|session/i.test(message)) return "Cloud login/session is not valid. Please logout and login again.";

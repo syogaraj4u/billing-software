@@ -72,8 +72,8 @@ Deno.serve(async request => {
   }
 
   try {
-    const apiKey = Deno.env.get("OPENAI_API_KEY");
-    const model = Deno.env.get("OPENAI_MODEL");
+    const apiKey = (Deno.env.get("OPENAI_API_KEY") || "").trim();
+    const model = (Deno.env.get("OPENAI_MODEL") || "").trim();
     if (!apiKey || !model) {
       return json({ error: "OPENAI_API_KEY and OPENAI_MODEL must be configured" }, 500);
     }
@@ -159,7 +159,7 @@ Deno.serve(async request => {
       draft
     });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : "Unexpected error" }, 500);
+    return json({ error: publicOpenAIError(error) }, 500);
   }
 });
 
@@ -170,13 +170,24 @@ async function callOpenAI(apiKey: string, model: string, body: Record<string, un
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ model, ...body })
+    body: JSON.stringify({ model: model.trim(), ...body })
   });
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data?.error?.message || "OpenAI request failed");
   }
   return data;
+}
+
+function publicOpenAIError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Unexpected error";
+  if (/Invalid header value|Authorization|Bearer|api key|OPENAI_API_KEY|sk-/i.test(message)) {
+    return "OpenAI API key is invalid or has extra spaces/newlines. Reset OPENAI_API_KEY in Supabase.";
+  }
+  if (/model/i.test(message) && /not found|does not exist|invalid|unsupported/i.test(message)) {
+    return "OpenAI model is invalid or not available. Check OPENAI_MODEL in Supabase.";
+  }
+  return "OpenAI request failed. Check Supabase function logs.";
 }
 
 function parseJsonOutput(response: Record<string, unknown>) {
