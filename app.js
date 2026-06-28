@@ -1831,19 +1831,11 @@ function showInvoice(id, kind) {
         </div>
         <div class="modern-header-metrics">
           ${invoiceMetaCell("Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
-          ${invoiceMetaCell("e-Way Bill No.", entry.ewayBillNo || "-", "Place of Supply", party.place || stateNameFromGstin(party.gstin) || "-")}
         </div>
       </div>
       <div class="modern-party-grid">
-        ${invoiceSellerBlock(settings)}
         ${invoicePartyBlock("Consignee (Ship to)", party)}
         ${invoicePartyBlock("Buyer (Bill to)", party)}
-      </div>
-      <div class="modern-meta-grid">
-        ${invoiceMetaCell("Delivery Note", "-", "Reference No. & Date.", "-")}
-        ${invoiceMetaCell("Other References", "-", "Buyer's Order No.", "-")}
-        ${invoiceMetaCell("Dispatch Doc No.", "-", "Dispatched through", "-")}
-        ${invoiceMetaCell("Destination", party.place || "-", "Terms of Delivery", "-")}
       </div>
       <table class="invoice-items-table">
         <thead>
