@@ -691,13 +691,16 @@ function bindEvents() {
   $("#cloudNewWorkspaceBtn").addEventListener("click", () => createCloudWorkspace("New Workspace"));
   $("#cloudSyncNowBtn").addEventListener("click", () => syncCloudNow(true));
   $("#cloudSaveWorkspaceBtn").addEventListener("click", saveCloudWorkspaceSettings);
-  $("#closeInvoiceBtn").addEventListener("click", () => $("#invoiceDialog").close());
+  $("#closeInvoiceBtn").addEventListener("click", closeInvoiceDialog);
+  $("#invoiceDialog").addEventListener("close", clearInvoicePreviewFit);
   $("#printInvoiceBtn").addEventListener("click", printInvoice);
   $("#downloadInvoicePdfBtn").addEventListener("click", downloadInvoicePdf);
   $("#shareInvoiceWhatsappBtn").addEventListener("click", shareInvoiceToWhatsApp);
   $("#shareInvoicePdfBtn").addEventListener("click", shareInvoicePdf);
   $("#printReportBtn").addEventListener("click", () => window.print());
   window.addEventListener("afterprint", clearInvoicePrintMode);
+  window.addEventListener("resize", fitInvoicePreview);
+  window.addEventListener("orientationchange", fitInvoicePreview);
   $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
   $("#reportFrom").addEventListener("change", renderReport);
   $("#reportTo").addEventListener("change", renderReport);
@@ -1810,7 +1813,8 @@ function showInvoice(id, kind) {
   currentInvoiceFileName = invoicePdfFileName(entry, party);
   currentInvoiceShareContext = { entry, party, settings };
   $("#invoicePrintArea").innerHTML = `
-    <div class="invoice-sheet modern-invoice">
+    <div class="invoice-preview-frame">
+      <div class="invoice-sheet modern-invoice">
       <div class="modern-invoice-head">
         <div class="invoice-title-block">
           <span class="invoice-kicker">Sales Bill</span>
@@ -1897,9 +1901,17 @@ function showInvoice(id, kind) {
         </div>
       </div>
       <p class="computer-note">This is a Computer Generated Invoice</p>
+      </div>
     </div>
   `;
   $("#invoiceDialog").showModal();
+  $("#invoicePrintArea").scrollTo({ top: 0, left: 0 });
+  requestAnimationFrame(fitInvoicePreview);
+}
+
+function closeInvoiceDialog() {
+  $("#invoiceDialog").close();
+  clearInvoicePreviewFit();
 }
 
 function printInvoice() {
@@ -1915,6 +1927,34 @@ function printInvoice() {
 
 function clearInvoicePrintMode() {
   document.body.classList.remove("invoice-print-mode");
+  fitInvoicePreview();
+}
+
+function fitInvoicePreview() {
+  const dialog = $("#invoiceDialog");
+  const printArea = $("#invoicePrintArea");
+  const frame = printArea?.querySelector(".invoice-preview-frame");
+  const sheet = printArea?.querySelector(".modern-invoice");
+  if (!dialog?.open || !printArea || !frame || !sheet || document.body.classList.contains("invoice-print-mode") || document.body.classList.contains("invoice-pdf-capture")) return;
+  clearInvoicePreviewFit();
+  if (!window.matchMedia("(max-width: 820px)").matches) return;
+  const areaStyle = getComputedStyle(printArea);
+  const horizontalPadding = parseFloat(areaStyle.paddingLeft || "0") + parseFloat(areaStyle.paddingRight || "0");
+  const availableWidth = Math.max(280, printArea.clientWidth - horizontalPadding);
+  const sheetWidth = Math.max(1, sheet.scrollWidth || sheet.offsetWidth);
+  const sheetHeight = Math.max(1, sheet.scrollHeight || sheet.offsetHeight);
+  const scale = Math.min(1, availableWidth / sheetWidth);
+  frame.style.width = `${sheetWidth}px`;
+  frame.style.height = `${Math.ceil(sheetHeight * scale)}px`;
+  frame.style.transform = `scale(${scale})`;
+}
+
+function clearInvoicePreviewFit() {
+  const frame = $("#invoicePrintArea")?.querySelector(".invoice-preview-frame");
+  if (!frame) return;
+  frame.style.width = "";
+  frame.style.height = "";
+  frame.style.transform = "";
 }
 
 async function downloadInvoicePdf() {
@@ -2035,32 +2075,51 @@ async function buildInvoicePdfBlob() {
   const sheet = $("#invoicePrintArea .modern-invoice");
   if (!sheet) throw new Error("Invoice is not open");
   if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error("PDF tools are still loading");
-  const canvas = await html2canvas(sheet, {
-    backgroundColor: "#ffffff",
-    scale: Math.min(2, window.devicePixelRatio || 1.5),
-    useCORS: true,
-    scrollX: 0,
-    scrollY: 0
-  });
-  const image = canvas.toDataURL("image/png");
-  const pdf = new window.jspdf.jsPDF("p", "mm", "a4");
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 8;
-  const contentWidth = pageWidth - margin * 2;
-  const contentHeight = pageHeight - margin * 2;
-  const imageHeight = canvas.height * contentWidth / canvas.width;
-  let y = margin;
-  let remainingHeight = imageHeight;
-  while (remainingHeight > 0) {
-    pdf.addImage(image, "PNG", margin, y, contentWidth, imageHeight);
-    remainingHeight -= contentHeight;
-    if (remainingHeight > 0) {
-      pdf.addPage();
-      y -= contentHeight;
+  const restorePreview = pauseInvoicePreviewFit();
+  try {
+    await nextFrame();
+    const canvas = await html2canvas(sheet, {
+      backgroundColor: "#ffffff",
+      scale: Math.min(2, window.devicePixelRatio || 1.5),
+      useCORS: true,
+      scrollX: 0,
+      scrollY: 0
+    });
+    const image = canvas.toDataURL("image/png");
+    const pdf = new window.jspdf.jsPDF("p", "mm", "a4");
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 8;
+    const contentWidth = pageWidth - margin * 2;
+    const contentHeight = pageHeight - margin * 2;
+    const imageHeight = canvas.height * contentWidth / canvas.width;
+    let y = margin;
+    let remainingHeight = imageHeight;
+    while (remainingHeight > 0) {
+      pdf.addImage(image, "PNG", margin, y, contentWidth, imageHeight);
+      remainingHeight -= contentHeight;
+      if (remainingHeight > 0) {
+        pdf.addPage();
+        y -= contentHeight;
+      }
     }
+    return pdf.output("blob");
+  } finally {
+    restorePreview();
   }
-  return pdf.output("blob");
+}
+
+function pauseInvoicePreviewFit() {
+  document.body.classList.add("invoice-pdf-capture");
+  clearInvoicePreviewFit();
+  return () => {
+    document.body.classList.remove("invoice-pdf-capture");
+    requestAnimationFrame(fitInvoicePreview);
+  };
+}
+
+function nextFrame() {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
 }
 
 function setInvoicePdfBusy(isBusy) {

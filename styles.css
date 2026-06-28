@@ -1040,6 +1040,13 @@ textarea { resize: vertical; }
   -webkit-overflow-scrolling: touch;
 }
 
+.invoice-preview-frame {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+  transform-origin: top left;
+}
+
 .invoice-sheet {
   background: #fff;
 }
@@ -1860,6 +1867,48 @@ textarea { resize: vertical; }
     margin: 0;
     border-radius: 0;
   }
+  .invoice-dialog {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+  }
+  .invoice-dialog[open] {
+    height: 100dvh;
+    max-height: none;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .invoice-dialog #invoicePrintArea {
+    padding: 10px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .invoice-dialog .invoice-preview-frame {
+    max-width: none;
+  }
+  .invoice-dialog .dialog-actions {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .invoice-dialog .dialog-actions .primary-btn,
+  .invoice-dialog .dialog-actions .secondary-btn {
+    min-width: 0;
+    min-height: 42px;
+    padding: 9px 4px;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    line-height: 1;
+    white-space: normal;
+  }
+  .invoice-dialog .dialog-actions svg {
+    width: 16px;
+    height: 16px;
+  }
   .chat-dialog form {
     height: 100dvh;
     max-height: none;
@@ -2135,6 +2184,12 @@ textarea { resize: vertical; }
   }
 }
 
+body.invoice-pdf-capture .invoice-preview-frame {
+  width: max-content !important;
+  height: auto !important;
+  transform: none !important;
+}
+
 @media print {
   body * { visibility: hidden; }
   body.invoice-print-mode #invoiceDialog,
@@ -2167,6 +2222,12 @@ textarea { resize: vertical; }
     position: static !important;
     width: 100% !important;
     min-height: 0 !important;
+  }
+  body.invoice-print-mode .invoice-preview-frame {
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    transform: none !important;
   }
   body.invoice-print-mode .modern-invoice {
     width: 100% !important;
