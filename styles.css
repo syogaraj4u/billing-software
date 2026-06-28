@@ -421,6 +421,16 @@ button > *,
   color: var(--primary);
 }
 
+.link-btn {
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-weight: 700;
+  text-align: center;
+}
+
 .icon-btn {
   width: 40px;
   padding: 0;

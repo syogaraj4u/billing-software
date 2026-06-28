@@ -285,6 +285,8 @@ let cloudWorkspaces = [];
 let cloudWorkspace = null;
 let cloudLoading = false;
 let cloudSyncTimer = null;
+let forgotPasswordMode = false;
+let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
 let entryDraftMeta = {};
 let chatBillMessages = [];
@@ -686,10 +688,18 @@ function bindEvents() {
   $("#backupBtn").addEventListener("click", exportBackup);
   $("#restoreInput").addEventListener("change", importBackup);
   $("#appLoginForm").addEventListener("submit", signInToBillingApp);
+  $("#appForgotPasswordBtn").addEventListener("click", openForgotPassword);
+  $("#appBackToLoginBtn").addEventListener("click", backToLogin);
+  $("#appSendResetBtn").addEventListener("click", sendPasswordResetLink);
+  $("#appUpdatePasswordBtn").addEventListener("click", updateRecoveredPassword);
   $("#cloudBtn").addEventListener("click", openCloudDialog);
   $("#openCloudSettingsBtn").addEventListener("click", openCloudDialog);
   $("#cloudForm").addEventListener("submit", event => event.preventDefault());
   $("#cloudSignInBtn").addEventListener("click", signInToCloud);
+  $("#cloudForgotPasswordBtn").addEventListener("click", () => {
+    $("#cloudDialog")?.close();
+    openForgotPassword();
+  });
   $("#cloudSignOutBtn").addEventListener("click", signOutFromCloud);
   $("#cloudWorkspaceSelect").addEventListener("change", event => selectCloudWorkspace(event.target.value));
   $("#cloudNewWorkspaceBtn").addEventListener("click", () => createCloudWorkspace("New Workspace"));
@@ -753,7 +763,7 @@ function renderProfileSelectors() {
 }
 
 function renderAppVisibility() {
-  const locked = !cloudConfigured() || !cloudSession;
+  const locked = passwordRecoveryMode || !cloudConfigured() || !cloudSession;
   $("#loginGate").hidden = !locked;
   if (locked) {
     clearCompanyPageTransition();
@@ -886,10 +896,28 @@ function cloudConfigured() {
   return Boolean(config.supabaseUrl && config.supabaseAnonKey && window.supabase);
 }
 
+function isPasswordRecoveryUrl() {
+  const searchParams = new URLSearchParams(window.location.search || "");
+  const hashParams = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+  return searchParams.get("type") === "recovery" || hashParams.get("type") === "recovery";
+}
+
+function passwordResetRedirectUrl() {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+function clearPasswordRecoveryUrl() {
+  const url = new URL(window.location.href);
+  ["access_token", "code", "expires_at", "expires_in", "refresh_token", "token_type", "type"].forEach(key => url.searchParams.delete(key));
+  url.hash = "";
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+}
+
 async function initCloud() {
   renderCloudUi();
   if (!cloudConfigured()) return;
   const config = cloudConfig();
+  passwordRecoveryMode = isPasswordRecoveryUrl();
   cloudClient = window.supabase.createClient(config.supabaseUrl, config.supabaseAnonKey, {
     auth: {
       storage: window.sessionStorage,
@@ -902,11 +930,20 @@ async function initCloud() {
     return;
   }
   cloudSession = data.session;
-  cloudClient.auth.onAuthStateChange(async (_event, session) => {
+  if (cloudSession && isPasswordRecoveryUrl()) passwordRecoveryMode = true;
+  cloudClient.auth.onAuthStateChange(async (event, session) => {
+    if (event === "PASSWORD_RECOVERY") {
+      passwordRecoveryMode = true;
+      forgotPasswordMode = false;
+    }
     cloudSession = session;
-    if (session) {
+    if (session && !passwordRecoveryMode) {
       await loadCloudWorkspaces();
       renderAll();
+    }
+    else if (session && passwordRecoveryMode) {
+      renderAll();
+      requestAnimationFrame(() => $("#appNewPassword")?.focus());
     }
     else {
       cloudWorkspaces = [];
@@ -914,7 +951,7 @@ async function initCloud() {
       renderAll();
     }
   });
-  if (cloudSession) await loadCloudWorkspaces();
+  if (cloudSession && !passwordRecoveryMode) await loadCloudWorkspaces();
   renderCloudUi();
 }
 
@@ -926,16 +963,22 @@ function openCloudDialog() {
 
 function renderCloudUi() {
   const configured = cloudConfigured();
-  const signedIn = Boolean(cloudSession);
+  const hasSession = Boolean(cloudSession);
+  const showPasswordRecovery = configured && passwordRecoveryMode;
+  const signedIn = hasSession && !showPasswordRecovery;
+  const showForgotPassword = configured && !hasSession && forgotPasswordMode && !showPasswordRecovery;
+  const showLogin = configured && !hasSession && !showForgotPassword && !showPasswordRecovery;
   const email = cloudSession?.user?.email || "-";
-  $("#appLoginFields").hidden = !configured || signedIn;
+  $("#appLoginFields").hidden = !showLogin;
+  $("#appForgotPasswordFields").hidden = !showForgotPassword;
+  $("#appPasswordRecoveryFields").hidden = !showPasswordRecovery;
   $("#appLoginNotConfigured").hidden = configured;
-  $("#cloudBtnText").textContent = !configured ? "Local" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
-  $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
+  $("#cloudBtnText").textContent = !configured ? "Local" : showPasswordRecovery ? "Reset" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
+  $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : showPasswordRecovery ? "Password reset in progress" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
   $("#cloudWorkspaceLabel").textContent = cloudWorkspace?.name || "Not connected";
   $("#cloudLastSyncLabel").textContent = cloudWorkspace?.updated_at ? new Date(cloudWorkspace.updated_at).toLocaleString("en-IN") : "-";
   $("#cloudNotConfigured").hidden = configured;
-  $("#cloudSignedOut").hidden = !configured || signedIn;
+  $("#cloudSignedOut").hidden = !configured || hasSession || showPasswordRecovery;
   $("#cloudSignedIn").hidden = !configured || !signedIn;
   $("#cloudUserEmail").textContent = email;
   $("#cloudWorkspaceSelect").innerHTML = cloudWorkspaces.map(workspace => `
@@ -948,6 +991,8 @@ function renderCloudUi() {
 
 async function signInToBillingApp(event) {
   event.preventDefault();
+  if (passwordRecoveryMode) return updateRecoveredPassword();
+  if (forgotPasswordMode) return sendPasswordResetLink();
   await signInWithCredentials({
     email: $("#appLoginEmail").value.trim(),
     password: $("#appLoginPassword").value,
@@ -963,6 +1008,22 @@ async function signInToCloud() {
   });
 }
 
+function openForgotPassword() {
+  if (!cloudConfigured() || !cloudClient) return toast("Login is not configured");
+  forgotPasswordMode = true;
+  passwordRecoveryMode = false;
+  const email = $("#appLoginEmail").value.trim() || $("#cloudEmail").value.trim();
+  $("#appResetEmail").value = email;
+  renderCloudUi();
+  requestAnimationFrame(() => $("#appResetEmail")?.focus());
+}
+
+function backToLogin() {
+  forgotPasswordMode = false;
+  renderCloudUi();
+  requestAnimationFrame(() => $("#appLoginEmail")?.focus());
+}
+
 async function signInWithCredentials({ email, password, button }) {
   if (!cloudClient) return toast("Login is not configured");
   if (!email || !password) return toast("Enter email and password");
@@ -974,6 +1035,43 @@ async function signInWithCredentials({ email, password, button }) {
   $("#appLoginPassword").value = "";
   $("#cloudPassword").value = "";
   toast("Logged in");
+}
+
+async function sendPasswordResetLink() {
+  if (!cloudClient) return toast("Login is not configured");
+  const email = $("#appResetEmail").value.trim() || $("#appLoginEmail").value.trim() || $("#cloudEmail").value.trim();
+  if (!email) return toast("Enter your email");
+  $("#appSendResetBtn").disabled = true;
+  const { error } = await cloudClient.auth.resetPasswordForEmail(email, {
+    redirectTo: passwordResetRedirectUrl()
+  });
+  $("#appSendResetBtn").disabled = false;
+  if (error) return toast(error.message);
+  forgotPasswordMode = false;
+  $("#appLoginEmail").value = email;
+  renderCloudUi();
+  toast("Password reset link sent. Check your email.");
+}
+
+async function updateRecoveredPassword() {
+  if (!cloudClient) return toast("Login is not configured");
+  if (!cloudSession) return toast("Open the reset link from your email again");
+  const password = $("#appNewPassword").value;
+  const confirmPassword = $("#appConfirmPassword").value;
+  if (password.length < 6) return toast("Password must be at least 6 characters");
+  if (password !== confirmPassword) return toast("Passwords do not match");
+  $("#appUpdatePasswordBtn").disabled = true;
+  const { error } = await cloudClient.auth.updateUser({ password });
+  $("#appUpdatePasswordBtn").disabled = false;
+  if (error) return toast(error.message);
+  passwordRecoveryMode = false;
+  forgotPasswordMode = false;
+  $("#appNewPassword").value = "";
+  $("#appConfirmPassword").value = "";
+  clearPasswordRecoveryUrl();
+  if (cloudSession) await loadCloudWorkspaces();
+  renderAll();
+  toast("Password updated");
 }
 
 async function signUpForCloud() {

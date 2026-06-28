@@ -10,14 +10,14 @@
   <link rel="icon" href="data:,">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=20260628-whatsapp-pdf-share">
+  <link rel="stylesheet" href="styles.css?v=20260628-password-reset">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
 </head>
 <body>
   <section class="login-gate" id="loginGate" aria-label="Billing login" hidden>
-    <form class="login-panel" id="appLoginForm">
+    <form class="login-panel" id="appLoginForm" novalidate>
       <div class="login-brand">
         <div class="brand-mark">B</div>
         <div>
@@ -29,6 +29,19 @@
         <label>Email<input id="appLoginEmail" type="email" autocomplete="email" required></label>
         <label>Password<input id="appLoginPassword" type="password" autocomplete="current-password" required></label>
         <button class="primary-btn" id="appLoginBtn" type="submit"><i data-lucide="log-in"></i><span>Login</span></button>
+        <button class="link-btn" id="appForgotPasswordBtn" type="button">Forgot password?</button>
+      </div>
+      <div class="login-fields" id="appForgotPasswordFields" hidden>
+        <p class="help-text">Enter your email and we will send a password reset link.</p>
+        <label>Email<input id="appResetEmail" type="email" autocomplete="email"></label>
+        <button class="primary-btn" id="appSendResetBtn" type="button"><i data-lucide="mail"></i><span>Send Reset Link</span></button>
+        <button class="link-btn" id="appBackToLoginBtn" type="button">Back to login</button>
+      </div>
+      <div class="login-fields" id="appPasswordRecoveryFields" hidden>
+        <p class="help-text">Set a new password for your billing account.</p>
+        <label>New Password<input id="appNewPassword" type="password" autocomplete="new-password"></label>
+        <label>Confirm Password<input id="appConfirmPassword" type="password" autocomplete="new-password"></label>
+        <button class="primary-btn" id="appUpdatePasswordBtn" type="button"><i data-lucide="key-round"></i><span>Update Password</span></button>
       </div>
       <div class="auth-panel" id="appLoginNotConfigured" hidden>
         <h4>Login is not configured</h4>
@@ -407,6 +420,7 @@
           <div class="dialog-actions inline-actions">
             <button class="primary-btn" id="cloudSignInBtn" type="button"><i data-lucide="log-in"></i><span>Sign In</span></button>
           </div>
+          <button class="link-btn" id="cloudForgotPasswordBtn" type="button">Forgot password?</button>
         </div>
 
         <div class="auth-panel" id="cloudSignedIn">
@@ -448,6 +462,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260628-whatsapp-pdf-share"></script>
+  <script src="app.js?v=20260628-password-reset"></script>
 </body>
 </html>
