@@ -1800,7 +1800,8 @@ function showInvoice(id, kind) {
   const party = state.parties.find(row => row.id === entry.partyId) || {};
   const settings = profileById(entry.profileId);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
-  const roundOff = round2(num(entry.total) - num(entry.taxable) - num(entry.gst));
+  const roundOff = invoiceRoundOff(entry);
+  const payableTotal = invoicePayableTotal(entry);
   currentInvoiceFileName = invoicePdfFileName(entry, party);
   currentInvoiceShareContext = { entry, party, settings };
   $("#invoicePrintArea").innerHTML = `
@@ -1865,14 +1866,14 @@ function showInvoice(id, kind) {
             <td></td>
             <td></td>
             <td></td>
-            <td class="num grand-total">Rs. ${formatInvoiceMoney(entry.total)}</td>
+            <td class="num grand-total">Rs. ${formatInvoiceMoney(payableTotal)}</td>
           </tr>
         </tbody>
       </table>
       <div class="amount-words-row">
         <span>Amount Chargeable (in words)</span>
         <em>E. &amp; O.E</em>
-        <strong>${escapeHtml(amountInWords(entry.total))}</strong>
+        <strong>${escapeHtml(amountInWords(payableTotal))}</strong>
       </div>
       ${invoiceTaxSummary(entry)}
       <div class="tax-words-row">
@@ -1988,7 +1989,7 @@ async function shareInvoiceToWhatsApp() {
 function invoiceWhatsAppMessage({ entry, party, settings }) {
   const sellerName = settings.businessName || settings.label || "Nirvana Solutions";
   const buyerName = party.name || "Customer";
-  const amount = `${state.settings.currency || "Rs."} ${formatInvoiceMoney(entry.total)}`;
+  const amount = `${state.settings.currency || "Rs."} ${formatInvoiceMoney(invoicePayableTotal(entry))}`;
   return [
     `Dear ${buyerName},`,
     `Please find Tax Invoice ${entry.number || ""} dated ${formatInvoiceDate(entry.date)} from ${sellerName}.`,
@@ -2114,11 +2115,26 @@ function invoiceOutputTaxRows(entry, roundOff) {
   if (num(entry.igst)) rows.push(["Output IGST", entry.igst]);
   if (num(entry.cgst)) rows.push(["Output CGST", entry.cgst]);
   if (num(entry.sgst)) rows.push(["Output SGST", entry.sgst]);
-  if (roundOff) rows.push(["Round Off", roundOff]);
+  if (Math.abs(num(roundOff)) >= 0.01) rows.push(["Round Off", roundOff]);
   return rows.map(([label, amount]) => `<tr class="tax-line-row">
     <td></td><td class="tax-label">${escapeHtml(label)}</td><td></td><td></td><td></td><td></td><td></td>
     <td class="num strong">${formatInvoiceMoney(amount)}</td>
   </tr>`).join("");
+}
+
+function invoiceRawTotal(entry) {
+  return round2(num(entry.taxable) + num(entry.gst));
+}
+
+function invoiceRoundOff(entry) {
+  const rawTotal = invoiceRawTotal(entry);
+  const roundedTotal = Math.round(rawTotal);
+  const adjustment = round2(roundedTotal - rawTotal);
+  return Math.abs(adjustment) >= 0.01 ? adjustment : 0;
+}
+
+function invoicePayableTotal(entry) {
+  return round2(invoiceRawTotal(entry) + invoiceRoundOff(entry));
 }
 
 function invoiceTaxSummary(entry) {
