@@ -2721,7 +2721,8 @@ async function prepareChatBillDraft() {
       return;
     }
     const parsed = applySaleChatDefaults(cloudResult.draft || {}, fullMessage);
-    const missing = saleChatMissingDetails(cloudResult.ready ? (cloudResult.missingDetails || []) : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]));
+    const cloudMissing = cloudResult.ready ? [] : (cloudResult.missingDetails?.length ? cloudResult.missingDetails : ["more sale bill details"]);
+    const missing = saleChatMissingDetails([...cloudMissing, ...missingSaleBillDetails(parsed, fullMessage)]);
     if (missing.length) {
       const nextMissing = nextSaleMissingDetail(missing);
       const question = (cloudResult && cleanSaleAssistantMessage(cloudResult.assistantMessage))
@@ -2816,10 +2817,10 @@ async function saleChatCloudErrorMessage(error) {
 
 function parseSaleChatLocal(message) {
   const explicitGstin = normalizeGstin(message.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0] || "");
-  const internalBuyer = extractInternalBuyerProfileFromMessage(message);
+  const profile = activeProfile();
+  const internalBuyer = extractInternalBuyerProfileFromMessage(message, { excludeProfileId: profile.id });
   const savedBuyer = internalBuyer ? null : extractBuyerPartyFromMessage(message, explicitGstin);
   const gstin = normalizeGstin(internalBuyer?.gstin || savedBuyer?.gstin || explicitGstin);
-  const profile = activeProfile();
   const mentionedSeller = extractSellerProfileFromMessage(message, internalBuyer);
   const customerName = internalBuyer?.businessName || internalBuyer?.label || savedBuyer?.name || extractCustomerName(message, gstin) || (gstin ? `Customer ${gstin.slice(0, 6)}` : "Chat Customer");
   const status = /unpaid|credit|due/i.test(message) ? "Unpaid" : /partial/i.test(message) ? "Partial" : "Paid";
@@ -2942,10 +2943,12 @@ function extractSellerProfileFromMessage(message, buyerProfile) {
   return mentions[0];
 }
 
-function extractInternalBuyerProfileFromMessage(message) {
+function extractInternalBuyerProfileFromMessage(message, options = {}) {
+  const excludeProfileId = options.excludeProfileId || "";
   const explicit = extractProfileNearKeyword(message, ["bill to", "ship to", "buyer", "customer", "to"]);
-  if (explicit) return explicit;
-  const mentions = profileMentions(message);
+  if (explicit && explicit.id !== excludeProfileId) return explicit;
+  const mentions = profileMentions(message).filter(profile => profile.id !== excludeProfileId);
+  if (excludeProfileId) return mentions[0] || null;
   return mentions.length > 1 ? mentions[1] : null;
 }
 
@@ -3192,14 +3195,14 @@ function extractHsnCode(text) {
 }
 
 function applySaleChatDefaults(parsed, sourceMessage) {
-  const draft = parsed || {};
+  const draft = enforceSelectedSellerSmartBill(parsed || {}, sourceMessage);
   const explicitHsn = extractHsnCode(sourceMessage);
   const explicitGstRate = extractExplicitGstRate(sourceMessage);
   const lines = Array.isArray(draft.lines) ? draft.lines : [];
   const ratesIncludeGst = saleChatRatesIncludeGst(sourceMessage);
   const hasPricedLines = lines.some(line => num(line.rate) > 0);
   const selectedProfileId = activeProfileId();
-  const parsedProfile = state.settings.profiles.find(profile => profile.id === draft.profileId);
+  const parsedProfile = state.settings.profiles.find(profile => profile.id === parsed?.profileId);
   const reviewMessages = uniqueMessages([
     ...(Array.isArray(draft.reviewMessages) ? draft.reviewMessages : []),
     parsedProfile && parsedProfile.id !== selectedProfileId
@@ -3222,6 +3225,56 @@ function applySaleChatDefaults(parsed, sourceMessage) {
       };
     })
   };
+}
+
+function enforceSelectedSellerSmartBill(draft, sourceMessage) {
+  const selectedProfile = activeProfile();
+  const result = { ...draft };
+  const internalBuyer = extractInternalBuyerProfileFromMessage(sourceMessage, { excludeProfileId: selectedProfile.id });
+  const savedBuyer = internalBuyer ? null : extractBuyerPartyFromMessage(sourceMessage, normalizeGstin(result.customerGstin));
+  if (internalBuyer) {
+    applySmartBillBuyerProfile(result, internalBuyer);
+  } else if (savedBuyer && shouldUseSavedSmartBillBuyer(result, savedBuyer, selectedProfile)) {
+    applySmartBillBuyerParty(result, savedBuyer);
+  } else if (smartBillCustomerMatchesProfile(result, selectedProfile)) {
+    result.customerName = "";
+    result.customerGstin = "";
+    result.customerAddress = "";
+    result.customerPlace = "";
+  }
+  result.profileId = selectedProfile.id;
+  return result;
+}
+
+function shouldUseSavedSmartBillBuyer(draft, party, selectedProfile) {
+  return smartBillCustomerMatchesProfile(draft, selectedProfile)
+    || !String(draft.customerName || "").trim()
+    || !normalizeGstin(draft.customerGstin)
+    || partyAliasMatch(party, draft.customerName).index >= 0
+    || normalizeGstin(draft.customerGstin) === normalizeGstin(party.gstin);
+}
+
+function applySmartBillBuyerProfile(draft, profile) {
+  draft.customerName = profile.businessName || profile.label || "";
+  draft.customerGstin = normalizeGstin(profile.gstin);
+  draft.customerAddress = profile.address || "";
+  draft.customerPlace = profile.state || stateNameFromGstin(profile.gstin) || "";
+}
+
+function applySmartBillBuyerParty(draft, party) {
+  draft.customerName = party.name || "";
+  draft.customerGstin = normalizeGstin(party.gstin);
+  draft.customerAddress = party.address || "";
+  draft.customerPlace = party.place || stateNameFromGstin(party.gstin) || "";
+}
+
+function smartBillCustomerMatchesProfile(draft, profile) {
+  if (!profile) return false;
+  const customerGstin = normalizeGstin(draft.customerGstin);
+  const profileGstin = normalizeGstin(profile.gstin);
+  if (customerGstin && profileGstin && customerGstin === profileGstin) return true;
+  const customerName = String(draft.customerName || "").trim();
+  return Boolean(customerName && profileAliasMatch(profile, customerName).index >= 0);
 }
 
 function saleChatRatesIncludeGst(sourceMessage) {
