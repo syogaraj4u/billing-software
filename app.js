@@ -1976,12 +1976,8 @@ async function shareInvoicePdf() {
     setInvoicePdfBusy(true);
     const blob = await buildInvoicePdfBlob();
     const file = new File([blob], currentInvoiceFileName, { type: "application/pdf" });
-    if (navigator.canShare?.({ files: [file] })) {
-      await navigator.share({
-        title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
-        text: "Invoice PDF",
-        files: [file]
-      });
+    if (canTryNativeInvoiceFileShare(file)) {
+      await shareNativeInvoiceFile(file, "Invoice PDF");
       toast("Invoice shared");
       return;
     }
@@ -2008,27 +2004,42 @@ async function shareInvoiceToWhatsApp() {
     setInvoicePdfBusy(true);
     const blob = await buildInvoicePdfBlob();
     const file = new File([blob], currentInvoiceFileName, { type: "application/pdf" });
-    if (shouldUseNativeInvoiceShare() && navigator.canShare?.({ files: [file] })) {
-      await navigator.share({
-        title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
-        text: message,
-        files: [file]
-      });
-      toast("Invoice ready to share on WhatsApp");
+    if (canTryNativeInvoiceFileShare(file)) {
+      toast("Choose WhatsApp to send the PDF attachment");
+      await shareNativeInvoiceFile(file, message);
+      toast("Invoice PDF shared");
       return;
     }
     downloadBlob(blob, currentInvoiceFileName);
     openWhatsAppMessage(phone, message);
-    toast("PDF downloaded. WhatsApp opened.");
+    toast("PDF downloaded. WhatsApp links can send text only.");
   } catch (error) {
     if (error?.name !== "AbortError") {
       console.error(error);
       openWhatsAppMessage(phone, message);
-      toast("WhatsApp opened. Attach PDF if needed.");
+      toast("WhatsApp opened. Attach the downloaded PDF if needed.");
     }
   } finally {
     setInvoicePdfBusy(false);
   }
+}
+
+function canTryNativeInvoiceFileShare(file) {
+  if (typeof navigator.share !== "function") return false;
+  if (typeof navigator.canShare !== "function") return true;
+  try {
+    return navigator.canShare({ files: [file] });
+  } catch {
+    return false;
+  }
+}
+
+async function shareNativeInvoiceFile(file, text) {
+  await navigator.share({
+    title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
+    text,
+    files: [file]
+  });
 }
 
 function invoiceWhatsAppMessage({ entry, party, settings }) {
@@ -2064,11 +2075,6 @@ function whatsappPhoneNumber(phone) {
   if (digits.length === 11 && digits.startsWith("0")) return `91${digits.slice(1)}`;
   if (digits.length === 12 && digits.startsWith("91")) return digits;
   return digits.length >= 10 ? digits : "";
-}
-
-function shouldUseNativeInvoiceShare() {
-  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "")
-    || (navigator.maxTouchPoints > 1 && window.innerWidth <= 900);
 }
 
 async function buildInvoicePdfBlob() {
