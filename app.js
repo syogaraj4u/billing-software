@@ -3116,25 +3116,44 @@ function applySaleChatDefaults(parsed, sourceMessage) {
   const explicitHsn = extractHsnCode(sourceMessage);
   const explicitGstRate = extractExplicitGstRate(sourceMessage);
   const lines = Array.isArray(draft.lines) ? draft.lines : [];
+  const ratesIncludeGst = saleChatRatesIncludeGst(sourceMessage);
+  const hasPricedLines = lines.some(line => num(line.rate) > 0);
   const selectedProfileId = activeProfileId();
   const parsedProfile = state.settings.profiles.find(profile => profile.id === draft.profileId);
   const reviewMessages = uniqueMessages([
     ...(Array.isArray(draft.reviewMessages) ? draft.reviewMessages : []),
     parsedProfile && parsedProfile.id !== selectedProfileId
       ? `Chat mentioned seller ${profileName(parsedProfile.id)}, but selected company is ${profileName(selectedProfileId)}. Draft kept under selected company.`
-      : ""
+      : "",
+    ratesIncludeGst && hasPricedLines ? "Smart Bill treated the entered rates as GST-inclusive." : ""
   ]);
   return {
     ...draft,
     profileId: selectedProfileId,
     status: draft.status || "Paid",
     reviewMessages,
-    lines: lines.map(line => ({
-      ...line,
-      hsn: resolveSaleLineHsn(line, explicitHsn),
-      gstRate: resolveSaleLineGstRate(line, explicitGstRate)
-    }))
+    lines: lines.map(line => {
+      const gstRate = resolveSaleLineGstRate(line, explicitGstRate);
+      return {
+        ...line,
+        hsn: resolveSaleLineHsn(line, explicitHsn),
+        rate: ratesIncludeGst ? taxableRateFromInclusive(line.rate, gstRate) : num(line.rate),
+        gstRate
+      };
+    })
   };
+}
+
+function saleChatRatesIncludeGst(sourceMessage) {
+  const text = String(sourceMessage || "");
+  return !/\b(?:plus|add|extra|excluding|excluded|exclusive|without|before)\s+(?:gst|tax)\b|\b(?:gst|tax)\s+(?:extra|additional|separate|excluded|exclusive)\b|\+\s*(?:gst|tax)\b|\bex[-\s]?(?:gst|tax)\b/i.test(text);
+}
+
+function taxableRateFromInclusive(rate, gstRate) {
+  const inclusiveRate = num(rate);
+  const taxRate = num(gstRate);
+  if (!inclusiveRate || !taxRate) return inclusiveRate;
+  return round2(inclusiveRate / (1 + taxRate / 100));
 }
 
 function resolveSaleLineHsn(line, explicitHsn = "") {
