@@ -1896,8 +1896,27 @@ function blankLine(kind) {
     itemId: item?.id || "",
     qty: 1,
     rate: kind === "sale" ? num(item?.saleRate) : num(item?.purchaseRate),
-    gstRate: num(item?.gstRate)
+    gstRate: num(item?.gstRate),
+    imeiNumbers: ""
   };
+}
+
+function imeiNumbersFromText(value) {
+  return String(value || "")
+    .replace(/\bimei(?:\s*(?:nos?|numbers?))?\b\s*[:#-]?/ig, " ")
+    .split(/[\s,;|]+/)
+    .map(part => part.trim())
+    .filter(part => part.length >= 5);
+}
+
+function normalizeImeiNumbers(value) {
+  return [...new Set(imeiNumbersFromText(value))].join("\n");
+}
+
+function invoiceImeiMarkup(value) {
+  const numbers = imeiNumbersFromText(value);
+  if (!numbers.length) return "";
+  return `<small class="invoice-imei-list"><span>IMEI:</span> ${escapeHtml([...new Set(numbers)].join(", "))}</small>`;
 }
 
 function salesRatesIncludeGst() {
@@ -1937,6 +1956,7 @@ function addLineRow(line = blankLine(entryMode)) {
     <label>GST %<input class="line-gst" type="number" min="0" step="0.01" value="${num(line.gstRate)}"></label>
     <label>Amount<input class="line-amount" disabled></label>
     <button type="button" class="mini-btn" title="Remove"><i data-lucide="x"></i></button>
+    <label class="line-imei-field">IMEI numbers<textarea class="line-imei" rows="2" placeholder="Optional: paste IMEI numbers">${escapeHtml(line.imeiNumbers || "")}</textarea></label>
   `;
   row.querySelector(".line-item").addEventListener("change", event => {
     const item = state.items.find(candidate => candidate.id === event.target.value);
@@ -1944,7 +1964,7 @@ function addLineRow(line = blankLine(entryMode)) {
     row.querySelector(".line-gst").value = num(item?.gstRate);
     updateEntryTotals();
   });
-  row.querySelectorAll("input, select").forEach(input => input.addEventListener("input", updateEntryTotals));
+  row.querySelectorAll("input, select, textarea").forEach(input => input.addEventListener("input", updateEntryTotals));
   row.querySelector("button").addEventListener("click", () => {
     row.remove();
     if (!$("#lineRows").children.length) addLineRow();
@@ -1961,7 +1981,8 @@ function collectLines(options = {}) {
     itemId: row.querySelector(".line-item").value,
     qty: num(row.querySelector(".line-qty").value),
     rate: num(row.querySelector(".line-rate").value),
-    gstRate: num(row.querySelector(".line-gst").value)
+    gstRate: num(row.querySelector(".line-gst").value),
+    imeiNumbers: normalizeImeiNumbers(row.querySelector(".line-imei")?.value || "")
   })).filter(line => line.itemId && line.qty > 0);
   return normalizeRates ? lines.map(normalizeLineRateForEntry) : lines;
 }
@@ -2554,7 +2575,7 @@ function showInvoice(id, kind) {
             const lineTotal = lineGrossAmount(line);
             return `<tr class="invoice-item-row">
               <td class="num">${index + 1}</td>
-              <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}</td>
+              <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}${invoiceImeiMarkup(line.imeiNumbers)}</td>
               <td>${escapeHtml(item.hsn || "")}</td>
               <td class="num strong">${formatQty(line.qty)}</td>
               <td class="num">${formatInvoiceMoney(line.rate)}</td>
