@@ -757,24 +757,6 @@ textarea { resize: vertical; }
   background: #fbfcfc;
 }
 
-.sales-flow-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.sales-flow-strip span {
-  min-height: 30px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 750;
-}
-
 .sales-address-grid,
 .ship-to-custom {
   display: grid;
@@ -2481,9 +2463,6 @@ textarea { resize: vertical; }
   .sales-address-panel {
     margin-left: 14px;
     margin-right: 14px;
-  }
-  .sales-flow-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .sales-address-grid,
   .ship-to-custom {

@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260629-invoice-lines">
+  <link rel="stylesheet" href="styles.css?v=20260629-sales-flow-clean">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -278,12 +278,6 @@
           <label class="span-2" id="entryNotesLabel">Notes<input name="notes"></label>
         </div>
         <section class="sales-address-panel" id="salesAddressPanel" hidden>
-          <div class="sales-flow-strip">
-            <span>Buyer</span>
-            <span>Ship To</span>
-            <span>Items</span>
-            <span>Review</span>
-          </div>
           <div class="sales-address-grid">
             <div class="sales-address-card" id="billToPreview"></div>
             <div class="sales-address-card" id="shipToPreview"></div>
