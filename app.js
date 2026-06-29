@@ -311,6 +311,7 @@ let cloudSyncTimer = null;
 let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
+let entryMonthFilters = { sale: currentMonthKey(), purchase: currentMonthKey() };
 let purchaseUploadQueue = [];
 let purchaseUploadBusy = false;
 let entryDraftMeta = {};
@@ -675,6 +676,20 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function currentMonthKey() {
+  return today().slice(0, 7);
+}
+
+function entryMonthKey(entry) {
+  return String(entry?.date || "").slice(0, 7) || currentMonthKey();
+}
+
+function monthLabel(monthKey) {
+  const [year, month] = String(monthKey || currentMonthKey()).split("-").map(Number);
+  if (!year || !month) return "Current month";
+  return new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, char => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
@@ -695,6 +710,32 @@ function entryList(kind) {
 
 function activeEntries(kind) {
   return entryList(kind).filter(entry => entry.profileId === activeProfileId());
+}
+
+function selectedEntryMonth(kind) {
+  return entryMonthFilters[kind] || currentMonthKey();
+}
+
+function monthFilteredEntries(kind) {
+  const monthKey = selectedEntryMonth(kind);
+  return activeEntries(kind).filter(entry => entryMonthKey(entry) === monthKey);
+}
+
+function entryMonthOptions(kind) {
+  const selected = selectedEntryMonth(kind);
+  return [...new Set([selected, currentMonthKey(), ...activeEntries(kind).map(entryMonthKey)])]
+    .filter(Boolean)
+    .sort((a, b) => b.localeCompare(a));
+}
+
+function renderEntryMonthFilter(kind) {
+  const select = kind === "sale" ? $("#salesMonthFilter") : $("#purchaseMonthFilter");
+  if (!select) return;
+  const selected = selectedEntryMonth(kind);
+  select.innerHTML = entryMonthOptions(kind)
+    .map(monthKey => `<option value="${escapeHtml(monthKey)}" ${monthKey === selected ? "selected" : ""}>${escapeHtml(monthLabel(monthKey))}</option>`)
+    .join("");
+  select.value = selected;
 }
 
 function isCancelledEntry(entry) {
@@ -941,9 +982,18 @@ function bindEvents() {
   $("#dashboardSaleEntryBtn").addEventListener("click", () => openEntry("sale"));
   $("#dashboardPurchaseEntryBtn").addEventListener("click", () => openEntry("purchase"));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
+  $("#salesMonthFilter").addEventListener("change", event => {
+    entryMonthFilters.sale = event.target.value;
+    renderEntries("sale");
+  });
   bindIf("#chatBillBtn", "click", openChatBillDialog);
   bindIf("#newChatSaleBtn", "click", openChatBillDialog);
   $("#newPurchaseBtn").addEventListener("click", () => openEntry("purchase"));
+  $("#purchaseMonthFilter").addEventListener("change", event => {
+    entryMonthFilters.purchase = event.target.value;
+    selectedPurchaseIds.clear();
+    renderEntries("purchase");
+  });
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
@@ -1506,7 +1556,13 @@ function renderDashboard() {
 }
 
 function renderEntries(kind) {
-  const rows = activeEntries(kind).sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
+  renderEntryMonthFilter(kind);
+  const entries = monthFilteredEntries(kind);
+  if (kind === "purchase") {
+    const visibleIds = new Set(entries.map(entry => entry.id));
+    selectedPurchaseIds = new Set([...selectedPurchaseIds].filter(id => visibleIds.has(id)));
+  }
+  const rows = entries.sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
     const cancelled = isCancelledEntry(entry);
     const statusLabel = cancelled ? "Cancelled" : (entry.status || "-");
     const statusClass = cancelled ? "danger" : (entry.status === "Unpaid" ? "warn" : "");
@@ -1539,7 +1595,10 @@ function renderEntries(kind) {
   `;
   }).join("");
   const emptyColspan = kind === "sale" ? 9 : 11;
-  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = rows || emptyRow(emptyColspan, kind === "sale" ? "No sales entries" : "No purchase entries");
+  const emptyLabel = kind === "sale"
+    ? `No sales entries for ${monthLabel(selectedEntryMonth(kind))}`
+    : `No purchase entries for ${monthLabel(selectedEntryMonth(kind))}`;
+  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = rows || emptyRow(emptyColspan, emptyLabel);
   if (kind === "purchase") bindPurchaseSelectors();
 }
 
@@ -1566,14 +1625,14 @@ function bindPurchaseSelectors() {
 function updateSelectAllPurchases() {
   const control = $("#selectAllPurchases");
   if (!control) return;
-  const ids = activeEntries("purchase").map(entry => entry.id);
+  const ids = monthFilteredEntries("purchase").map(entry => entry.id);
   const selectedCount = ids.filter(id => selectedPurchaseIds.has(id)).length;
   control.checked = ids.length > 0 && selectedCount === ids.length;
   control.indeterminate = selectedCount > 0 && selectedCount < ids.length;
 }
 
 function toggleAllPurchases(event) {
-  selectedPurchaseIds = event.target.checked ? new Set(activeEntries("purchase").map(entry => entry.id)) : new Set();
+  selectedPurchaseIds = event.target.checked ? new Set(monthFilteredEntries("purchase").map(entry => entry.id)) : new Set();
   renderEntries("purchase");
 }
 
@@ -2329,6 +2388,7 @@ function saveEntry(event) {
   } else if (index < 0) {
     savedProfile.nextPurchaseNo = num(savedProfile.nextPurchaseNo) + 1;
   }
+  entryMonthFilters[entryMode] = entryMonthKey(entry);
   saveState();
   $("#entryDialog").close();
   renderAll();
@@ -3236,7 +3296,7 @@ function renderReport() {
 }
 
 function exportSelectedEwayJson() {
-  const purchases = activeEntries("purchase").filter(entry => selectedPurchaseIds.has(entry.id));
+  const purchases = monthFilteredEntries("purchase").filter(entry => selectedPurchaseIds.has(entry.id));
   if (!purchases.length) return toast("Select purchase bills first");
   const reviewMeta = [];
   const billLists = purchases.map(entry => {

@@ -364,6 +364,19 @@ button > *,
   justify-content: flex-end;
 }
 
+.month-filter {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.month-filter select {
+  min-width: 148px;
+  min-height: 38px;
+}
+
 .topbar-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -2118,6 +2131,10 @@ textarea { resize: vertical; }
   }
   .section-actions {
     justify-content: stretch;
+  }
+  .month-filter,
+  .month-filter select {
+    width: 100%;
   }
   .topbar-actions {
     display: grid;
