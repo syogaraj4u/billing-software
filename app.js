@@ -1029,8 +1029,8 @@ function bindEvents() {
   $("#appBackToLoginBtn").addEventListener("click", backToLogin);
   $("#appSendResetBtn").addEventListener("click", sendPasswordResetLink);
   $("#appUpdatePasswordBtn").addEventListener("click", updateRecoveredPassword);
-  $("#cloudBtn").addEventListener("click", openCloudDialog);
-  $("#openCloudSettingsBtn").addEventListener("click", openCloudDialog);
+  bindIf("#cloudBtn", "click", openCloudDialog);
+  bindIf("#openCloudSettingsBtn", "click", openCloudDialog);
   $("#cloudForm").addEventListener("submit", event => event.preventDefault());
   $("#cloudSignInBtn").addEventListener("click", signInToCloud);
   $("#cloudForgotPasswordBtn").addEventListener("click", () => {
@@ -1311,7 +1311,8 @@ function renderCloudUi() {
   $("#appForgotPasswordFields").hidden = !showForgotPassword;
   $("#appPasswordRecoveryFields").hidden = !showPasswordRecovery;
   $("#appLoginNotConfigured").hidden = configured;
-  $("#cloudBtnText").textContent = !configured ? "Local" : showPasswordRecovery ? "Reset" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
+  const cloudBtnText = $("#cloudBtnText");
+  if (cloudBtnText) cloudBtnText.textContent = !configured ? "Local" : showPasswordRecovery ? "Reset" : signedIn ? (cloudWorkspace?.name || "Cloud") : "Sign in";
   $("#cloudModeLabel").textContent = !configured ? "Local browser storage" : showPasswordRecovery ? "Password reset in progress" : signedIn ? "Cloud sync enabled" : "Cloud ready, not signed in";
   $("#cloudWorkspaceLabel").textContent = cloudWorkspace?.name || "Not connected";
   $("#cloudLastSyncLabel").textContent = cloudWorkspace?.updated_at ? new Date(cloudWorkspace.updated_at).toLocaleString("en-IN") : "-";

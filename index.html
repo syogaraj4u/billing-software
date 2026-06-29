@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260630-month-ledgers">
+  <link rel="stylesheet" href="styles.css?v=20260630-cloud-settings">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -86,7 +86,6 @@
           <h2 id="viewTitle">Dashboard</h2>
         </div>
         <div class="topbar-actions">
-          <button class="secondary-btn" id="cloudBtn" title="Cloud account"><i data-lucide="cloud"></i><span id="cloudBtnText">Local</span></button>
           <button class="company-switcher" id="changeCompanyBtn" type="button" title="Change company">
             <i data-lucide="building-2"></i>
             <span><small>Company</small><strong id="activeCompanyName">Select company</strong></span>
@@ -446,6 +445,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260630-month-ledgers"></script>
+  <script src="app.js?v=20260630-cloud-settings"></script>
 </body>
 </html>
