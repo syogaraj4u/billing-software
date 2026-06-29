@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v90";
+const CACHE_NAME = "billing-software-v91";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -14,9 +14,7 @@ const OPTIONAL_ASSETS = [
   "https://unpkg.com/lucide@latest/dist/umd/lucide.min.js",
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"
 ];
 
 self.addEventListener("install", event => {

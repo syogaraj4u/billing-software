@@ -2999,41 +2999,679 @@ function whatsappPhoneNumber(phone) {
 }
 
 async function buildInvoicePdfBlob() {
-  const sheet = $("#invoicePrintArea .modern-invoice");
-  if (!sheet) throw new Error("Invoice is not open");
-  if (!window.html2canvas || !window.jspdf?.jsPDF) throw new Error("PDF tools are still loading");
-  const restorePreview = pauseInvoicePreviewFit();
-  try {
-    await nextFrame();
-    const canvas = await html2canvas(sheet, {
-      backgroundColor: "#ffffff",
-      scale: Math.min(2, window.devicePixelRatio || 1.5),
-      useCORS: true,
-      scrollX: 0,
-      scrollY: 0
-    });
-    const image = canvas.toDataURL("image/png");
-    const pdf = new window.jspdf.jsPDF("p", "mm", "a4");
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const margin = 8;
-    const contentWidth = pageWidth - margin * 2;
-    const contentHeight = pageHeight - margin * 2;
-    const imageHeight = canvas.height * contentWidth / canvas.width;
-    let y = margin;
-    let remainingHeight = imageHeight;
-    while (remainingHeight > 0) {
-      pdf.addImage(image, "PNG", margin, y, contentWidth, imageHeight);
-      remainingHeight -= contentHeight;
-      if (remainingHeight > 0) {
-        pdf.addPage();
-        y -= contentHeight;
-      }
-    }
-    return pdf.output("blob");
-  } finally {
-    restorePreview();
+  if (!currentInvoiceShareContext?.entry) throw new Error("Invoice is not open");
+  const pdf = createInvoicePdfDocument();
+  renderInvoiceVectorPdf(pdf, currentInvoiceShareContext);
+  return pdf.output("blob");
+}
+
+function createInvoicePdfDocument() {
+  if (window.jspdf?.jsPDF) {
+    return new window.jspdf.jsPDF({ orientation: "p", unit: "mm", format: "a4", compress: true });
   }
+  return new InvoiceVectorPdf();
+}
+
+// Offline-friendly vector PDF writer for invoices; avoids screenshot-based PDFs and external PDF libraries.
+class InvoiceVectorPdf {
+  constructor() {
+    this.pageWidth = 210;
+    this.pageHeight = 297;
+    this.pageWidthPt = this.mmToPt(this.pageWidth);
+    this.pageHeightPt = this.mmToPt(this.pageHeight);
+    this.pages = [[]];
+    this.pageIndex = 0;
+    this.fontSize = 10;
+    this.fontStyle = "normal";
+    this.drawColor = [0, 0, 0];
+    this.fillColor = [255, 255, 255];
+    this.textColor = [0, 0, 0];
+    this.lineWidth = 0.2;
+    this.internal = {
+      pageSize: {
+        getWidth: () => this.pageWidth,
+        getHeight: () => this.pageHeight
+      }
+    };
+  }
+
+  mmToPt(value) {
+    return value * 72 / 25.4;
+  }
+
+  page() {
+    return this.pages[this.pageIndex];
+  }
+
+  add(command) {
+    this.page().push(command);
+  }
+
+  addPage() {
+    this.pages.push([]);
+    this.pageIndex = this.pages.length - 1;
+  }
+
+  setPage(pageNo) {
+    this.pageIndex = Math.max(0, Math.min(this.pages.length - 1, pageNo - 1));
+  }
+
+  getNumberOfPages() {
+    return this.pages.length;
+  }
+
+  setFont(_family, style = "normal") {
+    this.fontStyle = style || "normal";
+  }
+
+  setFontSize(size) {
+    this.fontSize = Number(size) || 10;
+  }
+
+  setDrawColor(r, g = r, b = r) {
+    this.drawColor = [r, g, b].map(color => Math.max(0, Math.min(255, Number(color) || 0)));
+  }
+
+  setFillColor(r, g = r, b = r) {
+    this.fillColor = [r, g, b].map(color => Math.max(0, Math.min(255, Number(color) || 0)));
+  }
+
+  setTextColor(r, g = r, b = r) {
+    this.textColor = [r, g, b].map(color => Math.max(0, Math.min(255, Number(color) || 0)));
+  }
+
+  setLineWidth(width) {
+    this.lineWidth = Number(width) || 0.2;
+  }
+
+  line(x1, y1, x2, y2) {
+    this.writeStrokeState();
+    this.add(`${this.pt(x1)} ${this.yPt(y1)} m ${this.pt(x2)} ${this.yPt(y2)} l S`);
+  }
+
+  rect(x, y, w, h, style = "S") {
+    this.writeStrokeState();
+    this.writeFillState();
+    const op = style === "F" ? "f" : style === "FD" || style === "DF" ? "B" : "S";
+    this.add(`${this.pt(x)} ${this.yPt(y + h)} ${this.pt(w)} ${this.pt(h)} re ${op}`);
+  }
+
+  text(value, x, y, options = {}) {
+    const lines = Array.isArray(value) ? value : String(value ?? "").split("\n");
+    const align = options.align || "left";
+    const lineHeight = this.fontSize * 0.352777778 * 1.15;
+    lines.forEach((line, index) => {
+      const text = pdfClean(line);
+      let tx = x;
+      if (align === "right") tx -= this.getTextWidth(text);
+      if (align === "center") tx -= this.getTextWidth(text) / 2;
+      this.writeTextState();
+      this.add(`BT /${this.fontKey()} ${this.num(this.fontSize)} Tf ${this.pt(tx)} ${this.yPt(y + (index * lineHeight))} Td (${this.escapePdfText(text)}) Tj ET`);
+    });
+  }
+
+  splitTextToSize(value, maxWidth) {
+    const sourceLines = String(value ?? "").split("\n");
+    const result = [];
+    sourceLines.forEach(sourceLine => {
+      const words = pdfClean(sourceLine).split(/\s+/).filter(Boolean);
+      let line = "";
+      words.forEach(word => {
+        const candidate = line ? `${line} ${word}` : word;
+        if (this.getTextWidth(candidate) <= maxWidth) {
+          line = candidate;
+          return;
+        }
+        if (line) result.push(line);
+        if (this.getTextWidth(word) <= maxWidth) {
+          line = word;
+          return;
+        }
+        const chunks = this.splitLongWord(word, maxWidth);
+        result.push(...chunks.slice(0, -1));
+        line = chunks[chunks.length - 1] || "";
+      });
+      if (line) result.push(line);
+      if (!words.length) result.push("");
+    });
+    return result.length ? result : [""];
+  }
+
+  splitLongWord(word, maxWidth) {
+    const chunks = [];
+    let chunk = "";
+    String(word || "").split("").forEach(char => {
+      const candidate = `${chunk}${char}`;
+      if (this.getTextWidth(candidate) <= maxWidth || !chunk) {
+        chunk = candidate;
+      } else {
+        chunks.push(chunk);
+        chunk = char;
+      }
+    });
+    if (chunk) chunks.push(chunk);
+    return chunks;
+  }
+
+  getTextWidth(value) {
+    return String(value ?? "").length * this.fontSize * 0.352777778 * 0.48;
+  }
+
+  output(type) {
+    const bytes = this.pdfBytes();
+    if (type === "blob") return new Blob([bytes], { type: "application/pdf" });
+    return new TextDecoder().decode(bytes);
+  }
+
+  pdfBytes() {
+    const objects = [];
+    const addObject = body => {
+      objects.push(body);
+      return objects.length;
+    };
+    const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
+    const pagesId = addObject("");
+    const fontRegularId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+    const fontBoldId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+    const fontItalicId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>");
+    const pageIds = [];
+    this.pages.forEach(commands => {
+      const stream = commands.join("\n");
+      const contentId = addObject(`<< /Length ${this.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+      const pageId = addObject(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${this.num(this.pageWidthPt)} ${this.num(this.pageHeightPt)}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R /F3 ${fontItalicId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+      pageIds.push(pageId);
+    });
+    objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+    const chunks = ["%PDF-1.4\n%Billing\n"];
+    const offsets = [0];
+    objects.forEach((body, index) => {
+      offsets.push(this.byteLength(chunks.join("")));
+      chunks.push(`${index + 1} 0 obj\n${body}\nendobj\n`);
+    });
+    const xrefOffset = this.byteLength(chunks.join(""));
+    chunks.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
+    for (let i = 1; i <= objects.length; i += 1) {
+      chunks.push(`${String(offsets[i]).padStart(10, "0")} 00000 n \n`);
+    }
+    chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+    return new TextEncoder().encode(chunks.join(""));
+  }
+
+  writeStrokeState() {
+    this.add(`${this.color(this.drawColor)} RG`);
+    this.add(`${this.num(this.mmToPt(this.lineWidth))} w`);
+  }
+
+  writeFillState() {
+    this.add(`${this.color(this.fillColor)} rg`);
+  }
+
+  writeTextState() {
+    this.add(`${this.color(this.textColor)} rg`);
+  }
+
+  fontKey() {
+    if (this.fontStyle === "bold") return "F2";
+    if (this.fontStyle === "italic") return "F3";
+    return "F1";
+  }
+
+  pt(value) {
+    return this.num(this.mmToPt(value));
+  }
+
+  yPt(y) {
+    return this.num(this.pageHeightPt - this.mmToPt(y));
+  }
+
+  num(value) {
+    return (Math.round(Number(value) * 1000) / 1000).toFixed(3).replace(/\.?0+$/, "");
+  }
+
+  color(values) {
+    return values.map(value => this.num(value / 255)).join(" ");
+  }
+
+  escapePdfText(value) {
+    return String(value ?? "").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  }
+
+  byteLength(value) {
+    return new TextEncoder().encode(value).length;
+  }
+}
+
+function renderInvoiceVectorPdf(pdf, context) {
+  const details = invoicePdfDetails(context);
+  const layout = invoicePdfLayout(pdf);
+  let y = renderInvoicePdfPageHeader(pdf, details, layout, false, true);
+  y = renderInvoicePdfItems(pdf, details, layout, y);
+  y = ensureInvoicePdfSpace(pdf, details, layout, y, 94, false);
+  y = renderInvoicePdfTotals(pdf, details, layout, y);
+  renderInvoicePdfFooters(pdf, layout);
+}
+
+function invoicePdfDetails({ entry, party, settings }) {
+  const billTo = normalizeAddressSnapshot(entry.billToSnapshot || partyAddressSnapshot(party));
+  const shipTo = normalizeAddressSnapshot(entry.shipToSnapshot || billTo);
+  const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
+  return {
+    entry,
+    party,
+    settings,
+    sellerName: settings.businessName || settings.label || "Business",
+    sellerAddress: settings.address || "",
+    sellerState: settings.state || stateNameFromGstin(settings.gstin) || "",
+    billTo,
+    shipTo,
+    totalQty,
+    roundOff: invoiceRoundOff(entry),
+    payableTotal: invoicePayableTotal(entry),
+    taxGroups: invoiceTaxGroups(entry),
+    isIgst: num(entry.igst) > 0,
+    cancelled: isCancelledEntry(entry)
+  };
+}
+
+function invoicePdfLayout(pdf) {
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 10;
+  const contentWidth = pageWidth - margin * 2;
+  const columns = [
+    { key: "sl", label: "Sl", x: margin, w: 8, align: "center" },
+    { key: "desc", label: "Description of Goods", x: margin + 8, w: 50, align: "left" },
+    { key: "hsn", label: "HSN/SAC", x: margin + 58, w: 17, align: "left" },
+    { key: "qty", label: "Qty", x: margin + 75, w: 15, align: "right" },
+    { key: "rate", label: "Rate", x: margin + 90, w: 20, align: "right" },
+    { key: "taxable", label: "Taxable", x: margin + 110, w: 20, align: "right" },
+    { key: "gstRate", label: "GST %", x: margin + 130, w: 12, align: "right" },
+    { key: "gst", label: "GST Amt", x: margin + 142, w: 20, align: "right" },
+    { key: "amount", label: "Amount", x: margin + 162, w: 28, align: "right" }
+  ];
+  return {
+    pageWidth,
+    pageHeight,
+    margin,
+    contentWidth,
+    bottom: pageHeight - margin - 8,
+    columns
+  };
+}
+
+function renderInvoicePdfPageHeader(pdf, details, layout, continued, includeTableHeader = true) {
+  const { margin, contentWidth, pageWidth } = layout;
+  pdf.setFont("helvetica", "normal");
+  pdf.setDrawColor(51, 66, 66);
+  pdf.setTextColor(20, 34, 35);
+  pdf.setLineWidth(0.25);
+  let y = margin;
+  pdf.setFillColor(245, 248, 248);
+  pdf.rect(margin, y, contentWidth, continued ? 30 : 34, "F");
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(15);
+  pdf.text(pdfClean(details.sellerName), margin + 3, y + 7);
+  pdf.setFontSize(13);
+  pdf.text("TAX INVOICE", pageWidth - margin - 3, y + 7, { align: "right" });
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7.5);
+  const addressLines = pdfWrap(pdf, details.sellerAddress, 95, 2);
+  pdf.text(addressLines, margin + 3, y + 13);
+  pdf.text(`GSTIN/UIN: ${pdfClean(details.settings.gstin || "-")}`, margin + 3, y + 24);
+  pdf.text(`State: ${pdfClean(details.sellerState || "-")} | Code: ${pdfClean(stateCodeFromGstin(details.settings.gstin) || "-")}`, margin + 3, y + 28);
+  drawInvoicePdfMeta(pdf, details, pageWidth - margin - 64, y + 11, 61);
+  if (details.cancelled) {
+    pdf.setTextColor(164, 44, 44);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(13);
+    pdf.text("CANCELLED", pageWidth - margin - 3, y + 31, { align: "right" });
+    pdf.setTextColor(20, 34, 35);
+  }
+  y += continued ? 35 : 39;
+  if (!continued) {
+    const boxWidth = (contentWidth - 4) / 2;
+    const boxHeight = 34;
+    drawInvoicePdfPartyBox(pdf, "Buyer (Bill to)", details.billTo, margin, y, boxWidth, boxHeight);
+    drawInvoicePdfPartyBox(pdf, "Consignee (Ship to)", details.shipTo, margin + boxWidth + 4, y, boxWidth, boxHeight);
+    y += boxHeight + 5;
+  }
+  return includeTableHeader ? renderInvoicePdfItemHeader(pdf, layout, y) : y;
+}
+
+function drawInvoicePdfMeta(pdf, details, x, y, w) {
+  pdf.setDrawColor(170, 184, 184);
+  pdf.rect(x, y, w, 18);
+  pdf.line(x, y + 9, x + w, y + 9);
+  pdf.line(x + w / 2, y, x + w / 2, y + 18);
+  pdf.setFontSize(6.5);
+  pdf.setFont("helvetica", "normal");
+  pdf.text("Invoice No.", x + 2, y + 4);
+  pdf.text("Dated", x + w / 2 + 2, y + 4);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(8);
+  pdf.text(pdfClean(details.entry.number || "-"), x + 2, y + 8);
+  pdf.text(pdfClean(formatInvoiceDate(details.entry.date) || "-"), x + w / 2 + 2, y + 8);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(6.5);
+  pdf.text("Total Qty", x + 2, y + 13);
+  pdf.text("Total", x + w / 2 + 2, y + 13);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(8);
+  pdf.text(pdfClean(formatQty(details.totalQty)), x + 2, y + 17);
+  pdf.text(pdfMoney(details.payableTotal), x + w - 2, y + 17, { align: "right" });
+}
+
+function drawInvoicePdfPartyBox(pdf, title, party, x, y, w, h) {
+  pdf.setDrawColor(185, 196, 196);
+  pdf.rect(x, y, w, h);
+  pdf.setFillColor(247, 249, 249);
+  pdf.rect(x, y, w, 7, "F");
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7.5);
+  pdf.text(pdfClean(title), x + 2, y + 5);
+  pdf.setFontSize(8.5);
+  pdf.text(pdfClean(party.name || "-"), x + 2, y + 12);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  pdf.text(pdfWrap(pdf, party.address || party.place || "-", w - 4, 3), x + 2, y + 17);
+  pdf.text(`GSTIN/UIN: ${pdfClean(party.gstin || "-")}`, x + 2, y + h - 8);
+  pdf.text(`State: ${pdfClean(stateNameFromGstin(party.gstin) || party.place || "-")} | Code: ${pdfClean(stateCodeFromGstin(party.gstin) || "-")}`, x + 2, y + h - 4);
+}
+
+function renderInvoicePdfItemHeader(pdf, layout, y) {
+  const { margin, contentWidth, columns } = layout;
+  const h = 8;
+  pdf.setDrawColor(60, 74, 74);
+  pdf.setFillColor(232, 239, 239);
+  pdf.rect(margin, y, contentWidth, h, "FD");
+  columns.slice(1).forEach(col => pdf.line(col.x, y, col.x, y + h));
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(6.6);
+  columns.forEach(col => {
+    const tx = col.align === "right" ? col.x + col.w - 1.5 : col.align === "center" ? col.x + col.w / 2 : col.x + 1.5;
+    pdf.text(col.label, tx, y + 5.2, { align: col.align });
+  });
+  return y + h;
+}
+
+function renderInvoicePdfItems(pdf, details, layout, startY) {
+  let y = startY;
+  details.entry.lines.forEach((line, index) => {
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    const row = invoicePdfLineRow(line, item, index);
+    y = renderInvoicePdfLineRow(pdf, row, details, layout, y);
+  });
+  if (Math.abs(details.roundOff) >= 0.01) {
+    y = ensureInvoicePdfSpace(pdf, details, layout, y, 8, true);
+    drawInvoicePdfSimpleRow(pdf, layout, y, "Round Off", pdfMoney(details.roundOff));
+    y += 8;
+  }
+  y = ensureInvoicePdfSpace(pdf, details, layout, y, 9, true);
+  drawInvoicePdfTotalRow(pdf, details, layout, y);
+  return y + 9;
+}
+
+function invoicePdfLineRow(line, item, index) {
+  const imeis = imeiNumbersFromText(line.imeiNumbers);
+  const description = [
+    item.name || itemName(line.itemId),
+    imeis.length ? `IMEI: ${[...new Set(imeis)].join(", ")}` : ""
+  ].filter(Boolean).join("\n");
+  return {
+    sl: String(index + 1),
+    description,
+    hsn: item.hsn || "",
+    qty: formatQty(line.qty),
+    rate: formatInvoiceMoney(line.rate),
+    taxable: formatInvoiceMoney(lineTaxableAmount(line)),
+    gstRate: `${num(line.gstRate)}%`,
+    gst: formatInvoiceMoney(lineGstAmount(line)),
+    amount: formatInvoiceMoney(lineGrossAmount(line))
+  };
+}
+
+function renderInvoicePdfLineRow(pdf, row, details, layout, startY) {
+  const descColumn = layout.columns.find(col => col.key === "desc");
+  const descriptionLines = pdfWrap(pdf, row.description || "-", descColumn.w - 3, 80);
+  let offset = 0;
+  let y = startY;
+  let firstChunk = true;
+  while (offset < descriptionLines.length) {
+    const availableLines = Math.max(1, Math.floor((layout.bottom - y - 4) / 3.4));
+    if (availableLines < 2) {
+      y = addInvoicePdfContinuationPage(pdf, details, layout);
+      continue;
+    }
+    const chunk = descriptionLines.slice(offset, offset + availableLines);
+    const rowHeight = Math.max(8, chunk.length * 3.4 + 4);
+    y = ensureInvoicePdfSpace(pdf, details, layout, y, rowHeight, true);
+    drawInvoicePdfRowFrame(pdf, layout, y, rowHeight);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(6.8);
+    drawInvoicePdfCell(pdf, layout.columns[1], y, chunk.join("\n"), rowHeight, "left");
+    if (firstChunk) {
+      drawInvoicePdfCell(pdf, layout.columns[0], y, row.sl, rowHeight, "center");
+      drawInvoicePdfCell(pdf, layout.columns[2], y, row.hsn || "-", rowHeight, "left");
+      drawInvoicePdfCell(pdf, layout.columns[3], y, row.qty, rowHeight, "right");
+      drawInvoicePdfCell(pdf, layout.columns[4], y, row.rate, rowHeight, "right");
+      drawInvoicePdfCell(pdf, layout.columns[5], y, row.taxable, rowHeight, "right");
+      drawInvoicePdfCell(pdf, layout.columns[6], y, row.gstRate, rowHeight, "right");
+      drawInvoicePdfCell(pdf, layout.columns[7], y, row.gst, rowHeight, "right");
+      drawInvoicePdfCell(pdf, layout.columns[8], y, row.amount, rowHeight, "right");
+    } else {
+      drawInvoicePdfCell(pdf, layout.columns[0], y, row.sl, rowHeight, "center");
+      pdf.setFont("helvetica", "italic");
+      drawInvoicePdfCell(pdf, layout.columns[2], y, "cont.", rowHeight, "left");
+      pdf.setFont("helvetica", "normal");
+    }
+    y += rowHeight;
+    offset += chunk.length;
+    firstChunk = false;
+  }
+  return y;
+}
+
+function drawInvoicePdfRowFrame(pdf, layout, y, h) {
+  pdf.setDrawColor(185, 196, 196);
+  pdf.rect(layout.margin, y, layout.contentWidth, h);
+  layout.columns.slice(1).forEach(col => pdf.line(col.x, y, col.x, y + h));
+}
+
+function drawInvoicePdfCell(pdf, col, y, text, h, align = col.align) {
+  const tx = align === "right" ? col.x + col.w - 1.5 : align === "center" ? col.x + col.w / 2 : col.x + 1.5;
+  const lines = String(text || "").split("\n");
+  pdf.text(lines, tx, y + 4.6, { align, maxWidth: col.w - 3 });
+}
+
+function drawInvoicePdfSimpleRow(pdf, layout, y, label, amount) {
+  drawInvoicePdfRowFrame(pdf, layout, y, 8);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7);
+  drawInvoicePdfCell(pdf, layout.columns[1], y, label, 8, "left");
+  drawInvoicePdfCell(pdf, layout.columns[8], y, amount, 8, "right");
+}
+
+function drawInvoicePdfTotalRow(pdf, details, layout, y) {
+  pdf.setFillColor(232, 239, 239);
+  pdf.rect(layout.margin, y, layout.contentWidth, 9, "F");
+  drawInvoicePdfRowFrame(pdf, layout, y, 9);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7);
+  drawInvoicePdfCell(pdf, layout.columns[1], y, "Total", 9, "right");
+  drawInvoicePdfCell(pdf, layout.columns[3], y, formatQty(details.totalQty), 9, "right");
+  drawInvoicePdfCell(pdf, layout.columns[5], y, formatInvoiceMoney(details.entry.taxable), 9, "right");
+  drawInvoicePdfCell(pdf, layout.columns[7], y, formatInvoiceMoney(details.entry.gst), 9, "right");
+  drawInvoicePdfCell(pdf, layout.columns[8], y, pdfMoney(details.payableTotal), 9, "right");
+}
+
+function renderInvoicePdfTotals(pdf, details, layout, startY) {
+  let y = startY + 4;
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  pdf.text("Amount Chargeable (in words)", layout.margin, y);
+  pdf.setFont("helvetica", "bold");
+  y += drawInvoicePdfWrapped(pdf, amountInWords(details.payableTotal), layout.margin, y + 4, layout.contentWidth - 34, 3.8);
+  pdf.setFont("helvetica", "normal");
+  pdf.text("E. & O.E", layout.pageWidth - layout.margin, startY + 4, { align: "right" });
+  y += 2;
+  y = renderInvoicePdfTaxSummary(pdf, details, layout, y);
+  y = ensureInvoicePdfSpace(pdf, details, layout, y, 42, false);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  pdf.text("Tax Amount (in words):", layout.margin, y);
+  pdf.setFont("helvetica", "bold");
+  y += drawInvoicePdfWrapped(pdf, amountInWords(details.entry.gst), layout.margin + 28, y, layout.contentWidth - 28, 3.8);
+  y += 4;
+  y = renderInvoicePdfBankAndSignature(pdf, details, layout, y);
+  return y;
+}
+
+function renderInvoicePdfTaxSummary(pdf, details, layout, startY) {
+  const rowHeight = 7;
+  const headerHeight = 8;
+  const tableHeight = headerHeight + (details.taxGroups.length + 1) * rowHeight;
+  let y = ensureInvoicePdfSpace(pdf, details, layout, startY, tableHeight + 4, false);
+  const columns = details.isIgst
+    ? [
+        { label: "HSN/SAC", w: 38, align: "left" },
+        { label: "Taxable Value", w: 38, align: "right" },
+        { label: "IGST Rate", w: 30, align: "right" },
+        { label: "IGST Amount", w: 38, align: "right" },
+        { label: "Total Tax", w: 46, align: "right" }
+      ]
+    : [
+        { label: "HSN/SAC", w: 32, align: "left" },
+        { label: "Taxable Value", w: 32, align: "right" },
+        { label: "CGST Rate", w: 22, align: "right" },
+        { label: "CGST Amt", w: 28, align: "right" },
+        { label: "SGST Rate", w: 22, align: "right" },
+        { label: "SGST Amt", w: 28, align: "right" },
+        { label: "Total Tax", w: 26, align: "right" }
+      ];
+  drawInvoicePdfMiniTableHeader(pdf, layout.margin, y, columns, headerHeight);
+  y += headerHeight;
+  details.taxGroups.forEach(group => {
+    const row = details.isIgst
+      ? [group.hsn, formatInvoiceMoney(group.taxable), `${group.rate}%`, formatInvoiceMoney(group.tax), formatInvoiceMoney(group.tax)]
+      : [group.hsn, formatInvoiceMoney(group.taxable), `${group.rate / 2}%`, formatInvoiceMoney(group.tax / 2), `${group.rate / 2}%`, formatInvoiceMoney(group.tax / 2), formatInvoiceMoney(group.tax)];
+    drawInvoicePdfMiniTableRow(pdf, layout.margin, y, columns, row, rowHeight, false);
+    y += rowHeight;
+  });
+  const totalRow = details.isIgst
+    ? ["Total", formatInvoiceMoney(details.entry.taxable), "", formatInvoiceMoney(details.entry.igst), formatInvoiceMoney(details.entry.igst)]
+    : ["Total", formatInvoiceMoney(details.entry.taxable), "", formatInvoiceMoney(details.entry.cgst), "", formatInvoiceMoney(details.entry.sgst), formatInvoiceMoney(details.entry.gst)];
+  drawInvoicePdfMiniTableRow(pdf, layout.margin, y, columns, totalRow, rowHeight, true);
+  return y + rowHeight + 3;
+}
+
+function drawInvoicePdfMiniTableHeader(pdf, x, y, columns, h) {
+  pdf.setFillColor(232, 239, 239);
+  pdf.setDrawColor(90, 106, 106);
+  pdf.rect(x, y, columns.reduce((sum, col) => sum + col.w, 0), h, "FD");
+  let cursor = x;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(6.5);
+  columns.forEach((col, index) => {
+    if (index) pdf.line(cursor, y, cursor, y + h);
+    pdf.text(col.label, col.align === "right" ? cursor + col.w - 1.5 : cursor + 1.5, y + 5, { align: col.align });
+    cursor += col.w;
+  });
+}
+
+function drawInvoicePdfMiniTableRow(pdf, x, y, columns, values, h, bold) {
+  pdf.setDrawColor(185, 196, 196);
+  pdf.rect(x, y, columns.reduce((sum, col) => sum + col.w, 0), h);
+  let cursor = x;
+  pdf.setFont("helvetica", bold ? "bold" : "normal");
+  pdf.setFontSize(6.6);
+  columns.forEach((col, index) => {
+    if (index) pdf.line(cursor, y, cursor, y + h);
+    pdf.text(pdfClean(values[index] || ""), col.align === "right" ? cursor + col.w - 1.5 : cursor + 1.5, y + 4.8, { align: col.align });
+    cursor += col.w;
+  });
+}
+
+function renderInvoicePdfBankAndSignature(pdf, details, layout, startY) {
+  const bank = details.settings.bankDetails || {};
+  const leftWidth = layout.contentWidth * 0.58;
+  const rightX = layout.margin + leftWidth + 5;
+  const rightWidth = layout.contentWidth - leftWidth - 5;
+  let y = startY;
+  pdf.setDrawColor(185, 196, 196);
+  pdf.rect(layout.margin, y, leftWidth, 40);
+  pdf.rect(rightX, y, rightWidth, 40);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7.5);
+  pdf.text("Bank Details", layout.margin + 2, y + 5);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  const bankLines = [
+    `Bank: ${bank.bankName || "-"}`,
+    `Account Name: ${bank.accountName || details.sellerName}`,
+    `Branch: ${bank.branch || "-"}`,
+    `A/c No.: ${bank.accountNumber || "-"}`,
+    `IFSC: ${bank.ifsc || "-"}`
+  ];
+  pdf.text(bankLines.map(pdfClean), layout.margin + 2, y + 10);
+  pdf.setFont("helvetica", "bold");
+  pdf.text(`for ${pdfClean(details.sellerName)}`, rightX + rightWidth - 2, y + 6, { align: "right" });
+  pdf.setFont("helvetica", "normal");
+  pdf.text("Authorised Signatory", rightX + rightWidth - 2, y + 36, { align: "right" });
+  y += 45;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7);
+  pdf.text("Declaration", layout.margin, y);
+  pdf.setFont("helvetica", "normal");
+  y += drawInvoicePdfWrapped(pdf, "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", layout.margin, y + 4, layout.contentWidth, 3.6);
+  return y + 2;
+}
+
+function ensureInvoicePdfSpace(pdf, details, layout, y, requiredHeight, includeTableHeader) {
+  if (y + requiredHeight <= layout.bottom) return y;
+  return addInvoicePdfContinuationPage(pdf, details, layout, includeTableHeader);
+}
+
+function addInvoicePdfContinuationPage(pdf, details, layout, includeTableHeader = true) {
+  pdf.addPage();
+  return renderInvoicePdfPageHeader(pdf, details, layout, true, includeTableHeader);
+}
+
+function renderInvoicePdfFooters(pdf, layout) {
+  const totalPages = pdf.getNumberOfPages();
+  for (let pageNo = 1; pageNo <= totalPages; pageNo += 1) {
+    pdf.setPage(pageNo);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(6.5);
+    pdf.setTextColor(88, 105, 105);
+    pdf.text("This is a Computer Generated Invoice", layout.pageWidth / 2, layout.pageHeight - 6, { align: "center" });
+    pdf.text(`Page ${pageNo} of ${totalPages}`, layout.pageWidth - layout.margin, layout.pageHeight - 6, { align: "right" });
+  }
+  pdf.setTextColor(20, 34, 35);
+}
+
+function drawInvoicePdfWrapped(pdf, text, x, y, maxWidth, lineHeight) {
+  const lines = pdfWrap(pdf, text, maxWidth, 20);
+  pdf.text(lines, x, y);
+  return Math.max(lineHeight, lines.length * lineHeight);
+}
+
+function pdfWrap(pdf, text, maxWidth, maxLines = 20) {
+  const lines = pdf.splitTextToSize(pdfClean(text || "-"), maxWidth);
+  return lines.slice(0, maxLines);
+}
+
+function pdfMoney(value) {
+  return `Rs. ${formatInvoiceMoney(value)}`;
+}
+
+function pdfClean(value) {
+  return String(value ?? "")
+    .replace(/\u20b9/g, "Rs.")
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/\u00a0/g, " ")
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "")
+    .replace(/[ \t]+/g, " ")
+    .trim();
 }
 
 function pauseInvoicePreviewFit() {
