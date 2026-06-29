@@ -1602,7 +1602,8 @@ function openEntry(kind, id = null, draft = null) {
   };
   form.elements.status.value = source?.status || "Paid";
   $("#entryStatusLabel").hidden = kind === "sale";
-  form.elements.notes.value = source?.notes || "";
+  $("#entryNotesLabel").hidden = kind === "sale";
+  form.elements.notes.value = kind === "sale" ? "" : (source?.notes || "");
   $("#entryPartyLabelText").textContent = kind === "sale" ? "Buyer" : "Supplier";
   $("#entryAddBuyerBtn").hidden = kind !== "sale";
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
@@ -2152,7 +2153,7 @@ function saveEntry(event) {
     profileId: form.elements.profileId.value,
     partyId: form.elements.partyId.value,
     status: form.elements.status.value,
-    notes: form.elements.notes.value.trim(),
+    notes: entryMode === "sale" ? "" : form.elements.notes.value.trim(),
     lines,
     ...calculated,
     attachments: clone(entryDraftMeta.attachments || []),
