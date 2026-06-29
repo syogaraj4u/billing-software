@@ -847,6 +847,7 @@ function bindIf(selector, eventName, handler) {
 function bindEvents() {
   $$(".nav-tab").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
+  $$("[data-close-dialog]").forEach(button => button.addEventListener("click", () => closeDialog(button.dataset.closeDialog)));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
   bindIf("#chatBillBtn", "click", openChatBillDialog);
   bindIf("#newChatSaleBtn", "click", openChatBillDialog);
@@ -1607,6 +1608,8 @@ function openEntry(kind, id = null, draft = null) {
   form.reset();
   $("#entryKindLabel").textContent = kind === "sale" ? "Sales Bill" : "Purchase Entry";
   $("#entryDialogTitle").textContent = id ? "Edit Entry" : (kind === "sale" ? "New Sales Invoice" : "New Entry");
+  $("#entryDialog").classList.toggle("sale-entry-dialog", kind === "sale");
+  $("#entryDialog").classList.toggle("purchase-entry-dialog", kind === "purchase");
   form.elements.date.value = source?.date || today();
   form.elements.date.oninput = updateEntryTotals;
   form.elements.number.value = source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId);
@@ -1635,6 +1638,15 @@ function openEntry(kind, id = null, draft = null) {
   updateEntryTotals();
   $("#entryDialog").showModal();
   if (window.lucide) lucide.createIcons();
+}
+
+function closeDialog(dialogId) {
+  const dialog = $(`#${dialogId}`);
+  if (dialog?.open) dialog.close();
+  if (dialogId === "partyDialog") {
+    partyDialogContext = null;
+    partyAliasDraft = [];
+  }
 }
 
 function setupSalesAddressPanel(kind, source = null) {

@@ -2096,6 +2096,33 @@ textarea { resize: vertical; }
     margin: 0;
     border-radius: 0;
   }
+  .wide-dialog,
+  #partyDialog,
+  #itemDialog {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+  }
+  #entryForm,
+  #partyForm,
+  #itemForm {
+    height: 100dvh;
+    max-height: none;
+    overflow: hidden;
+  }
+  #partyForm,
+  #itemForm {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  #partyForm .form-grid,
+  #itemForm .form-grid {
+    min-height: 0;
+    overflow: auto;
+  }
   .invoice-dialog {
     width: 100vw;
     max-width: none;
@@ -2394,6 +2421,9 @@ textarea { resize: vertical; }
     justify-content: stretch;
     gap: 12px;
   }
+  #entryDialog.sale-entry-dialog .totals-box {
+    display: none;
+  }
   .totals-box div { text-align: left; }
   .dialog-head,
   .form-grid,
@@ -2424,6 +2454,7 @@ textarea { resize: vertical; }
   .dialog-actions {
     display: grid;
     grid-template-columns: 1fr;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
   }
   .filters label,
   .filters .secondary-btn {
