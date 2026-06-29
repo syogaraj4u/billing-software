@@ -715,6 +715,89 @@ textarea { resize: vertical; }
   white-space: nowrap;
 }
 
+.sales-address-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 20px 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.sales-flow-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sales-flow-strip span {
+  min-height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.sales-address-grid,
+.ship-to-custom {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sales-address-card {
+  min-height: 132px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.sales-address-card span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sales-address-card strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.sales-address-card p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.ship-to-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.checkbox-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+}
+
+.checkbox-row input {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
 .alias-manager-field {
   display: grid;
   gap: 6px;
@@ -1289,10 +1372,19 @@ textarea { resize: vertical; }
   border-bottom: 1px solid #111827;
 }
 
+.invoice-seller-strip {
+  border-bottom: 1px solid #111827;
+}
+
 .invoice-party-block {
   min-height: 118px;
   padding: 10px 12px;
   border-right: 1px solid #111827;
+}
+
+.invoice-seller-strip .invoice-party-block {
+  min-height: 0;
+  border-right: 0;
 }
 
 .modern-party-grid .invoice-party-block:last-child {
@@ -2317,6 +2409,17 @@ textarea { resize: vertical; }
   }
   .entry-party-field .secondary-btn {
     width: 100%;
+  }
+  .sales-address-panel {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+  .sales-flow-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sales-address-grid,
+  .ship-to-custom {
+    grid-template-columns: 1fr;
   }
   .dialog-actions {
     display: grid;

@@ -13,9 +13,9 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260628-purchase-review">
-  <link rel="stylesheet" href="desktop-view.css?v=20260628-purchase-review" media="(min-width: 821px)">
-  <link rel="stylesheet" href="mobile-view.css?v=20260628-purchase-review" media="(max-width: 820px)">
+  <link rel="stylesheet" href="styles.css?v=20260629-sales-flow2">
+  <link rel="stylesheet" href="desktop-view.css?v=20260629-sales-flow2" media="(min-width: 821px)">
+  <link rel="stylesheet" href="mobile-view.css?v=20260629-sales-flow2" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -96,7 +96,6 @@
             <i data-lucide="upload"></i>
             <input id="restoreInput" type="file" accept="application/json">
           </label>
-          <button class="secondary-btn" id="chatBillBtn"><i data-lucide="message-square-text"></i><span>Smart Bill</span></button>
         </div>
       </header>
 
@@ -138,12 +137,11 @@
       <section class="view" id="salesView">
         <div class="section-head">
           <div>
-            <h3>Sales Entry</h3>
-            <p>Create GST bills and reduce stock automatically.</p>
+            <h3>Sales Bills</h3>
+            <p>Create GST invoices from buyer master and saved ship-to addresses.</p>
           </div>
           <div class="section-actions">
-            <button class="secondary-btn" id="newChatSaleBtn"><i data-lucide="message-square-text"></i><span>Smart Bill</span></button>
-            <button class="primary-btn" id="newSaleBtn"><i data-lucide="plus"></i><span>New Sale</span></button>
+            <button class="primary-btn" id="newSaleBtn"><i data-lucide="plus"></i><span>New Invoice</span></button>
           </div>
         </div>
         <div class="table-wrap panel">
@@ -280,33 +278,6 @@
     </main>
   </div>
 
-  <dialog id="chatBillDialog" class="chat-dialog">
-    <form method="dialog" id="chatBillForm">
-      <div class="dialog-head">
-        <div>
-          <h3>Smart Bill</h3>
-        </div>
-        <button class="icon-btn" id="closeChatBillBtn" type="button" title="Close" aria-label="Close Smart Bill"><i data-lucide="x"></i></button>
-      </div>
-      <div class="chat-bill-body">
-        <div class="chat-thread" id="chatBillThread"></div>
-        <div class="chat-summary" id="chatBillSummary"></div>
-      </div>
-      <div class="chat-composer" aria-label="Smart Bill message composer">
-        <div class="chat-attachments" id="chatBillAttachments"></div>
-        <div class="chat-composer-box">
-          <label class="icon-btn upload-btn chat-attach-btn" title="Attach image">
-            <i data-lucide="image-plus"></i>
-            <input id="chatBillAttachmentInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple>
-          </label>
-          <textarea id="chatBillInput" rows="1" aria-label="Smart Bill details" placeholder="Message Smart Bill" enterkeyhint="send"></textarea>
-          <button class="icon-btn" id="chatSampleBtn" type="button" title="Example"><i data-lucide="wand-sparkles"></i></button>
-          <button class="icon-btn chat-send-btn" id="prepareChatBillBtn" type="button" title="Send"><i data-lucide="send"></i></button>
-        </div>
-      </div>
-    </form>
-  </dialog>
-
   <dialog id="entryDialog" class="wide-dialog">
     <form method="dialog" id="entryForm">
       <div class="dialog-head">
@@ -325,9 +296,42 @@
             <label><span id="entryPartyLabelText">Party</span><select name="partyId" required></select></label>
             <button class="secondary-btn" id="entryAddBuyerBtn" type="button"><i data-lucide="user-plus"></i><span>New Buyer</span></button>
           </div>
-          <label>Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
+          <label id="entryStatusLabel">Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
           <label class="span-2">Notes<input name="notes"></label>
         </div>
+        <section class="sales-address-panel" id="salesAddressPanel" hidden>
+          <div class="sales-flow-strip">
+            <span>Buyer</span>
+            <span>Ship To</span>
+            <span>Items</span>
+            <span>Review</span>
+          </div>
+          <div class="sales-address-grid">
+            <div class="sales-address-card" id="billToPreview"></div>
+            <div class="sales-address-card" id="shipToPreview"></div>
+          </div>
+          <div class="ship-to-controls">
+            <label class="checkbox-row">
+              <input name="shipToSame" type="checkbox" checked>
+              <span>Ship to same as Bill To</span>
+            </label>
+            <label class="checkbox-row">
+              <input name="rateIncludesGst" type="checkbox" checked>
+              <span>Sale rate includes GST</span>
+            </label>
+            <label id="shipToSavedLabel">Saved Ship To<select name="shipToAddressId"></select></label>
+            <div class="ship-to-custom" id="shipToCustomFields" hidden>
+              <label>Name<input name="shipToName"></label>
+              <label>GSTIN<input name="shipToGstin" maxlength="15"></label>
+              <label>Place<input name="shipToPlace"></label>
+              <label class="span-2">Address<textarea name="shipToAddress" rows="3"></textarea></label>
+              <label class="checkbox-row span-2">
+                <input name="saveShipTo" type="checkbox">
+                <span>Save this Ship To for this buyer</span>
+              </label>
+            </div>
+          </div>
+        </section>
         <div id="purchaseReviewPanel"></div>
         <div class="line-editor">
           <div class="line-head">
@@ -393,7 +397,7 @@
               <button class="secondary-btn" id="addPartyAliasBtn" type="button"><i data-lucide="plus"></i><span>Add</span></button>
             </div>
             <div class="alias-chip-list" id="partyAliasChips"></div>
-            <p class="alias-help" id="partyAliasHint">Add short names you use in Smart Bill or purchase uploads.</p>
+            <p class="alias-help" id="partyAliasHint">Add short names you use for buyer lookup or purchase uploads.</p>
           </div>
         </div>
         <label>Phone<input name="phone"></label>
@@ -471,6 +475,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260628-purchase-review"></script>
+  <script src="app.js?v=20260629-sales-flow2"></script>
 </body>
 </html>

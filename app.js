@@ -396,8 +396,8 @@ function normalizeState(value) {
   [...value.sales, ...value.purchases].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
-  value.sales.forEach(entry => normalizeEntryForState(entry, "sale"));
-  value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase"));
+  value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties));
+  value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties));
   return value;
 }
 
@@ -411,8 +411,20 @@ function normalizePartyForState(party) {
     email: party.email || "",
     place: party.place || "",
     address: party.address || "",
-    aliases: party.aliases || ""
+    aliases: party.aliases || "",
+    shippingAddresses: normalizeShippingAddresses(party.shippingAddresses || party.shipToAddresses || [])
   };
+}
+
+function normalizeShippingAddresses(addresses = []) {
+  return (Array.isArray(addresses) ? addresses : []).map(address => ({
+    id: address.id || uid(),
+    label: address.label || address.name || "Ship To",
+    name: address.name || "",
+    gstin: normalizeGstin(address.gstin || ""),
+    place: address.place || "",
+    address: address.address || ""
+  })).filter(address => address.address || address.name || address.gstin || address.place);
 }
 
 function mergeTallyBuyerMaster(value) {
@@ -469,7 +481,7 @@ function initialsAlias(value) {
   return initials.length >= 3 ? initials : "";
 }
 
-function normalizeEntryForState(entry, kind) {
+function normalizeEntryForState(entry, kind, parties = []) {
   entry.lines = Array.isArray(entry.lines) ? entry.lines : [];
   const calculated = basicTotals(entry.lines);
   entry.taxable = num(entry.taxable) || calculated.taxable;
@@ -482,7 +494,54 @@ function normalizeEntryForState(entry, kind) {
   entry.reviewMessages = Array.isArray(entry.reviewMessages) ? entry.reviewMessages : [];
   entry.reviewStatus = entry.reviewStatus || (entry.reviewMessages.length ? "Needs Review" : "Ready");
   entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
+  entry.rateIncludesGst = Boolean(entry.rateIncludesGst);
+  if (kind === "sale") normalizeSaleAddressSnapshots(entry, parties);
   if (kind === "purchase") entry.source = entry.source || "manual";
+}
+
+function normalizeSaleAddressSnapshots(entry, parties = []) {
+  const party = parties.find(row => row.id === entry.partyId) || {};
+  entry.billToSnapshot = normalizeAddressSnapshot(entry.billToSnapshot || entry.billTo || partyAddressSnapshot(party));
+  entry.shipToSnapshot = normalizeAddressSnapshot(entry.shipToSnapshot || entry.shipTo || entry.billToSnapshot);
+  entry.shipToSameAsBillTo = entry.shipToSameAsBillTo ?? sameAddressSnapshot(entry.billToSnapshot, entry.shipToSnapshot);
+  entry.shipToAddressId = entry.shipToAddressId || "";
+}
+
+function normalizeAddressSnapshot(address = {}) {
+  return {
+    name: address.name || "",
+    gstin: normalizeGstin(address.gstin || ""),
+    address: address.address || "",
+    place: address.place || "",
+    state: address.state || stateNameFromGstin(address.gstin) || address.place || ""
+  };
+}
+
+function sameAddressSnapshot(a = {}, b = {}) {
+  return normalizeForAlias(a.name) === normalizeForAlias(b.name)
+    && normalizeGstin(a.gstin) === normalizeGstin(b.gstin)
+    && normalizeForAlias(a.address) === normalizeForAlias(b.address)
+    && normalizeForAlias(a.place || a.state) === normalizeForAlias(b.place || b.state);
+}
+
+function partyAddressSnapshot(party = {}) {
+  return normalizeAddressSnapshot({
+    name: party.name || "",
+    gstin: party.gstin || "",
+    address: party.address || "",
+    place: party.place || stateNameFromGstin(party.gstin) || "",
+    state: stateNameFromGstin(party.gstin) || party.place || ""
+  });
+}
+
+function shippingAddressSnapshot(address = {}, party = {}) {
+  return normalizeAddressSnapshot({
+    name: address.name || party.name || "",
+    gstin: address.gstin || party.gstin || "",
+    address: address.address || "",
+    place: address.place || stateNameFromGstin(address.gstin || party.gstin) || "",
+    state: stateNameFromGstin(address.gstin || party.gstin) || address.place || ""
+  });
 }
 
 function saveState(options = {}) {
@@ -658,13 +717,31 @@ function partyById(id) {
   return state.parties.find(row => row.id === id);
 }
 
+function lineTaxableAmount(line = {}) {
+  return round2(num(line.qty) * num(line.rate));
+}
+
+function lineGrossAmount(line = {}) {
+  const grossRate = num(line.grossRate);
+  if (grossRate && grossRate >= num(line.rate)) return round2(num(line.qty) * grossRate);
+  const taxable = lineTaxableAmount(line);
+  return round2(taxable + lineGstAmount(line));
+}
+
+function lineGstAmount(line = {}) {
+  const taxable = lineTaxableAmount(line);
+  const grossRate = num(line.grossRate);
+  if (grossRate && grossRate >= num(line.rate)) return round2((num(line.qty) * grossRate) - taxable);
+  return round2(taxable * num(line.gstRate) / 100);
+}
+
 function basicTotals(lines) {
   return lines.reduce((acc, line) => {
-    const taxable = num(line.qty) * num(line.rate);
-    const gst = taxable * num(line.gstRate) / 100;
+    const taxable = lineTaxableAmount(line);
+    const gst = lineGstAmount(line);
     acc.taxable += taxable;
     acc.gst += gst;
-    acc.total += taxable + gst;
+    acc.total += lineGrossAmount(line);
     return acc;
   }, { taxable: 0, gst: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
 }
@@ -688,8 +765,8 @@ function calculateEntryTotals(lines, profile, party, kind) {
   const buyerGstin = kind === "purchase" ? profile?.gstin : party?.gstin;
   const { mode, review } = taxModeFromGstins(sellerGstin, buyerGstin);
   const calculated = lines.reduce((acc, line) => {
-    const taxable = num(line.qty) * num(line.rate);
-    const gst = taxable * num(line.gstRate) / 100;
+    const taxable = lineTaxableAmount(line);
+    const gst = lineGstAmount(line);
     acc.taxable += taxable;
     acc.gst += gst;
     if (mode === "IGST") acc.igst += gst;
@@ -697,7 +774,7 @@ function calculateEntryTotals(lines, profile, party, kind) {
       acc.cgst += gst / 2;
       acc.sgst += gst / 2;
     }
-    acc.total += taxable + gst;
+    acc.total += lineGrossAmount(line);
     return acc;
   }, { taxable: 0, gst: 0, cgst: 0, sgst: 0, igst: 0, total: 0 });
   calculated.taxMode = mode;
@@ -762,12 +839,17 @@ function registerServiceWorker() {
   navigator.serviceWorker.register("./service-worker.js").catch(() => {});
 }
 
+function bindIf(selector, eventName, handler) {
+  const element = $(selector);
+  if (element) element.addEventListener(eventName, handler);
+}
+
 function bindEvents() {
   $$(".nav-tab").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
-  $("#chatBillBtn").addEventListener("click", openChatBillDialog);
-  $("#newChatSaleBtn").addEventListener("click", openChatBillDialog);
+  bindIf("#chatBillBtn", "click", openChatBillDialog);
+  bindIf("#newChatSaleBtn", "click", openChatBillDialog);
   $("#newPurchaseBtn").addEventListener("click", () => openEntry("purchase"));
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
@@ -777,13 +859,19 @@ function bindEvents() {
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryAddBuyerBtn").addEventListener("click", openBuyerFromEntry);
   $("#entryForm").addEventListener("submit", saveEntry);
-  $("#chatBillForm").addEventListener("submit", event => event.preventDefault());
-  $("#closeChatBillBtn").addEventListener("click", closeChatBillDialog);
-  $("#chatBillAttachmentInput").addEventListener("change", handleChatBillAttachmentInput);
-  $("#chatBillInput").addEventListener("input", resizeChatBillInput);
-  $("#chatBillInput").addEventListener("keydown", handleChatBillInputKeydown);
-  $("#chatSampleBtn").addEventListener("click", fillChatBillSample);
-  $("#prepareChatBillBtn").addEventListener("click", prepareChatBillDraft);
+  $("#entryForm").elements.shipToSame.addEventListener("change", updateSalesAddressPanel);
+  $("#entryForm").elements.shipToAddressId.addEventListener("change", updateSalesAddressPanel);
+  $("#entryForm").elements.rateIncludesGst.addEventListener("change", updateEntryTotals);
+  ["shipToName", "shipToGstin", "shipToPlace", "shipToAddress"].forEach(name => {
+    $("#entryForm").elements[name].addEventListener("input", updateSalesAddressPanel);
+  });
+  bindIf("#chatBillForm", "submit", event => event.preventDefault());
+  bindIf("#closeChatBillBtn", "click", closeChatBillDialog);
+  bindIf("#chatBillAttachmentInput", "change", handleChatBillAttachmentInput);
+  bindIf("#chatBillInput", "input", resizeChatBillInput);
+  bindIf("#chatBillInput", "keydown", handleChatBillInputKeydown);
+  bindIf("#chatSampleBtn", "click", fillChatBillSample);
+  bindIf("#prepareChatBillBtn", "click", prepareChatBillDraft);
   $("#itemForm").addEventListener("submit", saveItem);
   $("#partyForm").addEventListener("submit", saveParty);
   $("#addPartyAliasBtn").addEventListener("click", addPartyAliasFromInput);
@@ -1517,8 +1605,8 @@ function openEntry(kind, id = null, draft = null) {
   };
   const form = $("#entryForm");
   form.reset();
-  $("#entryKindLabel").textContent = kind === "sale" ? "Sales Entry" : "Purchase Entry";
-  $("#entryDialogTitle").textContent = id ? "Edit Entry" : "New Entry";
+  $("#entryKindLabel").textContent = kind === "sale" ? "Sales Bill" : "Purchase Entry";
+  $("#entryDialogTitle").textContent = id ? "Edit Entry" : (kind === "sale" ? "New Sales Invoice" : "New Entry");
   form.elements.date.value = source?.date || today();
   form.elements.date.oninput = updateEntryTotals;
   form.elements.number.value = source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId);
@@ -1530,11 +1618,16 @@ function openEntry(kind, id = null, draft = null) {
     updateEntryTotals();
   };
   form.elements.status.value = source?.status || "Paid";
+  $("#entryStatusLabel").hidden = kind === "sale";
   form.elements.notes.value = source?.notes || "";
   $("#entryPartyLabelText").textContent = kind === "sale" ? "Buyer" : "Supplier";
   $("#entryAddBuyerBtn").hidden = kind !== "sale";
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
-  form.elements.partyId.onchange = updateEntryTotals;
+  form.elements.partyId.onchange = () => {
+    updateSalesAddressPanel();
+    updateEntryTotals();
+  };
+  setupSalesAddressPanel(kind, source);
   $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview(kind, source);
   bindPurchaseReviewControls();
   $("#lineRows").innerHTML = "";
@@ -1542,6 +1635,116 @@ function openEntry(kind, id = null, draft = null) {
   updateEntryTotals();
   $("#entryDialog").showModal();
   if (window.lucide) lucide.createIcons();
+}
+
+function setupSalesAddressPanel(kind, source = null) {
+  const panel = $("#salesAddressPanel");
+  const form = $("#entryForm");
+  if (!panel || !form) return;
+  const isSale = kind === "sale";
+  panel.hidden = !isSale;
+  if (!isSale) return;
+  const party = partyById(form.elements.partyId.value) || {};
+  const billTo = normalizeAddressSnapshot(source?.billToSnapshot || partyAddressSnapshot(party));
+  const shipTo = normalizeAddressSnapshot(source?.shipToSnapshot || billTo);
+  const same = source?.shipToSameAsBillTo ?? sameAddressSnapshot(billTo, shipTo);
+  form.elements.shipToSame.checked = same;
+  form.elements.rateIncludesGst.checked = source ? Boolean(source.rateIncludesGst) : true;
+  form.elements.shipToAddressId.innerHTML = shipToAddressOptions(party, source?.shipToAddressId || "", shipTo, same);
+  const useCustom = !same && form.elements.shipToAddressId.value === "custom";
+  form.elements.shipToName.value = useCustom ? shipTo.name : "";
+  form.elements.shipToGstin.value = useCustom ? shipTo.gstin : "";
+  form.elements.shipToPlace.value = useCustom ? (shipTo.place || shipTo.state || "") : "";
+  form.elements.shipToAddress.value = useCustom ? shipTo.address : "";
+  form.elements.saveShipTo.checked = false;
+  updateSalesAddressPanel();
+}
+
+function shipToAddressOptions(party = {}, selectedId = "", shipTo = {}, same = true) {
+  const saved = normalizeShippingAddresses(party.shippingAddresses || []);
+  const matchingSaved = saved.find(address => sameAddressSnapshot(shippingAddressSnapshot(address, party), shipTo));
+  const selected = selectedId || matchingSaved?.id || (!same && shipTo.address ? "custom" : "");
+  const options = [
+    `<option value="">Select saved address</option>`,
+    ...saved.map(address => `<option value="${escapeHtml(address.id)}" ${address.id === selected ? "selected" : ""}>${escapeHtml(address.label || address.name || "Ship To")}</option>`),
+    `<option value="custom" ${selected === "custom" ? "selected" : ""}>Different Ship To</option>`
+  ];
+  return options.join("");
+}
+
+function updateSalesAddressPanel() {
+  if (entryMode !== "sale") return;
+  const form = $("#entryForm");
+  const panel = $("#salesAddressPanel");
+  if (!form || !panel || panel.hidden) return;
+  const party = partyById(form.elements.partyId.value) || {};
+  const billTo = partyAddressSnapshot(party);
+  const shipTo = currentShipToSnapshot(party);
+  $("#billToPreview").innerHTML = salesAddressPreview("Bill To", billTo);
+  $("#shipToPreview").innerHTML = salesAddressPreview("Ship To", shipTo);
+  const same = form.elements.shipToSame.checked;
+  const savedLabel = $("#shipToSavedLabel");
+  const customFields = $("#shipToCustomFields");
+  form.elements.shipToAddressId.disabled = same;
+  savedLabel.hidden = same;
+  customFields.hidden = same || form.elements.shipToAddressId.value !== "custom";
+}
+
+function currentShipToSnapshot(party = {}) {
+  const form = $("#entryForm");
+  const billTo = partyAddressSnapshot(party);
+  if (form.elements.shipToSame.checked) return billTo;
+  const savedId = form.elements.shipToAddressId.value;
+  if (savedId && savedId !== "custom") {
+    const saved = normalizeShippingAddresses(party.shippingAddresses || []).find(address => address.id === savedId);
+    if (saved) return shippingAddressSnapshot(saved, party);
+  }
+  return normalizeAddressSnapshot({
+    name: form.elements.shipToName.value.trim() || party.name || "",
+    gstin: normalizeGstin(form.elements.shipToGstin.value) || party.gstin || "",
+    place: form.elements.shipToPlace.value.trim() || party.place || stateNameFromGstin(party.gstin) || "",
+    address: form.elements.shipToAddress.value.trim()
+  });
+}
+
+function salesAddressPreview(title, address = {}) {
+  const snapshot = normalizeAddressSnapshot(address);
+  return `<span>${escapeHtml(title)}</span>
+    <strong>${escapeHtml(snapshot.name || "-")}</strong>
+    <p>${escapeHtml(snapshot.address || "-")}</p>
+    <p>GSTIN: ${escapeHtml(snapshot.gstin || "-")}</p>
+    <p>${escapeHtml(snapshot.place || snapshot.state || "-")}</p>`;
+}
+
+function collectSaleAddressDetails(form, party) {
+  const billToSnapshot = partyAddressSnapshot(party);
+  const shipToSnapshot = currentShipToSnapshot(party);
+  const shipToSameAsBillTo = form.elements.shipToSame.checked || sameAddressSnapshot(billToSnapshot, shipToSnapshot);
+  return {
+    billToSnapshot,
+    shipToSnapshot,
+    shipToSameAsBillTo,
+    shipToAddressId: shipToSameAsBillTo ? "" : form.elements.shipToAddressId.value
+  };
+}
+
+function saveShipToAddressIfNeeded(form, party, saleAddress) {
+  if (!party?.id || saleAddress.shipToSameAsBillTo || !form.elements.saveShipTo.checked) return;
+  const snapshot = saleAddress.shipToSnapshot;
+  if (!snapshot.address) return;
+  const existing = normalizeShippingAddresses(party.shippingAddresses || []).find(address => (
+    sameAddressSnapshot(shippingAddressSnapshot(address, party), snapshot)
+  ));
+  if (existing) return;
+  party.shippingAddresses = normalizeShippingAddresses(party.shippingAddresses || []);
+  party.shippingAddresses.push({
+    id: uid(),
+    label: snapshot.place || snapshot.name || `Ship To ${party.shippingAddresses.length + 1}`,
+    name: snapshot.name || party.name || "",
+    gstin: snapshot.gstin || party.gstin || "",
+    place: snapshot.place || snapshot.state || "",
+    address: snapshot.address
+  });
 }
 
 function renderPurchaseUploadReview(kind, source) {
@@ -1674,7 +1877,7 @@ function renderPurchaseItemReview(lines = []) {
       <td class="num">${num(line.qty)}</td>
       <td class="num">${money(line.rate)}</td>
       <td class="num">${num(line.gstRate)}%</td>
-      <td class="num">${money(num(line.qty) * num(line.rate))}</td>
+      <td class="num">${money(lineTaxableAmount(line))}</td>
     </tr>`;
   }).join("");
   return `<div class="purchase-review-items">
@@ -1704,13 +1907,40 @@ function blankLine(kind) {
   };
 }
 
+function salesRatesIncludeGst() {
+  return entryMode === "sale" && Boolean($("#entryForm")?.elements?.rateIncludesGst?.checked);
+}
+
+function lineInputRate(line = {}) {
+  if (entryMode === "sale" && salesRatesIncludeGst() && num(line.grossRate)) return num(line.grossRate);
+  return num(line.rate);
+}
+
+function normalizeLineRateForEntry(line = {}) {
+  const rawRate = num(line.rate);
+  if (entryMode === "sale" && salesRatesIncludeGst()) {
+    return {
+      ...line,
+      grossRate: rawRate,
+      rate: taxableRateFromInclusive(rawRate, line.gstRate)
+    };
+  }
+  if (entryMode === "sale") {
+    return {
+      ...line,
+      grossRate: rawRate
+    };
+  }
+  return line;
+}
+
 function addLineRow(line = blankLine(entryMode)) {
   const row = document.createElement("div");
   row.className = "line-row";
   row.innerHTML = `
     <label>Item<select class="line-item">${itemOptions(line.itemId)}</select></label>
     <label>Qty<input class="line-qty" type="number" min="0" step="0.01" value="${num(line.qty)}"></label>
-    <label>Rate<input class="line-rate" type="number" min="0" step="0.01" value="${num(line.rate)}"></label>
+    <label>Rate<input class="line-rate" type="number" min="0" step="0.01" value="${lineInputRate(line)}"></label>
     <label>GST %<input class="line-gst" type="number" min="0" step="0.01" value="${num(line.gstRate)}"></label>
     <label>Amount<input class="line-amount" disabled></label>
     <button type="button" class="mini-btn" title="Remove"><i data-lucide="x"></i></button>
@@ -1732,18 +1962,26 @@ function addLineRow(line = blankLine(entryMode)) {
   if (window.lucide) lucide.createIcons();
 }
 
-function collectLines() {
-  return $$(".line-row").map(row => ({
+function collectLines(options = {}) {
+  const { normalizeRates = true } = options;
+  const lines = $$(".line-row").map(row => ({
     itemId: row.querySelector(".line-item").value,
     qty: num(row.querySelector(".line-qty").value),
     rate: num(row.querySelector(".line-rate").value),
     gstRate: num(row.querySelector(".line-gst").value)
   })).filter(line => line.itemId && line.qty > 0);
+  return normalizeRates ? lines.map(normalizeLineRateForEntry) : lines;
 }
 
 function updateEntryTotals() {
+  const includeGst = salesRatesIncludeGst();
   $$(".line-row").forEach(row => {
-    const amount = num(row.querySelector(".line-qty").value) * num(row.querySelector(".line-rate").value);
+    const qty = num(row.querySelector(".line-qty").value);
+    const rawRate = num(row.querySelector(".line-rate").value);
+    const gstRate = num(row.querySelector(".line-gst").value);
+    const taxableRate = includeGst ? taxableRateFromInclusive(rawRate, gstRate) : rawRate;
+    const taxable = qty * taxableRate;
+    const amount = taxable + (taxable * gstRate / 100);
     row.querySelector(".line-amount").value = money(amount);
   });
   const calculated = totals(collectLines());
@@ -1898,6 +2136,15 @@ function saveEntry(event) {
     toast("Buyer GSTIN is required for B2B sale");
     return;
   }
+  const saleAddress = entryMode === "sale" ? collectSaleAddressDetails(form, party || {}) : null;
+  if (entryMode === "sale" && !saleAddress.billToSnapshot.address) {
+    toast("Buyer billing address is required");
+    return;
+  }
+  if (entryMode === "sale" && !saleAddress.shipToSnapshot.address) {
+    toast("Ship To address is required");
+    return;
+  }
   const calculated = calculateEntryTotals(lines, profile, party, entryMode);
   const purchaseReviewSource = entryMode === "purchase" ? currentPurchaseReviewSource(lines) : null;
   const reviewMessages = uniqueMessages([
@@ -1919,8 +2166,13 @@ function saveEntry(event) {
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
+    rateIncludesGst: entryMode === "sale" ? salesRatesIncludeGst() : false,
     sellerGstin: normalizeGstin(entryMode === "purchase" ? (party?.gstin || entryDraftMeta.sellerGstin) : profile?.gstin),
     buyerGstin: normalizeGstin(entryMode === "purchase" ? profile?.gstin : (party?.gstin || entryDraftMeta.buyerGstin)),
+    billToSnapshot: saleAddress?.billToSnapshot || null,
+    shipToSnapshot: saleAddress?.shipToSnapshot || null,
+    shipToSameAsBillTo: saleAddress?.shipToSameAsBillTo ?? true,
+    shipToAddressId: saleAddress?.shipToAddressId || "",
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
   };
@@ -1939,6 +2191,7 @@ function saveEntry(event) {
       }
     }
   }
+  if (entryMode === "sale") saveShipToAddressIfNeeded(form, party, saleAddress);
   const list = entryList(entryMode);
   const index = list.findIndex(row => row.id === entry.id);
   if (index >= 0) list[index] = entry;
@@ -2179,7 +2432,8 @@ function saveParty(event) {
     phone: form.elements.phone.value.trim(),
     email: form.elements.email.value.trim(),
     place: form.elements.place.value.trim() || stateNameFromGstin(gstin) || "",
-    address
+    address,
+    shippingAddresses: normalizeShippingAddresses(state.parties.find(row => row.id === editingPartyId)?.shippingAddresses || [])
   };
   const index = state.parties.findIndex(row => row.id === party.id);
   if (index >= 0) state.parties[index] = party;
@@ -2207,6 +2461,7 @@ function selectSavedPartyInOpenEntry(party) {
   const form = $("#entryForm");
   form.elements.partyId.innerHTML = partyOptions("sale", party.id);
   form.elements.partyId.value = party.id;
+  setupSalesAddressPanel("sale", null);
   updateEntryTotals();
 }
 
@@ -2254,6 +2509,8 @@ function showInvoice(id, kind) {
   const entry = entryList(kind).find(row => row.id === id);
   const party = state.parties.find(row => row.id === entry.partyId) || {};
   const settings = profileById(entry.profileId);
+  const billTo = normalizeAddressSnapshot(entry.billToSnapshot || partyAddressSnapshot(party));
+  const shipTo = normalizeAddressSnapshot(entry.shipToSnapshot || billTo);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   const roundOff = invoiceRoundOff(entry);
   const payableTotal = invoicePayableTotal(entry);
@@ -2275,9 +2532,12 @@ function showInvoice(id, kind) {
           ${invoiceMetaCell("Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
         </div>
       </div>
+      <div class="invoice-seller-strip">
+        ${invoiceSellerBlock(settings)}
+      </div>
       <div class="modern-party-grid">
-        ${invoicePartyBlock("Consignee (Ship to)", party)}
-        ${invoicePartyBlock("Buyer (Bill to)", party)}
+        ${invoicePartyBlock("Buyer (Bill to)", billTo)}
+        ${invoicePartyBlock("Consignee (Ship to)", shipTo)}
       </div>
       <table class="invoice-items-table">
         <thead>
@@ -2286,37 +2546,41 @@ function showInvoice(id, kind) {
             <th>Description of Goods</th>
             <th>HSN/SAC</th>
             <th class="num">Quantity</th>
-            <th class="num">Rate<br><small>(Incl. of Tax)</small></th>
             <th class="num">Rate</th>
-            <th>per</th>
+            <th class="num">Taxable</th>
+            <th class="num">GST %</th>
+            <th class="num">GST Amt</th>
             <th class="num">Amount</th>
           </tr>
         </thead>
         <tbody>
           ${entry.lines.map((line, index) => {
             const item = state.items.find(row => row.id === line.itemId) || {};
-            const taxable = num(line.qty) * num(line.rate);
-            const inclusiveRate = num(line.rate) * (1 + num(line.gstRate) / 100);
+            const taxable = lineTaxableAmount(line);
+            const gstAmount = lineGstAmount(line);
+            const lineTotal = lineGrossAmount(line);
             return `<tr class="invoice-item-row">
               <td class="num">${index + 1}</td>
               <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}</td>
               <td>${escapeHtml(item.hsn || "")}</td>
               <td class="num strong">${formatQty(line.qty)}</td>
-              <td class="num">${formatInvoiceMoney(inclusiveRate)}</td>
               <td class="num">${formatInvoiceMoney(line.rate)}</td>
-              <td>Pcs</td>
               <td class="num strong">${formatInvoiceMoney(taxable)}</td>
+              <td class="num">${num(line.gstRate)}%</td>
+              <td class="num">${formatInvoiceMoney(gstAmount)}</td>
+              <td class="num strong">${formatInvoiceMoney(lineTotal)}</td>
             </tr>`;
           }).join("")}
-          ${invoiceOutputTaxRows(entry, roundOff)}
+          ${invoiceAdjustmentRows(roundOff)}
           <tr class="invoice-total-row">
             <td></td>
             <td class="num">Total</td>
             <td></td>
             <td class="num strong">${formatQty(totalQty)}</td>
             <td></td>
+            <td class="num strong">${formatInvoiceMoney(entry.taxable)}</td>
             <td></td>
-            <td></td>
+            <td class="num strong">${formatInvoiceMoney(entry.gst)}</td>
             <td class="num grand-total">Rs. ${formatInvoiceMoney(payableTotal)}</td>
           </tr>
         </tbody>
@@ -2622,16 +2886,12 @@ function invoiceMetaCell(labelA, valueA, labelB, valueB) {
     <div><span>${escapeHtml(labelB)}</span><strong>${escapeHtml(valueB)}</strong></div>`;
 }
 
-function invoiceOutputTaxRows(entry, roundOff) {
-  const rows = [];
-  if (num(entry.igst)) rows.push(["Output IGST", entry.igst]);
-  if (num(entry.cgst)) rows.push(["Output CGST", entry.cgst]);
-  if (num(entry.sgst)) rows.push(["Output SGST", entry.sgst]);
-  if (Math.abs(num(roundOff)) >= 0.01) rows.push(["Round Off", roundOff]);
-  return rows.map(([label, amount]) => `<tr class="tax-line-row">
-    <td></td><td class="tax-label">${escapeHtml(label)}</td><td></td><td></td><td></td><td></td><td></td>
-    <td class="num strong">${formatInvoiceMoney(amount)}</td>
-  </tr>`).join("");
+function invoiceAdjustmentRows(roundOff) {
+  if (Math.abs(num(roundOff)) < 0.01) return "";
+  return `<tr class="tax-line-row">
+    <td></td><td class="tax-label">Round Off</td><td></td><td></td><td></td><td></td><td></td><td></td>
+    <td class="num strong">${formatInvoiceMoney(roundOff)}</td>
+  </tr>`;
 }
 
 function invoiceRawTotal(entry) {
@@ -2686,10 +2946,10 @@ function invoiceTaxGroups(entry) {
     const item = state.items.find(row => row.id === line.itemId) || {};
     const hsn = item.hsn || "NA";
     const key = `${hsn}-${num(line.gstRate)}`;
-    const taxable = num(line.qty) * num(line.rate);
+    const taxable = lineTaxableAmount(line);
     const existing = map.get(key) || { hsn, rate: num(line.gstRate), taxable: 0, tax: 0 };
     existing.taxable += taxable;
-    existing.tax += taxable * num(line.gstRate) / 100;
+    existing.tax += lineGstAmount(line);
     map.set(key, existing);
   });
   return Array.from(map.values()).map(group => ({
@@ -2882,7 +3142,7 @@ function buildEwayBill(entry) {
 
 function ewayItem(line, serialNo, taxMode) {
   const item = state.items.find(row => row.id === line.itemId) || {};
-  const taxable = num(line.qty) * num(line.rate);
+  const taxable = lineTaxableAmount(line);
   const gstRate = num(line.gstRate);
   return {
     itemNo: serialNo,
@@ -4037,7 +4297,7 @@ function renderSmartBillReview(parsed) {
           <thead><tr><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Amount</th></tr></thead>
           <tbody>
             ${lines.map(line => {
-              const taxable = num(line.qty) * num(line.rate);
+              const taxable = lineTaxableAmount(line);
               return `<tr>
                 <td>${escapeHtml(line.name || "Item")}</td>
                 <td>${escapeHtml(line.hsn || DEFAULT_SALE_HSN)}</td>
