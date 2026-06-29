@@ -2882,7 +2882,14 @@ function invoiceMetaCell(labelA, valueA, labelB, valueB) {
 function invoiceAdjustmentRows(roundOff) {
   if (Math.abs(num(roundOff)) < 0.01) return "";
   return `<tr class="tax-line-row">
-    <td></td><td class="tax-label">Round Off</td><td></td><td></td><td></td><td></td><td></td><td></td>
+    <td></td>
+    <td class="tax-label">Round Off</td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
     <td class="num strong">${formatInvoiceMoney(roundOff)}</td>
   </tr>`;
 }

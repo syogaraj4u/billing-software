@@ -1475,7 +1475,7 @@ textarea { resize: vertical; }
 .invoice-items-table th,
 .invoice-items-table td {
   border-right: 1px solid #111827;
-  border-bottom: 0;
+  border-bottom: 1px solid #111827;
   vertical-align: top;
 }
 
@@ -1513,6 +1513,8 @@ textarea { resize: vertical; }
 
 .tax-line-row td {
   padding-top: 8px;
+  border-top: 1px solid #111827;
+  border-bottom: 1px solid #111827;
 }
 
 .tax-label {
