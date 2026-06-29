@@ -848,6 +848,8 @@ function bindEvents() {
   $$(".nav-tab").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
   $$("[data-close-dialog]").forEach(button => button.addEventListener("click", () => closeDialog(button.dataset.closeDialog)));
+  $("#dashboardSaleEntryBtn").addEventListener("click", () => openEntry("sale"));
+  $("#dashboardPurchaseEntryBtn").addEventListener("click", () => openEntry("purchase"));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
   bindIf("#chatBillBtn", "click", openChatBillDialog);
   bindIf("#newChatSaleBtn", "click", openChatBillDialog);
@@ -1410,29 +1412,7 @@ async function syncCloudNow(showToast) {
 }
 
 function renderDashboard() {
-  const sales = activeEntries("sale");
-  const purchases = activeEntries("purchase");
-  const salesTotal = sales.reduce((sum, entry) => sum + entry.total, 0);
-  const purchaseTotal = purchases.reduce((sum, entry) => sum + entry.total, 0);
-  const stockValue = state.items.reduce((sum, item) => sum + stockForItem(item.id) * num(item.purchaseRate), 0);
-  const receivable = sales.filter(entry => entry.status !== "Paid").reduce((sum, entry) => sum + entry.total, 0);
-  $("#metricSales").textContent = money(salesTotal);
-  $("#metricPurchases").textContent = money(purchaseTotal);
-  $("#metricStock").textContent = money(stockValue);
-  $("#metricReceivable").textContent = money(receivable);
-
-  const combined = [
-    ...sales.map(entry => ({ ...entry, kind: "Sale" })),
-    ...purchases.map(entry => ({ ...entry, kind: "Purchase" }))
-  ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
-  $("#recentEntries").innerHTML = combined.length ? combined.map(entry => `
-    <tr><td>${entry.date}</td><td>${entry.kind}</td><td>${escapeHtml(entry.number)}</td><td>${escapeHtml(profileName(entry.profileId))}</td><td>${escapeHtml(partyName(entry.partyId))}</td><td class="num">${money(entry.total)}</td></tr>
-  `).join("") : emptyRow(6, "No entries yet");
-
-  const low = state.items.map(item => ({ ...item, stock: stockForItem(item.id) })).filter(item => item.stock <= num(item.minStock));
-  $("#lowStockRows").innerHTML = low.length ? low.map(item => `
-    <tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.hsn)}</td><td class="num">${item.stock}</td><td class="num">${num(item.minStock)}</td></tr>
-  `).join("") : emptyRow(4, "No low stock items");
+  if (window.lucide) lucide.createIcons();
 }
 
 function renderEntries(kind) {
@@ -3065,9 +3045,14 @@ function renderReport() {
   }
   const salesTotal = sales.reduce((sum, entry) => sum + entry.total, 0);
   const purchaseTotal = purchases.reduce((sum, entry) => sum + entry.total, 0);
+  const stockValue = state.items.reduce((sum, item) => sum + stockForItem(item.id) * num(item.purchaseRate), 0);
+  const receivable = sales.filter(entry => entry.status !== "Paid").reduce((sum, entry) => sum + entry.total, 0);
+  const low = state.items.map(item => ({ ...item, stock: stockForItem(item.id) })).filter(item => item.stock <= num(item.minStock));
   output.innerHTML = `<div class="report-grid">
-    <div class="report-card"><span>Sales</span><strong>${money(salesTotal)}</strong></div>
-    <div class="report-card"><span>Purchases</span><strong>${money(purchaseTotal)}</strong></div>
+    <div class="report-card"><span>Total Sales</span><strong>${money(salesTotal)}</strong></div>
+    <div class="report-card"><span>Total Purchases</span><strong>${money(purchaseTotal)}</strong></div>
+    <div class="report-card"><span>Stock Value</span><strong>${money(stockValue)}</strong></div>
+    <div class="report-card"><span>Receivable</span><strong>${money(receivable)}</strong></div>
     <div class="report-card"><span>Gross Margin</span><strong>${money(salesTotal - purchaseTotal)}</strong></div>
   </div>
   <div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>GST</th><th>Party</th><th class="num">Total</th></tr></thead><tbody>
@@ -3075,6 +3060,9 @@ function renderReport() {
       .sort((a, b) => b.date.localeCompare(a.date))
       .map(entry => `<tr><td>${entry.date}</td><td>${entry.kind}</td><td>${escapeHtml(entry.number)}</td><td>${escapeHtml(profileName(entry.profileId))}</td><td>${escapeHtml(partyName(entry.partyId))}</td><td class="num">${money(entry.total)}</td></tr>`)
       .join("") || emptyRow(6, "No entries in this period")}
+  </tbody></table></div>
+  <div class="table-wrap report-secondary-table"><table><thead><tr><th>Low Stock Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Min</th></tr></thead><tbody>
+    ${low.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.hsn)}</td><td class="num">${item.stock}</td><td class="num">${num(item.minStock)}</td></tr>`).join("") || emptyRow(4, "No low stock items")}
   </tbody></table></div>`;
 }
 

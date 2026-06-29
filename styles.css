@@ -478,6 +478,38 @@ button > *,
 .view { display: none; }
 .view.active { display: block; }
 
+.dashboard-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 18px;
+  min-height: min(440px, calc(100dvh - 190px));
+  align-content: center;
+}
+
+.dashboard-action-card {
+  min-height: 168px;
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.dashboard-action-card svg {
+  width: 34px;
+  height: 34px;
+  color: var(--primary);
+}
+
+.dashboard-action-card:active {
+  transform: translateY(1px);
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
@@ -1198,7 +1230,7 @@ textarea { resize: vertical; }
 
 .report-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -1218,6 +1250,10 @@ textarea { resize: vertical; }
   display: block;
   margin-top: 8px;
   font-size: 22px;
+}
+
+.report-secondary-table {
+  margin-top: 16px;
 }
 
 #invoicePrintArea {
@@ -2244,8 +2280,18 @@ textarea { resize: vertical; }
     display: grid;
     grid-template-columns: 1fr;
   }
+  .dashboard-action-grid,
   .metric-grid, .split-layout, .report-grid, .cloud-settings, .form-grid, .settings-grid {
     grid-template-columns: 1fr;
+  }
+  .dashboard-action-grid {
+    min-height: calc(100dvh - 220px);
+    align-content: center;
+    gap: 14px;
+  }
+  .dashboard-action-card {
+    min-height: 138px;
+    font-size: 18px;
   }
   .metric-grid {
     gap: 10px;
@@ -2367,16 +2413,6 @@ textarea { resize: vertical; }
   #partiesView .table-wrap .empty-row::before {
     content: "";
   }
-  #recentEntries td:nth-child(1)::before { content: "Date"; }
-  #recentEntries td:nth-child(2)::before { content: "Type"; }
-  #recentEntries td:nth-child(3)::before { content: "No."; }
-  #recentEntries td:nth-child(4)::before { content: "GST"; }
-  #recentEntries td:nth-child(5)::before { content: "Party"; }
-  #recentEntries td:nth-child(6)::before { content: "Amount"; }
-  #lowStockRows td:nth-child(1)::before { content: "Item"; }
-  #lowStockRows td:nth-child(2)::before { content: "HSN"; }
-  #lowStockRows td:nth-child(3)::before { content: "Stock"; }
-  #lowStockRows td:nth-child(4)::before { content: "Min"; }
   #salesRows td:nth-child(1)::before { content: "Date"; }
   #salesRows td:nth-child(2)::before { content: "Invoice"; }
   #salesRows td:nth-child(3)::before { content: "GST"; }

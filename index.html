@@ -13,9 +13,9 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260629-dialog-fixes">
-  <link rel="stylesheet" href="desktop-view.css?v=20260629-dialog-fixes" media="(min-width: 821px)">
-  <link rel="stylesheet" href="mobile-view.css?v=20260629-dialog-fixes" media="(max-width: 820px)">
+  <link rel="stylesheet" href="styles.css?v=20260629-dashboard-actions">
+  <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
+  <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="cloud-config.js?v=20260626-cloud"></script>
@@ -100,37 +100,15 @@
       </header>
 
       <section class="view active" id="dashboardView">
-        <div class="metric-grid">
-          <div class="metric"><span>Total Sales</span><strong id="metricSales">0</strong></div>
-          <div class="metric"><span>Total Purchases</span><strong id="metricPurchases">0</strong></div>
-          <div class="metric"><span>Stock Value</span><strong id="metricStock">0</strong></div>
-          <div class="metric"><span>Receivable</span><strong id="metricReceivable">0</strong></div>
-        </div>
-        <div class="split-layout">
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Recent Entries</h3>
-              <button class="ghost-btn" data-view-link="sales">Open Sales</button>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Date</th><th>Type</th><th>No.</th><th>GST</th><th>Party</th><th class="num">Amount</th></tr></thead>
-                <tbody id="recentEntries"></tbody>
-              </table>
-            </div>
-          </section>
-          <section class="panel">
-            <div class="panel-head">
-              <h3>Low Stock</h3>
-              <button class="ghost-btn" data-view-link="items">Open Items</button>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Min</th></tr></thead>
-                <tbody id="lowStockRows"></tbody>
-              </table>
-            </div>
-          </section>
+        <div class="dashboard-action-grid">
+          <button class="dashboard-action-card" id="dashboardSaleEntryBtn" type="button">
+            <i data-lucide="receipt-text"></i>
+            <span>Sales Entry</span>
+          </button>
+          <button class="dashboard-action-card" id="dashboardPurchaseEntryBtn" type="button">
+            <i data-lucide="shopping-cart"></i>
+            <span>Purchase Entry</span>
+          </button>
         </div>
       </section>
 
@@ -472,6 +450,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20260629-dialog-fixes"></script>
+  <script src="app.js?v=20260629-dashboard-actions"></script>
 </body>
 </html>
