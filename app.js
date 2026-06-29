@@ -28,7 +28,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "8686839018",
       ifsc: "KKBK0007919"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 4,
     nextPurchaseNo: 1
   },
   {
@@ -48,7 +48,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "757205000565",
       ifsc: "ICIC0007572"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 2,
     nextPurchaseNo: 1
   },
   {
@@ -88,7 +88,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "630905039332",
       ifsc: "ICIC0006309"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 5,
     nextPurchaseNo: 1
   },
   {
@@ -108,7 +108,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "720905500069",
       ifsc: "ICIC0007209"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 8,
     nextPurchaseNo: 1
   },
   {
@@ -128,7 +128,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "757205000575",
       ifsc: "ICIC0007572"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 3,
     nextPurchaseNo: 1
   },
   {
@@ -148,7 +148,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "793705000262",
       ifsc: "ICIC0007937"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 7,
     nextPurchaseNo: 1
   },
   {
@@ -168,7 +168,7 @@ const OFFICIAL_GST_PROFILES = [
       accountNumber: "377105500333",
       ifsc: "ICIC0003771"
     },
-    nextSaleNo: 1,
+    nextSaleNo: 6,
     nextPurchaseNo: 1
   }
 ];
@@ -182,6 +182,17 @@ const GST_PROFILE_ALIASES = {
   "gst-6": ["khairanya", "khairanya infotech", "sandhya rani"],
   "gst-7": ["lakshmi jeyapandi", "jeyapandi", "lakshmi jeyapandi traders", "lj traders", "jeyapandi traders"],
   "gst-8": ["sri lakshmi", "sri lakshmi digitals", "sld", "durga prasad", "durgaprasad"]
+};
+
+const SALE_INVOICE_NUMBER_RULES = {
+  "gst-1": { prefix: "NS/SO/26-27", start: 4, width: 3 },
+  "gst-2": { prefix: "KN/26-27", start: 2, width: 3 },
+  "gst-3": { prefix: "HHM/26-27", start: 1, width: 3 },
+  "gst-4": { prefix: "SNC/26-27", start: 5, width: 3 },
+  "gst-5": { prefix: "SD/SO/25-26", start: 8, width: 3 },
+  "gst-6": { prefix: "KI/25-26", start: 3, width: 3 },
+  "gst-7": { prefix: "LJT/26-27", start: 7, width: 3 },
+  "gst-8": { prefix: "SLD/26-27", start: 6, width: 3 }
 };
 
 const FIRM_LOGOS = {
@@ -369,6 +380,7 @@ function normalizeState(value) {
       };
     });
   }
+  syncSaleNumberingForProfiles(profiles, Array.isArray(value.sales) ? value.sales : []);
   const existingEwayDefaults = value.settings.ewayDefaults || {};
   value.settings = {
     currency: value.settings.currency || "Rs.",
@@ -690,9 +702,79 @@ function entryPrefix(kind) {
 }
 
 function nextEntryNumber(kind, profileId = state.settings.activeProfileId) {
+  if (kind === "sale") return nextSaleInvoiceNumber(profileId);
   const key = kind === "sale" ? "nextSaleNo" : "nextPurchaseNo";
   const profile = profileById(profileId);
   return `${entryPrefix(kind)}-${String(profile[key] || 1).padStart(4, "0")}`;
+}
+
+function saleNumberRule(profileId) {
+  return SALE_INVOICE_NUMBER_RULES[profileId] || null;
+}
+
+function formatSaleInvoiceNumber(profileId, sequence) {
+  const rule = saleNumberRule(profileId);
+  if (!rule) return `${entryPrefix("sale")}-${String(sequence || 1).padStart(4, "0")}`;
+  return `${rule.prefix}/${String(Math.max(rule.start, num(sequence))).padStart(rule.width, "0")}`;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function saleInvoiceSequenceFromNumber(profileId, value) {
+  const rule = saleNumberRule(profileId);
+  if (!rule) return null;
+  const match = String(value || "").trim().match(new RegExp(`^${escapeRegExp(rule.prefix)}\\/(\\d+)$`));
+  return match ? num(match[1]) : null;
+}
+
+function nextSaleSequence(profileId, salesEntries = []) {
+  const rule = saleNumberRule(profileId);
+  if (!rule) return 1;
+  const highestSaved = salesEntries.reduce((highest, entry) => {
+    if (entry.profileId !== profileId) return highest;
+    const sequence = saleInvoiceSequenceFromNumber(profileId, entry.number);
+    return sequence ? Math.max(highest, sequence) : highest;
+  }, rule.start - 1);
+  return Math.max(rule.start, highestSaved + 1);
+}
+
+function nextSaleInvoiceNumber(profileId, excludeId = "") {
+  return formatSaleInvoiceNumber(
+    profileId,
+    nextSaleSequence(profileId, state.sales.filter(entry => entry.id !== excludeId))
+  );
+}
+
+function saleInvoiceNumberExists(number, excludeId = "") {
+  const target = String(number || "").trim();
+  return state.sales.some(entry => entry.id !== excludeId && String(entry.number || "").trim() === target);
+}
+
+function saleInvoiceNumberForDialog(source, profileId) {
+  if (!source?.number) return nextSaleInvoiceNumber(profileId);
+  const sequence = saleInvoiceSequenceFromNumber(profileId, source.number);
+  if (!sequence) return nextSaleInvoiceNumber(profileId, source.id || editingEntryId);
+  const formatted = formatSaleInvoiceNumber(profileId, sequence);
+  return saleInvoiceNumberExists(formatted, source.id || editingEntryId)
+    ? nextSaleInvoiceNumber(profileId, source.id || editingEntryId)
+    : formatted;
+}
+
+function saleInvoiceNumberForSave(profileId, requestedNumber, excludeId = "") {
+  const sequence = saleInvoiceSequenceFromNumber(profileId, requestedNumber);
+  if (sequence) {
+    const formatted = formatSaleInvoiceNumber(profileId, sequence);
+    if (!saleInvoiceNumberExists(formatted, excludeId)) return formatted;
+  }
+  return nextSaleInvoiceNumber(profileId, excludeId);
+}
+
+function syncSaleNumberingForProfiles(profiles, salesEntries = []) {
+  profiles.forEach(profile => {
+    if (saleNumberRule(profile.id)) profile.nextSaleNo = nextSaleSequence(profile.id, salesEntries);
+  });
 }
 
 function normalizeGstin(value) {
@@ -1538,11 +1620,16 @@ function renderPartyContact(party) {
 
 function renderSettings() {
   const form = $("#settingsForm");
+  syncSaleNumberingForProfiles(state.settings.profiles, state.sales);
   form.elements.profileId.innerHTML = profileOptions(form.elements.profileId.value || state.settings.activeProfileId);
   const profile = profileById(form.elements.profileId.value);
   ["businessName", "legalName", "gstin", "phone", "email", "address", "state", "nextSaleNo", "nextPurchaseNo"].forEach(key => {
     form.elements[key].value = profile?.[key] ?? "";
   });
+  form.elements.nextSaleNo.readOnly = Boolean(saleNumberRule(profile?.id));
+  form.elements.nextSaleNo.title = saleNumberRule(profile?.id)
+    ? "Sales invoice number is locked to the approved company sequence."
+    : "";
   form.elements.currency.value = state.settings.currency || "Rs.";
   form.elements.reportEmails.value = state.settings.reportEmails || "";
   form.elements.ewayVehicleNo.value = state.settings.ewayDefaults?.vehicleNo || "";
@@ -1592,7 +1679,10 @@ function openEntry(kind, id = null, draft = null) {
   $("#entryDialog").classList.toggle("purchase-entry-dialog", kind === "purchase");
   form.elements.date.value = source?.date || today();
   form.elements.date.oninput = updateEntryTotals;
-  form.elements.number.value = source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId);
+  form.elements.number.value = kind === "sale"
+    ? saleInvoiceNumberForDialog(source, source?.profileId || state.settings.activeProfileId)
+    : (source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId));
+  form.elements.number.readOnly = kind === "sale";
   form.elements.number.oninput = updateEntryTotals;
   form.elements.profileId.innerHTML = profileOptions(source?.profileId || state.settings.activeProfileId);
   form.elements.profileId.disabled = true;
@@ -2167,10 +2257,13 @@ function saveEntry(event) {
     ...(entryMode === "purchase" ? purchaseMissingReviewMessages(purchaseReviewSource, profile, party, lines) : []),
     ...(entryMode === "purchase" ? purchaseTaxReviewMessages(entryDraftMeta.extractedTaxes, calculated) : [])
   ]);
+  const entryNumber = entryMode === "sale"
+    ? saleInvoiceNumberForSave(form.elements.profileId.value, form.elements.number.value, editingEntryId)
+    : form.elements.number.value.trim();
   const entry = {
     id: editingEntryId || uid(),
     date: form.elements.date.value,
-    number: form.elements.number.value.trim(),
+    number: entryNumber,
     profileId: form.elements.profileId.value,
     partyId: form.elements.partyId.value,
     status: form.elements.status.value,
@@ -2211,9 +2304,12 @@ function saveEntry(event) {
   if (index >= 0) list[index] = entry;
   else {
     list.push(entry);
-    const key = entryMode === "sale" ? "nextSaleNo" : "nextPurchaseNo";
-    const profile = profileById(entry.profileId);
-    profile[key] = num(profile[key]) + 1;
+  }
+  const savedProfile = profileById(entry.profileId);
+  if (entryMode === "sale") {
+    savedProfile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
+  } else if (index < 0) {
+    savedProfile.nextPurchaseNo = num(savedProfile.nextPurchaseNo) + 1;
   }
   saveState();
   $("#entryDialog").close();
@@ -2504,7 +2600,9 @@ function saveSettings(event) {
   profile.email = form.elements.email.value.trim();
   profile.address = form.elements.address.value.trim();
   profile.state = form.elements.state.value.trim();
-  profile.nextSaleNo = Math.max(1, num(form.elements.nextSaleNo.value));
+  profile.nextSaleNo = saleNumberRule(profile.id)
+    ? nextSaleSequence(profile.id, state.sales)
+    : Math.max(1, num(form.elements.nextSaleNo.value));
   profile.nextPurchaseNo = Math.max(1, num(form.elements.nextPurchaseNo.value));
   state.settings.currency = form.elements.currency.value.trim() || "Rs.";
   state.settings.reportEmails = form.elements.reportEmails.value.trim();
