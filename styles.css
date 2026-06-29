@@ -614,6 +614,22 @@ tr:last-child td { border-bottom: 0; }
   place-items: center;
 }
 
+.danger-btn {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.cancelled-row {
+  color: #667274;
+  background: #fafafa;
+}
+
+.cancelled-row td:not(:last-child) {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -629,6 +645,11 @@ tr:last-child td { border-bottom: 0; }
 .badge.warn {
   background: #fff0ed;
   color: var(--warn);
+}
+
+.badge.danger {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 dialog {
@@ -1415,6 +1436,17 @@ textarea { resize: vertical; }
 
 .modern-party-grid .invoice-party-block:last-child {
   border-right: 0;
+}
+
+.invoice-cancelled-banner {
+  padding: 8px 12px;
+  border-bottom: 1px solid #111827;
+  background: #fee2e2;
+  color: #991b1b;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .invoice-party-block strong {

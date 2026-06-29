@@ -697,6 +697,14 @@ function activeEntries(kind) {
   return entryList(kind).filter(entry => entry.profileId === activeProfileId());
 }
 
+function isCancelledEntry(entry) {
+  return Boolean(entry?.cancelled) || entry?.status === "Cancelled";
+}
+
+function activeAccountingEntries(kind) {
+  return activeEntries(kind).filter(entry => kind !== "sale" || !isCancelledEntry(entry));
+}
+
 function entryPrefix(kind) {
   return kind === "sale" ? "SALE" : "PUR";
 }
@@ -881,7 +889,7 @@ function stockForItem(itemId, profileId = activeProfileId()) {
   state.purchases.filter(entry => !profileId || entry.profileId === profileId).forEach(entry => entry.lines.forEach(line => {
     if (line.itemId === itemId) stock += num(line.qty);
   }));
-  state.sales.filter(entry => !profileId || entry.profileId === profileId).forEach(entry => entry.lines.forEach(line => {
+  state.sales.filter(entry => (!profileId || entry.profileId === profileId) && !isCancelledEntry(entry)).forEach(entry => entry.lines.forEach(line => {
     if (line.itemId === itemId) stock -= num(line.qty);
   }));
   return stock;
@@ -1499,18 +1507,21 @@ function renderDashboard() {
 
 function renderEntries(kind) {
   const rows = activeEntries(kind).sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
+    const cancelled = isCancelledEntry(entry);
+    const statusLabel = cancelled ? "Cancelled" : (entry.status || "-");
+    const statusClass = cancelled ? "danger" : (entry.status === "Unpaid" ? "warn" : "");
     const purchaseSelect = kind === "purchase" ? `
       <td><input class="purchase-select" type="checkbox" aria-label="Select ${escapeHtml(entry.number)}" data-purchase-id="${entry.id}" ${selectedPurchaseIds.has(entry.id) ? "checked" : ""}></td>
     ` : "";
     const reviewCell = kind === "purchase" ? `<td>${reviewBadge(entry)}</td>` : "";
     return `
-    <tr>
+    <tr class="${cancelled ? "cancelled-row" : ""}">
       ${purchaseSelect}
       <td>${entry.date}</td>
       <td>${escapeHtml(entry.number)}</td>
       <td>${escapeHtml(profileName(entry.profileId))}</td>
       <td>${escapeHtml(partyName(entry.partyId))}</td>
-      <td><span class="badge ${entry.status === "Unpaid" ? "warn" : ""}">${escapeHtml(entry.status)}</span></td>
+      <td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span></td>
       ${reviewCell}
       <td class="num">${money(entry.taxable)}</td>
       <td class="num">${money(entry.gst)}</td>
@@ -1518,8 +1529,10 @@ function renderEntries(kind) {
       <td>
         <div class="row-actions">
           ${kind === "sale" ? `<button class="mini-btn" title="Invoice" onclick="showInvoice('${entry.id}', '${kind}')"><i data-lucide="file-text"></i></button>` : ""}
-          <button class="mini-btn" title="Edit" onclick="openEntry('${kind}', '${entry.id}')"><i data-lucide="pencil"></i></button>
-          <button class="mini-btn" title="Delete" onclick="deleteEntry('${kind}', '${entry.id}')"><i data-lucide="trash-2"></i></button>
+          ${cancelled ? "" : `<button class="mini-btn" title="Edit" onclick="openEntry('${kind}', '${entry.id}')"><i data-lucide="pencil"></i></button>`}
+          ${kind === "sale"
+            ? (cancelled ? "" : `<button class="mini-btn danger-btn" title="Cancel Bill" onclick="cancelEntry('${kind}', '${entry.id}')"><i data-lucide="ban"></i></button>`)
+            : `<button class="mini-btn" title="Delete" onclick="deleteEntry('${kind}', '${entry.id}')"><i data-lucide="trash-2"></i></button>`}
         </div>
       </td>
     </tr>
@@ -2229,6 +2242,11 @@ function duplicatePurchaseInvoiceMessage(duplicate) {
 function saveEntry(event) {
   event.preventDefault();
   const form = $("#entryForm");
+  const existingEntry = editingEntryId ? entryList(entryMode).find(row => row.id === editingEntryId) : null;
+  if (entryMode === "sale" && isCancelledEntry(existingEntry)) {
+    toast("Cancelled sales bill cannot be edited");
+    return;
+  }
   const lines = collectLines();
   if (!lines.length) {
     toast("Add at least one item");
@@ -2319,6 +2337,10 @@ function saveEntry(event) {
 }
 
 function deleteEntry(kind, id) {
+  if (kind === "sale") {
+    cancelEntry(kind, id);
+    return;
+  }
   if (!confirm("Delete this entry?")) return;
   const key = kind === "sale" ? "sales" : "purchases";
   state[key] = state[key].filter(row => row.id !== id);
@@ -2326,6 +2348,25 @@ function deleteEntry(kind, id) {
   saveState();
   renderAll();
   toast("Entry deleted");
+}
+
+function cancelEntry(kind, id) {
+  if (kind !== "sale") {
+    deleteEntry(kind, id);
+    return;
+  }
+  const entry = state.sales.find(row => row.id === id);
+  if (!entry) return toast("Sales bill not found");
+  if (isCancelledEntry(entry)) return toast("Sales bill is already cancelled");
+  if (!confirm(`Cancel sales bill ${entry.number}? This number will not be reused.`)) return;
+  entry.cancelled = true;
+  entry.cancelledAt = new Date().toISOString();
+  entry.status = "Cancelled";
+  const profile = profileById(entry.profileId);
+  profile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
+  saveState();
+  renderAll();
+  toast(`Sales bill ${entry.number} cancelled`);
 }
 
 function openItem(id = null) {
@@ -2651,6 +2692,7 @@ function showInvoice(id, kind) {
         ${invoicePartyBlock("Buyer (Bill to)", billTo)}
         ${invoicePartyBlock("Consignee (Ship to)", shipTo)}
       </div>
+      ${isCancelledEntry(entry) ? `<div class="invoice-cancelled-banner">CANCELLED</div>` : ""}
       <table class="invoice-items-table">
         <thead>
           <tr>
@@ -3146,7 +3188,7 @@ function renderReport() {
   const to = $("#reportTo").value || "9999-12-31";
   const inRange = entry => entry.date >= from && entry.date <= to;
   const profile = activeProfile();
-  const sales = activeEntries("sale").filter(inRange);
+  const sales = activeAccountingEntries("sale").filter(inRange);
   const purchases = activeEntries("purchase").filter(inRange);
   const output = $("#reportOutput");
   if (activeReport === "stock") {
@@ -4914,6 +4956,7 @@ function ensureImportedItem(line) {
 
 window.openEntry = openEntry;
 window.deleteEntry = deleteEntry;
+window.cancelEntry = cancelEntry;
 window.showInvoice = showInvoice;
 window.openItem = openItem;
 window.deleteItem = deleteItem;
