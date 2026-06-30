@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260630-vector-pdf">
+  <link rel="stylesheet" href="styles.css?v=20260701-purchase-flow">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -73,7 +73,7 @@
         <button class="nav-tab" data-view="sales"><i data-lucide="receipt-text"></i><span>Sales</span></button>
         <button class="nav-tab" data-view="purchases"><i data-lucide="shopping-cart"></i><span>Purchases</span></button>
         <button class="nav-tab" data-view="items"><i data-lucide="boxes"></i><span>Items</span></button>
-        <button class="nav-tab" data-view="parties"><i data-lucide="users"></i><span>Buyers</span></button>
+        <button class="nav-tab" data-view="parties"><i data-lucide="users"></i><span>Parties</span></button>
         <button class="nav-tab" data-view="reports"><i data-lucide="bar-chart-3"></i><span>Reports</span></button>
         <button class="nav-tab" data-view="settings"><i data-lucide="settings"></i><span>Settings</span></button>
       </nav>
@@ -173,14 +173,14 @@
       <section class="view" id="partiesView">
         <div class="section-head">
           <div>
-            <h3>Buyer Master</h3>
-            <p>One shared buyer list for all 8 GST companies, with GSTIN and address details.</p>
+            <h3>Party Master</h3>
+            <p>One shared buyer and supplier list for all 8 GST companies, with aliases, GSTIN, addresses and ship-to details.</p>
           </div>
-          <button class="primary-btn" id="newPartyBtn"><i data-lucide="plus"></i><span>New Buyer</span></button>
+          <button class="primary-btn" id="newPartyBtn"><i data-lucide="plus"></i><span>New Party</span></button>
         </div>
         <div class="table-wrap panel">
           <table>
-            <thead><tr><th>Name</th><th>Type</th><th>GSTIN</th><th>Address</th><th>Contact</th><th>Place</th><th>Short Names</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Type</th><th>GSTIN</th><th>Address</th><th>Ship To</th><th>Contact</th><th>Place</th><th>Short Names</th><th></th></tr></thead>
             <tbody id="partyRows"></tbody>
           </table>
         </div>
@@ -374,10 +374,11 @@
         <label>Email<input name="email" type="email"></label>
         <label>Place<input name="place"></label>
         <label class="span-2">Address<textarea name="address" rows="3"></textarea></label>
+        <label class="span-2">Shipping Addresses<textarea name="shippingAddresses" rows="3" placeholder="Main | Buyer Name | GSTIN | Place | Full shipping address"></textarea></label>
       </div>
       <menu class="dialog-actions">
         <button class="secondary-btn" type="button" data-close-dialog="partyDialog">Cancel</button>
-        <button class="primary-btn" id="savePartyBtn" type="submit"><i data-lucide="save"></i><span>Save Buyer</span></button>
+        <button class="primary-btn" id="savePartyBtn" type="submit"><i data-lucide="save"></i><span>Save Party</span></button>
       </menu>
     </form>
   </dialog>
@@ -443,6 +444,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260630-vector-pdf"></script>
+  <script src="app.js?v=20260701-purchase-flow"></script>
 </body>
 </html>

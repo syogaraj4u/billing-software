@@ -1069,16 +1069,37 @@ textarea { resize: vertical; }
 
 .purchase-review-extracted {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   padding: 9px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
 }
 
-.purchase-review-extracted strong {
+.tax-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.tax-comparison-grid > div {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbfb;
+}
+
+.tax-comparison-grid > div.tax-mismatch {
+  border-color: #e07b39;
+  background: #fff2e8;
+}
+
+.tax-comparison-grid strong {
+  display: block;
   font-size: 12px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .purchase-review-items,
@@ -1129,8 +1150,37 @@ textarea { resize: vertical; }
 .purchase-review-warnings {
   display: grid;
   gap: 5px;
-  color: #8a5a00;
   font-size: 12px;
+}
+
+.purchase-review-warnings span {
+  padding: 8px;
+  border: 1px solid #f1c76d;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #6b4a00;
+  overflow-wrap: anywhere;
+}
+
+.purchase-review-warnings strong {
+  margin-right: 3px;
+}
+
+.purchase-review-warnings .duplicate-warning {
+  border-color: #d76b6b;
+  background: #fff0f0;
+  color: #8f2222;
+}
+
+.purchase-review-warnings .tax-warning {
+  border-color: #e07b39;
+  background: #fff2e8;
+  color: #8a3a00;
+}
+
+.purchase-review-warnings .missing-warning {
+  border-color: #d9b755;
+  background: #fff9df;
 }
 
 .purchase-review-accept {
@@ -2297,7 +2347,8 @@ textarea { resize: vertical; }
     grid-template-columns: 1fr;
   }
   .purchase-review-grid,
-  .purchase-review-totals {
+  .purchase-review-totals,
+  .tax-comparison-grid {
     grid-template-columns: 1fr;
   }
   .purchase-review-head {
@@ -2488,9 +2539,10 @@ textarea { resize: vertical; }
   #partyRows td:nth-child(2)::before { content: "Type"; }
   #partyRows td:nth-child(3)::before { content: "GSTIN"; }
   #partyRows td:nth-child(4)::before { content: "Address"; }
-  #partyRows td:nth-child(5)::before { content: "Contact"; }
-  #partyRows td:nth-child(6)::before { content: "Place"; }
-  #partyRows td:nth-child(7)::before { content: "Short Names"; }
+  #partyRows td:nth-child(5)::before { content: "Ship To"; }
+  #partyRows td:nth-child(6)::before { content: "Contact"; }
+  #partyRows td:nth-child(7)::before { content: "Place"; }
+  #partyRows td:nth-child(8)::before { content: "Short Names"; }
   #salesRows td:last-child::before,
   #purchaseRows td:last-child::before,
   #itemRows td:last-child::before,

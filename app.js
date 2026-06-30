@@ -440,6 +440,42 @@ function normalizeShippingAddresses(addresses = []) {
   })).filter(address => address.address || address.name || address.gstin || address.place);
 }
 
+function formatShippingAddressesForForm(addresses = []) {
+  return normalizeShippingAddresses(addresses).map(address => [
+    address.label || "Ship To",
+    address.name || "",
+    address.gstin || "",
+    address.place || "",
+    address.address || ""
+  ].join(" | ")).join("\n");
+}
+
+function parseShippingAddressesFromText(value, existingAddresses = []) {
+  const existing = normalizeShippingAddresses(existingAddresses);
+  return String(value || "")
+    .split(/\n+/)
+    .map(line => parseShippingAddressLine(line, existing))
+    .filter(Boolean);
+}
+
+function parseShippingAddressLine(line, existingAddresses = []) {
+  const parts = String(line || "").split("|").map(part => part.trim());
+  if (!parts.some(Boolean)) return null;
+  const [label = "", name = "", gstin = "", place = "", ...addressParts] = parts;
+  const address = {
+    label: label || name || "Ship To",
+    name: name || "",
+    gstin: normalizeGstin(gstin),
+    place: place || stateNameFromGstin(gstin) || "",
+    address: addressParts.join(" | ") || (parts.length === 1 ? parts[0] : "")
+  };
+  const matched = existingAddresses.find(row => sameAddressSnapshot(shippingAddressSnapshot(row), shippingAddressSnapshot(address)));
+  return {
+    id: matched?.id || uid(),
+    ...address
+  };
+}
+
 function mergeTallyBuyerMaster(value) {
   if (value.settings.tallyBuyerMasterVersion === TALLY_BUYER_MASTER_VERSION) return;
   TALLY_BUYER_MASTER.forEach(buyer => {
@@ -998,7 +1034,7 @@ function bindEvents() {
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
   $("#newItemBtn").addEventListener("click", () => openItem());
-  $("#newPartyBtn").addEventListener("click", () => openParty(null, { type: "Customer", title: "New Buyer", saveLabel: "Save Buyer" }));
+  $("#newPartyBtn").addEventListener("click", () => openParty(null, { type: "Customer", title: "New Party", saveLabel: "Save Party" }));
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryAddBuyerBtn").addEventListener("click", openBuyerFromEntry);
   $("#entryForm").addEventListener("submit", saveEntry);
@@ -1075,7 +1111,7 @@ function showView(view) {
     sales: "Sales",
     purchases: "Purchases",
     items: "Items",
-    parties: "Buyer Master",
+    parties: "Party Master",
     reports: "Reports",
     settings: "Settings"
   }[view];
@@ -1661,6 +1697,7 @@ function renderParties() {
       <td>${escapeHtml(party.type)}</td>
       <td>${escapeHtml(party.gstin)}</td>
       <td>${escapeHtml(party.address || "-")}</td>
+      <td>${renderPartyShipTo(party)}</td>
       <td>${renderPartyContact(party)}</td>
       <td>${escapeHtml(party.place)}</td>
       <td>${escapeHtml(partyAliasList(party).join(", "))}</td>
@@ -1669,7 +1706,7 @@ function renderParties() {
         <button class="mini-btn" title="Delete" onclick="deleteParty('${party.id}')"><i data-lucide="trash-2"></i></button>
       </div></td>
     </tr>
-  `).join("") || emptyRow(8, "No buyers added");
+  `).join("") || emptyRow(9, "No parties added");
 }
 
 function partyMasterRows() {
@@ -1689,6 +1726,14 @@ function partyTypeRank(type) {
 function renderPartyContact(party) {
   const values = [party.phone, party.email].map(value => String(value || "").trim()).filter(Boolean);
   return values.length ? values.map(escapeHtml).join("<br>") : "-";
+}
+
+function renderPartyShipTo(party) {
+  const addresses = normalizeShippingAddresses(party.shippingAddresses || []);
+  if (!addresses.length) return "-";
+  return addresses
+    .map(address => escapeHtml(address.label || address.name || address.place || "Ship To"))
+    .join("<br>");
 }
 
 function renderSettings() {
@@ -1932,9 +1977,9 @@ function renderPurchaseUploadReview(kind, source) {
       </div>
     </div>
     <div class="purchase-review-grid">
-      ${purchaseReviewCard("Supplier", supplier.name || "-", supplier.gstin || source.sellerGstin || "-", supplier.address || supplier.place || "-")}
-      ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", source.buyerGstin || profile.gstin || "-", profile.address || profile.state || "-")}
-      ${purchaseReviewCard("Invoice", source.number || "-", formatInvoiceDate(source.date || today()), attachments.map(file => file.name).join(", ") || "-")}
+      ${purchaseReviewCard("Supplier", supplier.name || "-", `GSTIN: ${supplier.gstin || source.sellerGstin || "-"}`, supplier.address ? `Address: ${supplier.address}` : `Place: ${supplier.place || "-"}`)}
+      ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", `GSTIN: ${source.buyerGstin || profile.gstin || "-"}`, profile.address ? `Address: ${profile.address}` : `Place: ${profile.state || "-"}`)}
+      ${purchaseReviewCard("Invoice", source.number || "-", `Date: ${formatInvoiceDate(source.date || today())}`, `File: ${attachments.map(file => file.name).join(", ") || "-"}`)}
     </div>
     ${renderPurchaseItemReview(source.lines || [])}
     <div class="purchase-review-totals">
@@ -1945,9 +1990,9 @@ function renderPurchaseUploadReview(kind, source) {
       <span>GST</span><strong>${money(calculated.gst)}</strong>
       <span>Total</span><strong>${money(calculated.total)}</strong>
     </div>
-    ${renderExtractedTaxReview(extracted)}
+    ${renderExtractedTaxReview(extracted, calculated)}
     ${renderPurchaseAttachmentReview(attachments)}
-    ${messages.length ? `<div class="purchase-review-warnings">${messages.map(message => `<span>${escapeHtml(message)}</span>`).join("")}</div>` : ""}
+    ${messages.length ? `<div class="purchase-review-warnings">${messages.map(renderPurchaseWarning).join("")}</div>` : ""}
     ${renderPurchaseReviewAcceptance(messages)}
   </section>`;
 }
@@ -2015,12 +2060,52 @@ function purchaseReviewCard(title, main, detail, extra) {
   </div>`;
 }
 
-function renderExtractedTaxReview(extracted = {}) {
+function renderExtractedTaxReview(extracted = {}, calculated = {}) {
   if (!Object.values(extracted).some(value => num(value))) return "";
+  const rows = [
+    ["Taxable", extracted.taxable, calculated.taxable],
+    ["CGST", extracted.cgst, calculated.cgst],
+    ["SGST", extracted.sgst, calculated.sgst],
+    ["IGST", extracted.igst, calculated.igst],
+    ["GST", num(extracted.gst) || num(extracted.cgst) + num(extracted.sgst) + num(extracted.igst), calculated.gst],
+    ["Total", extracted.total, calculated.total]
+  ].map(([label, uploaded, appValue]) => {
+    const mismatch = (num(uploaded) || num(appValue)) && !amountsClose(uploaded, appValue);
+    return `<div class="${mismatch ? "tax-mismatch" : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>Uploaded ${money(uploaded)} | App ${money(appValue)}</strong>
+    </div>`;
+  }).join("");
   return `<div class="purchase-review-extracted">
-    <span>Uploaded Tax</span>
-    <strong>Taxable ${money(extracted.taxable)} | CGST ${money(extracted.cgst)} | SGST ${money(extracted.sgst)} | IGST ${money(extracted.igst)} | GST ${money(extracted.gst)} | Total ${money(extracted.total)}</strong>
+    <span>GST Mistake Check</span>
+    <div class="tax-comparison-grid">${rows}</div>
   </div>`;
+}
+
+function renderPurchaseWarning(message) {
+  return `<span class="${purchaseWarningClass(message)}"><strong>${purchaseWarningLabel(message)}</strong>${escapeHtml(cleanPurchaseWarningText(message))}</span>`;
+}
+
+function purchaseWarningClass(message) {
+  const value = String(message || "");
+  if (isDuplicatePurchaseWarning(value)) return "duplicate-warning";
+  if (/CGST|SGST|IGST|GST amount|taxable value|invoice total/i.test(value)) return "tax-warning";
+  if (/^Missing detail:/i.test(value)) return "missing-warning";
+  return "general-warning";
+}
+
+function purchaseWarningLabel(message) {
+  const value = String(message || "");
+  if (isDuplicatePurchaseWarning(value)) return "Duplicate: ";
+  if (/CGST|SGST|IGST|GST amount|taxable value|invoice total/i.test(value)) return "GST: ";
+  if (/^Missing detail:/i.test(value)) return "Missing: ";
+  return "Review: ";
+}
+
+function cleanPurchaseWarningText(message) {
+  return String(message || "")
+    .replace(/^Duplicate purchase invoice warning:\s*/i, "")
+    .replace(/^Missing detail:\s*/i, "");
 }
 
 function renderPurchaseItemReview(lines = []) {
@@ -2266,13 +2351,10 @@ function findDuplicatePurchaseInvoices(source, excludeId = "") {
   if (!invoiceNumber) return [];
   const supplierKey = purchaseSupplierKey(source);
   if (!supplierKey) return [];
-  const sourceDate = source?.date || "";
-  const sourceTotal = num(source?.total);
   return state.purchases.filter(entry => {
     if (entry.id === excludeId) return false;
     if (normalizePurchaseInvoiceNumber(entry.number) !== invoiceNumber) return false;
     if (purchaseSupplierKey(entry) !== supplierKey) return false;
-    if (sourceDate && entry.date && entry.date !== sourceDate && sourceTotal && !amountsClose(entry.total, sourceTotal, 2)) return false;
     return true;
   });
 }
@@ -2493,11 +2575,12 @@ function openParty(id = null, options = {}) {
   const party = state.parties.find(row => row.id === id);
   const form = $("#partyForm");
   form.reset();
-  $("#partyDialogTitle").textContent = party ? "Edit Buyer / Supplier" : (options.title || "New Buyer");
-  $("#savePartyBtn span").textContent = options.saveLabel || (party ? "Save Party" : "Save Buyer");
+  $("#partyDialogTitle").textContent = party ? "Edit Buyer / Supplier" : (options.title || "New Party");
+  $("#savePartyBtn span").textContent = options.saveLabel || "Save Party";
   ["name", "type", "gstin", "phone", "email", "place", "address"].forEach(key => {
     form.elements[key].value = party?.[key] ?? (key === "type" ? (options.type || "Customer") : "");
   });
+  form.elements.shippingAddresses.value = formatShippingAddressesForForm(party?.shippingAddresses || []);
   partyAliasDraft = partyAliasList(party || {});
   renderPartyAliasManager();
   $("#partyDialog").showModal();
@@ -2645,7 +2728,10 @@ function saveParty(event) {
     email: form.elements.email.value.trim(),
     place: form.elements.place.value.trim() || stateNameFromGstin(gstin) || "",
     address,
-    shippingAddresses: normalizeShippingAddresses(state.parties.find(row => row.id === editingPartyId)?.shippingAddresses || [])
+    shippingAddresses: parseShippingAddressesFromText(
+      form.elements.shippingAddresses.value,
+      state.parties.find(row => row.id === editingPartyId)?.shippingAddresses || []
+    )
   };
   const index = state.parties.findIndex(row => row.id === party.id);
   if (index >= 0) state.parties[index] = party;
@@ -2654,7 +2740,7 @@ function saveParty(event) {
   $("#partyDialog").close();
   renderAll();
   selectSavedPartyInOpenEntry(party);
-  toast(isBuyerType(party.type) ? "Buyer saved for all GST companies" : "Party saved");
+  toast("Party saved for all GST companies");
   partyDialogContext = null;
 }
 
@@ -5614,9 +5700,10 @@ function ensureImportedSupplier(parsed) {
     type: "Supplier",
     gstin: supplierGstin,
     phone: "",
-    place: "",
-    address: "",
-    aliases: ""
+    place: parsed.supplierPlace || stateNameFromGstin(supplierGstin) || stateCodeFromGstin(supplierGstin) || "",
+    address: parsed.supplierAddress || "",
+    aliases: "",
+    shippingAddresses: []
   };
   state.parties.push(party);
   return party.id;
@@ -5624,6 +5711,10 @@ function ensureImportedSupplier(parsed) {
 
 function updateExistingImportedSupplier(party, parsed, supplierGstin) {
   if (!normalizeGstin(party.gstin) && supplierGstin) party.gstin = supplierGstin;
+  if (!String(party.address || "").trim() && parsed.supplierAddress) party.address = parsed.supplierAddress;
+  if (!String(party.place || "").trim()) {
+    party.place = parsed.supplierPlace || stateNameFromGstin(supplierGstin) || stateCodeFromGstin(supplierGstin) || "";
+  }
   if (parsed.supplierName) appendPartyAlias(party, parsed.supplierName);
 }
 

@@ -71,7 +71,7 @@ The OpenAI model is intentionally configurable so you can change it later withou
 
 In Settings, enter the email IDs under Monthly Report Email IDs.
 
-The `monthly-report` Edge Function creates a purchase register CSV attachment for the selected month. It also includes invoice soft-copy storage paths in the CSV. A scheduled Supabase cron job can call the function at month end.
+The `monthly-report` Edge Function creates sales register, purchase register, GST summary and invoice soft-copy index CSV attachments for the selected month. It also tries to attach stored purchase invoice files from Supabase Storage when they are available within email size limits. A scheduled Supabase cron job can call the function at month end.
 
 Example manual call body:
 

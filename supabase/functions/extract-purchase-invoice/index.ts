@@ -12,7 +12,12 @@ const invoiceSchema = {
     "profileId",
     "supplierName",
     "supplierGstin",
+    "supplierAddress",
+    "supplierPlace",
+    "buyerName",
     "buyerGstin",
+    "buyerAddress",
+    "buyerPlace",
     "invoiceNumber",
     "invoiceDate",
     "taxable",
@@ -27,7 +32,12 @@ const invoiceSchema = {
     profileId: { type: "string" },
     supplierName: { type: "string" },
     supplierGstin: { type: "string" },
+    supplierAddress: { type: "string" },
+    supplierPlace: { type: "string" },
+    buyerName: { type: "string" },
     buyerGstin: { type: "string" },
+    buyerAddress: { type: "string" },
+    buyerPlace: { type: "string" },
     invoiceNumber: { type: "string" },
     invoiceDate: { type: "string" },
     taxable: { type: "number" },
@@ -96,7 +106,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Separate CGST, SGST and IGST exactly as shown. Add reviewMessages for unclear buyer, supplier, GSTIN, missing HSN, unreadable values, or tax mode mismatch."
+              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Extract supplier and buyer address/place when visible; return an empty string when not visible. Separate CGST, SGST and IGST exactly as shown. Add reviewMessages for unclear buyer, supplier, GSTIN, address, missing HSN, unreadable values, or tax mode mismatch."
             }
           ]
         },
