@@ -4562,8 +4562,27 @@ function exportSelectedEwayJson() {
   };
   const payloadMessages = validateEwayPayload(payload);
   if (payloadMessages.length) warningCount += 1;
-  downloadJson(payload, `purchase-eway-${today()}.json`);
+  downloadJson(payload, ewayJsonFileName(purchases));
   toast(warningCount ? "E-way JSON downloaded. Check E-Way badges for warnings." : "E-way JSON downloaded");
+}
+
+function ewayJsonFileName(purchases = []) {
+  const supplierName = partyName(purchases[0]?.partyId);
+  const supplierPrefix = String(supplierName || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 5) || "EWAY";
+  return `${supplierPrefix}${dateTimeStampForFileName()}.json`;
+}
+
+function dateTimeStampForFileName(date = new Date()) {
+  const pad = value => String(value).padStart(2, "0");
+  const dd = pad(date.getDate());
+  const mm = pad(date.getMonth() + 1);
+  const yy = String(date.getFullYear()).slice(-2);
+  const hh = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  return `${dd}${mm}${yy}${hh}${min}`;
 }
 
 function ewayAddressParts(address = "", preset = null, fallbackPlace = "", fallbackStateCode = 0) {
