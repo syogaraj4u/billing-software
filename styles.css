@@ -167,7 +167,24 @@ body.company-page-transitioning .app-shell.page-slide-exit-right.is-active {
   min-height: 100vh;
   padding: 24px;
   display: grid;
+  grid-template-rows: auto 1fr;
+  align-items: stretch;
+  gap: 18px;
+}
+
+.company-selector-head {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.company-selector-head h2 {
+  margin: 0;
+  font-size: 24px;
 }
 
 .company-grid {
@@ -177,6 +194,7 @@ body.company-page-transitioning .app-shell.page-slide-exit-right.is-active {
   display: grid;
   grid-template-columns: repeat(4, minmax(190px, 1fr));
   gap: 14px;
+  align-self: center;
 }
 
 .company-card {
@@ -2476,11 +2494,22 @@ textarea { resize: vertical; }
   }
   .company-selector {
     padding: 12px;
-    align-items: start;
+    align-items: stretch;
+  }
+  .company-selector-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding-top: env(safe-area-inset-top);
+    background: var(--bg);
+  }
+  .company-selector-head h2 {
+    font-size: 20px;
   }
   .company-grid {
     grid-template-columns: 1fr;
     gap: 10px;
+    align-self: start;
   }
   .company-card {
     min-height: 78px;

@@ -1291,6 +1291,7 @@ function bindEvents() {
   $("#changeCompanyBtn").addEventListener("click", openCompanySelector);
   $("#settingsForm").elements.profileId.addEventListener("change", renderSettings);
   $("#topbarLogoffBtn").addEventListener("click", signOutFromCloud);
+  $("#selectorLogoffBtn").addEventListener("click", signOutFromCloud);
   $("#backupBtn").addEventListener("click", exportBackup);
   $("#restoreInput").addEventListener("change", importBackup);
   $("#appLoginForm").addEventListener("submit", signInToBillingApp);
