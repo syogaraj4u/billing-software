@@ -54,6 +54,7 @@ Deploy these functions from the `supabase/functions` folder:
 
 - `parse-sale-chat`
 - `extract-purchase-invoice`
+- `estimate-eway-distance`
 - `monthly-report`
 
 Set these Supabase secrets:

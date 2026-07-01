@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260701-eway-review-badges">
+  <link rel="stylesheet" href="styles.css?v=20260701-eway-distance-ai">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -319,6 +319,7 @@
           </div>
           <div class="purchase-eway-route">
             <div class="purchase-eway-address" id="ewayFromPreview"></div>
+            <div class="purchase-eway-address" id="ewayBillToPreview" hidden></div>
             <div class="purchase-eway-address" id="ewayToPreview"></div>
           </div>
           <div class="form-grid purchase-eway-grid">
@@ -335,10 +336,6 @@
               <option value="4">Ship</option>
             </select></label>
             <label>Vehicle No.<input name="ewayVehicleNoEntry" placeholder="AP03AB1234"></label>
-            <label id="ewayVehicleTypeLabel">Vehicle Type<select name="ewayVehicleType">
-              <option value="R">Regular</option>
-              <option value="O">ODC</option>
-            </select></label>
             <label>Transport Distance KM<input name="ewayDistanceKmEntry" type="number" min="0" step="1" placeholder="Auto / enter later"></label>
             <label class="span-2" id="ewayDispatchFromLabel">Dispatch From Address<textarea name="ewayDispatchFromAddress" rows="2"></textarea></label>
             <label class="span-2" id="ewayShipToLabel">Ship To Address<textarea name="ewayShipToAddress" rows="2"></textarea></label>
@@ -489,6 +486,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260701-eway-review-badges"></script>
+  <script src="app.js?v=20260701-eway-distance-ai"></script>
 </body>
 </html>

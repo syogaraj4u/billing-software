@@ -9,6 +9,7 @@ const DEFAULT_SALE_GST_RATE = 18;
 const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
+const EWAY_DISTANCE_FUNCTION = "estimate-eway-distance";
 
 const OFFICIAL_GST_PROFILES = [
   {
@@ -328,6 +329,8 @@ let companyPageTransitionTimer = null;
 let currentInvoiceFileName = "invoice.pdf";
 let currentInvoiceShareContext = null;
 let partyAliasDraft = [];
+let ewayDistanceEstimateTimer = null;
+let ewayDistanceEstimateKey = "";
 
 const COMPANY_PAGE_TRANSITION_MS = 460;
 
@@ -1931,14 +1934,19 @@ function setupPurchaseEwayPanel(kind, source = null) {
   form.elements.ewayTransType.value = details.transType || "1";
   form.elements.ewayTransMode.value = details.transMode || "1";
   form.elements.ewayVehicleNoEntry.value = details.vehicleNo || "";
-  form.elements.ewayVehicleType.value = details.vehicleType || "R";
   form.elements.ewayDispatchFromAddress.value = details.dispatchFromAddress || "";
   form.elements.ewayShipToAddress.value = details.shipToAddress || "";
   form.elements.ewayDistanceKmEntry.value = details.distanceKm || "";
-  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewayVehicleType", "ewayDistanceKmEntry", "ewayDispatchFromAddress", "ewayShipToAddress"].forEach(name => {
+  form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = "";
+  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewayDispatchFromAddress", "ewayShipToAddress"].forEach(name => {
     form.elements[name].oninput = updatePurchaseEwayPanel;
     form.elements[name].onchange = updatePurchaseEwayPanel;
   });
+  form.elements.ewayDistanceKmEntry.oninput = () => {
+    form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = "";
+    updatePurchaseEwayPanel();
+  };
+  form.elements.ewayDistanceKmEntry.onchange = updatePurchaseEwayPanel;
   updatePurchaseEwayPanel();
 }
 
@@ -1957,7 +1965,6 @@ function updatePurchaseEwayPanel() {
   });
   $("#ewayDispatchFromLabel").hidden = !ewayUsesDispatchFrom(transType);
   $("#ewayShipToLabel").hidden = !ewayUsesShipTo(transType);
-  $("#ewayVehicleTypeLabel").hidden = form.elements.ewayTransMode.value !== "1";
   if (ewayUsesDispatchFrom(transType) && !form.elements.ewayDispatchFromAddress.value.trim()) {
     form.elements.ewayDispatchFromAddress.value = route.defaultFromAddress;
   }
@@ -1969,12 +1976,43 @@ function updatePurchaseEwayPanel() {
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
   });
-  if (!num(form.elements.ewayDistanceKmEntry.value) && refreshedRoute.savedDistance) {
-    form.elements.ewayDistanceKmEntry.value = refreshedRoute.savedDistance;
-  }
-  $("#ewayFromPreview").innerHTML = ewayAddressPreview("From", refreshedRoute.fromName, refreshedRoute.fromAddress, refreshedRoute.fromPincode);
-  $("#ewayToPreview").innerHTML = ewayAddressPreview("To", refreshedRoute.toName, refreshedRoute.toAddress, refreshedRoute.toPincode);
+  applyEwayDistanceSuggestion(refreshedRoute, form);
+  $("#ewayBillToPreview").hidden = !ewayUsesShipTo(transType);
+  $("#ewayFromPreview").innerHTML = ewayAddressPreview(ewayUsesDispatchFrom(transType) ? "Dispatch From" : "From", refreshedRoute.fromName, refreshedRoute.fromAddress, refreshedRoute.fromPincode);
+  $("#ewayBillToPreview").innerHTML = ewayAddressPreview("Bill To", refreshedRoute.billToName, refreshedRoute.billToAddress, refreshedRoute.billToPincode);
+  $("#ewayToPreview").innerHTML = ewayAddressPreview(ewayUsesShipTo(transType) ? "Ship To" : "To", refreshedRoute.toName, refreshedRoute.toAddress, refreshedRoute.toPincode);
   $("#ewayDistanceHint").textContent = ewayDistanceHint(refreshedRoute, form.elements.ewayDistanceKmEntry.value);
+}
+
+function applyEwayDistanceSuggestion(route, form) {
+  const distanceInput = form.elements.ewayDistanceKmEntry;
+  const routeKey = ewayDistanceEstimateRouteKey(route);
+  if (num(distanceInput.value) && distanceInput.dataset.autoRouteKey && distanceInput.dataset.autoRouteKey !== routeKey) {
+    distanceInput.value = "";
+    distanceInput.dataset.autoRouteKey = "";
+  }
+  if (num(distanceInput.value)) {
+    clearTimeout(ewayDistanceEstimateTimer);
+    return;
+  }
+  const samePinDistance = samePincodeDistanceKm(route);
+  if (samePinDistance) {
+    clearTimeout(ewayDistanceEstimateTimer);
+    distanceInput.value = samePinDistance;
+    distanceInput.dataset.autoRouteKey = routeKey;
+    return;
+  }
+  if (route.savedDistance) {
+    clearTimeout(ewayDistanceEstimateTimer);
+    distanceInput.value = route.savedDistance;
+    distanceInput.dataset.autoRouteKey = routeKey;
+    return;
+  }
+  scheduleEwayDistanceEstimate(route);
+}
+
+function samePincodeDistanceKm(route) {
+  return route.fromPincode && route.toPincode && route.fromPincode === route.toPincode ? 2 : 0;
 }
 
 function ewayUsesShipTo(transType) {
@@ -1989,6 +2027,7 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
   const transType = String(details.transType || "1");
   const defaultFromAddress = supplier.address || supplier.place || "";
   const defaultToAddress = profile.address || profile.state || "";
+  const billToAddress = defaultToAddress;
   const fromAddress = ewayUsesDispatchFrom(transType)
     ? (String(details.dispatchFromAddress || "").trim() || defaultFromAddress)
     : defaultFromAddress;
@@ -1996,13 +2035,17 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
     ? (String(details.shipToAddress || "").trim() || defaultToAddress)
     : defaultToAddress;
   const fromPincode = extractPincode(fromAddress);
+  const billToPincode = extractPincode(billToAddress);
   const toPincode = extractPincode(toAddress);
   const routeKey = ewayRouteKey(fromPincode, toPincode);
   return {
     defaultFromAddress,
     defaultToAddress,
     fromName: supplier.name || "Supplier",
-    toName: profile.businessName || profile.label || "Buyer GST",
+    billToName: profile.businessName || profile.label || "Buyer GST",
+    billToAddress,
+    billToPincode,
+    toName: ewayUsesShipTo(transType) ? "Delivery Address" : (profile.businessName || profile.label || "Buyer GST"),
     fromAddress,
     toAddress,
     fromPincode,
@@ -2028,10 +2071,66 @@ function ewayAddressPreview(title, name, address, pincode) {
 }
 
 function ewayDistanceHint(route, currentDistance) {
+  if (samePincodeDistanceKm(route) && num(currentDistance) === 2) return "Same seller and buyer PIN, distance set to 2 KM.";
   if (num(currentDistance)) return route.routeKey ? `Distance saved for route ${route.routeKey}.` : "Distance entered.";
   if (route.savedDistance) return `Auto-filled saved route distance ${route.savedDistance} KM.`;
+  if (ewayDistanceEstimateKey === ewayDistanceEstimateRouteKey(route)) return "Estimating distance with ChatGPT...";
   if (!route.fromPincode || !route.toPincode) return "Add supplier and buyer pincodes to remember route distance.";
-  return "Enter once; this route distance will auto-fill next time.";
+  return "ChatGPT will estimate distance when Cloud is connected.";
+}
+
+function ewayDistanceEstimateRouteKey(route = {}) {
+  return [
+    route.fromPincode || "",
+    route.toPincode || "",
+    route.fromAddress || "",
+    route.toAddress || ""
+  ].join("|");
+}
+
+function scheduleEwayDistanceEstimate(route) {
+  const key = ewayDistanceEstimateRouteKey(route);
+  if (!key.replace(/\|/g, "").trim() || !route.fromAddress || !route.toAddress) return;
+  ewayDistanceEstimateKey = key;
+  clearTimeout(ewayDistanceEstimateTimer);
+  ewayDistanceEstimateTimer = setTimeout(() => estimateEwayDistanceWithCloud(route, key), 700);
+}
+
+async function estimateEwayDistanceWithCloud(route, key) {
+  const form = $("#entryForm");
+  if (!form || entryMode !== "purchase" || num(form.elements.ewayDistanceKmEntry.value)) return;
+  if (!cloudConfigured() || !cloudClient || !cloudSession) {
+    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Login to Cloud to estimate distance with ChatGPT.";
+    return;
+  }
+  try {
+    const { data, error } = await cloudClient.functions.invoke(EWAY_DISTANCE_FUNCTION, {
+      body: {
+        fromAddress: route.fromAddress,
+        toAddress: route.toAddress,
+        fromPincode: route.fromPincode,
+        toPincode: route.toPincode
+      }
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    const distanceKm = Math.max(1, Math.round(num(data?.distanceKm)));
+    if (!distanceKm || ewayDistanceEstimateKey !== key) return;
+    const profile = profileById(form.elements.profileId.value);
+    const supplier = partyById(form.elements.partyId.value) || {};
+    const currentRoute = purchaseEwayRouteFromValues(profile, supplier, {
+      transType: form.elements.ewayTransType.value || "1",
+      dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+      shipToAddress: form.elements.ewayShipToAddress.value
+    });
+    if (ewayDistanceEstimateRouteKey(currentRoute) !== key || num(form.elements.ewayDistanceKmEntry.value)) return;
+    form.elements.ewayDistanceKmEntry.value = distanceKm;
+    form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = key;
+    $("#ewayDistanceHint").textContent = `ChatGPT estimated ${distanceKm} KM.`;
+  } catch (error) {
+    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Distance estimate failed. Enter KM manually.";
+    console.warn("E-way distance estimate unavailable", error);
+  }
 }
 
 function collectPurchaseEwayDetails(form, profile, supplier) {
@@ -2046,7 +2145,7 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
     transType,
     transMode,
     vehicleNo: form.elements.ewayVehicleNoEntry.value,
-    vehicleType: form.elements.ewayVehicleType.value,
+    vehicleType: "R",
     distanceKm: num(form.elements.ewayDistanceKmEntry.value) || route.savedDistance,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value,
