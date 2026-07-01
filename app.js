@@ -2211,6 +2211,7 @@ function updatePurchaseEwayPanel() {
   $("#ewayBillToPreview").innerHTML = ewayAddressPreview("Bill To", refreshedRoute.billToName, refreshedRoute.billToAddress, refreshedRoute.billToPincode);
   $("#ewayToPreview").innerHTML = ewayAddressPreview(ewayUsesShipTo(transType) ? "Ship To" : "To", refreshedRoute.toName, refreshedRoute.toAddress, refreshedRoute.toPincode);
   $("#ewayDistanceHint").textContent = ewayDistanceHint(refreshedRoute, form.elements.ewayDistanceKmEntry.value);
+  updatePurchaseEwayRequiredHighlights(refreshedRoute, form);
 }
 
 function applyEwayDistanceSuggestion(route, form) {
@@ -2953,6 +2954,83 @@ function updateEntryTotals() {
     rememberPurchaseReviewAcceptance();
     $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", purchaseSource);
     bindPurchaseReviewControls();
+    updatePurchaseRequiredHighlights(purchaseSource);
+  }
+}
+
+function updatePurchaseRequiredHighlights(source = null) {
+  if (entryMode !== "purchase") return;
+  const form = $("#entryForm");
+  if (!form) return;
+  const profile = profileById(form.elements.profileId.value);
+  const supplier = partyById(form.elements.partyId.value) || {};
+  const invoiceNumber = String(source?.number || form.elements.number.value || "").trim();
+  setRequiredAttention(form.elements.number, !invoiceNumber || isGeneratedPurchaseNumber(invoiceNumber), "Actual supplier invoice number required");
+  setRequiredAttention(form.elements.date, !String(source?.date || form.elements.date.value || "").trim(), "Invoice date required");
+  setRequiredAttention(form.elements.partyId, !supplier?.name || /^imported supplier$/i.test(supplier.name), "Supplier required");
+  const supplierGstin = normalizeGstin(supplier.gstin || source?.sellerGstin);
+  if (supplier?.name && !isValidGstin(supplierGstin)) {
+    setRequiredAttention(form.elements.partyId, true, "Supplier GSTIN required");
+  }
+  const buyerGstin = normalizeGstin(profile?.gstin || source?.buyerGstin);
+  setRequiredAttention(form.elements.profileId, !isValidGstin(buyerGstin), "Buyer GSTIN required");
+  updateLineRequiredHighlights();
+  const route = purchaseEwayRouteFromValues(profile, supplier, {
+    transType: form.elements.ewayTransType.value || "1",
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value,
+    destinationPreset: form.elements.ewayDestinationPreset.value,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value
+  });
+  updatePurchaseEwayRequiredHighlights(route, form);
+}
+
+function updateLineRequiredHighlights() {
+  $$(".line-row").forEach(row => {
+    const itemSelect = row.querySelector(".line-item");
+    const hsnInput = row.querySelector(".line-hsn");
+    const qtyInput = row.querySelector(".line-qty");
+    const rateInput = row.querySelector(".line-rate");
+    const item = state.items.find(candidate => candidate.id === itemSelect?.value) || {};
+    const itemNeedsReview = !item.name || /^imported purchase|imported item$/i.test(item.name);
+    setRequiredAttention(itemSelect, itemNeedsReview, "Review item name");
+    setRequiredAttention(hsnInput, !lineHsn({ hsn: hsnInput?.value, itemId: itemSelect?.value }, item), "HSN/SAC required");
+    setRequiredAttention(qtyInput, num(qtyInput?.value) <= 0, "Quantity required");
+    setRequiredAttention(rateInput, num(rateInput?.value) <= 0, "Rate required");
+  });
+}
+
+function updatePurchaseEwayRequiredHighlights(route = null, form = $("#entryForm")) {
+  if (entryMode !== "purchase" || !form) return;
+  const currentRoute = route || purchaseEwayRouteFromValues(profileById(form.elements.profileId.value), partyById(form.elements.partyId.value) || {}, {
+    transType: form.elements.ewayTransType.value || "1",
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value,
+    destinationPreset: form.elements.ewayDestinationPreset.value,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value
+  });
+  const supplierPinMissing = !currentRoute.fromPincode;
+  if (supplierPinMissing) $("#ewaySupplierPincodeLabel").hidden = false;
+  setRequiredAttention(form.elements.ewaySupplierPincodeEntry, supplierPinMissing, "Supplier PIN required for E-Way");
+}
+
+function setRequiredAttention(control, required, message = "Required") {
+  if (!control) return;
+  const target = control.closest("label") || control;
+  target.classList.toggle("required-attention", Boolean(required));
+  control.classList.toggle("required-control", Boolean(required));
+  if (required) control.setAttribute("aria-invalid", "true");
+  else control.removeAttribute("aria-invalid");
+  let hint = Array.from(target.children || []).find(child => child.classList?.contains("required-hint"));
+  if (required) {
+    if (!hint) {
+      hint = document.createElement("small");
+      hint.className = "required-hint";
+      target.appendChild(hint);
+    }
+    hint.textContent = message;
+  } else if (hint) {
+    hint.remove();
   }
 }
 
