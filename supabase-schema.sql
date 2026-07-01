@@ -57,6 +57,48 @@ create policy "Owners can delete workspaces"
   to authenticated
   using (owner_id = auth.uid());
 
+create or replace function public.can_access_billing_workspace(workspace_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select exists (
+    select 1
+    from public.billing_cloud_workspaces workspace
+    where workspace.id::text = workspace_id
+      and (
+        workspace.owner_id = auth.uid()
+        or coalesce(lower(auth.jwt() ->> 'email'), '') in (
+          select lower(member.email)
+          from unnest(workspace.member_emails) as member(email)
+        )
+      )
+  );
+$$;
+
+revoke all on function public.can_access_billing_workspace(text) from public;
+grant execute on function public.can_access_billing_workspace(text) to authenticated;
+
+create or replace function public.owns_billing_workspace(workspace_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select exists (
+    select 1
+    from public.billing_cloud_workspaces workspace
+    where workspace.id::text = workspace_id
+      and workspace.owner_id = auth.uid()
+  );
+$$;
+
+revoke all on function public.owns_billing_workspace(text) from public;
+grant execute on function public.owns_billing_workspace(text) to authenticated;
+
 insert into storage.buckets (id, name, public)
 values ('purchase-invoices', 'purchase-invoices', false)
 on conflict (id) do nothing;
@@ -72,15 +114,7 @@ create policy "Workspace members can read purchase invoices"
   to authenticated
   using (
     bucket_id = 'purchase-invoices'
-    and exists (
-      select 1
-      from public.billing_cloud_workspaces workspace
-      where workspace.id::text = (storage.foldername(name))[1]
-        and (
-          workspace.owner_id = auth.uid()
-          or lower(auth.jwt() ->> 'email') = any(workspace.member_emails)
-        )
-    )
+    and public.can_access_billing_workspace((storage.foldername(name))[1])
   );
 
 create policy "Workspace members can upload purchase invoices"
@@ -89,15 +123,7 @@ create policy "Workspace members can upload purchase invoices"
   to authenticated
   with check (
     bucket_id = 'purchase-invoices'
-    and exists (
-      select 1
-      from public.billing_cloud_workspaces workspace
-      where workspace.id::text = (storage.foldername(name))[1]
-        and (
-          workspace.owner_id = auth.uid()
-          or lower(auth.jwt() ->> 'email') = any(workspace.member_emails)
-        )
-    )
+    and public.can_access_billing_workspace((storage.foldername(name))[1])
   );
 
 create policy "Workspace members can update purchase invoices"
@@ -106,27 +132,11 @@ create policy "Workspace members can update purchase invoices"
   to authenticated
   using (
     bucket_id = 'purchase-invoices'
-    and exists (
-      select 1
-      from public.billing_cloud_workspaces workspace
-      where workspace.id::text = (storage.foldername(name))[1]
-        and (
-          workspace.owner_id = auth.uid()
-          or lower(auth.jwt() ->> 'email') = any(workspace.member_emails)
-        )
-    )
+    and public.can_access_billing_workspace((storage.foldername(name))[1])
   )
   with check (
     bucket_id = 'purchase-invoices'
-    and exists (
-      select 1
-      from public.billing_cloud_workspaces workspace
-      where workspace.id::text = (storage.foldername(name))[1]
-        and (
-          workspace.owner_id = auth.uid()
-          or lower(auth.jwt() ->> 'email') = any(workspace.member_emails)
-        )
-    )
+    and public.can_access_billing_workspace((storage.foldername(name))[1])
   );
 
 create policy "Workspace owners can delete purchase invoices"
@@ -135,10 +145,5 @@ create policy "Workspace owners can delete purchase invoices"
   to authenticated
   using (
     bucket_id = 'purchase-invoices'
-    and exists (
-      select 1
-      from public.billing_cloud_workspaces workspace
-      where workspace.id::text = (storage.foldername(name))[1]
-        and workspace.owner_id = auth.uid()
-    )
+    and public.owns_billing_workspace((storage.foldername(name))[1])
   );

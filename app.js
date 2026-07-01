@@ -5392,13 +5392,21 @@ async function createPurchaseAttachment(file) {
     .upload(storagePath, file, { contentType: file.type || "application/octet-stream", upsert: false });
   if (error) {
     attachment.status = "Cloud upload failed";
-    attachment.error = error.message;
+    attachment.error = purchaseAttachmentUploadError(error);
     return attachment;
   }
   attachment.bucket = PURCHASE_ATTACHMENT_BUCKET;
   attachment.storagePath = storagePath;
   attachment.status = "Cloud stored";
   return attachment;
+}
+
+function purchaseAttachmentUploadError(error) {
+  const message = String(error?.message || error || "");
+  if (/row-level security|violates.*policy|permission/i.test(message)) {
+    return "Storage permission needs update. Run the latest Supabase database setup.";
+  }
+  return message || "Could not store file in cloud.";
 }
 
 async function extractPurchaseInvoiceWithCloud(file) {

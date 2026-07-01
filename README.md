@@ -87,3 +87,5 @@ Example manual call body:
 When Supabase is configured and the user is signed in, data syncs to the selected cloud workspace. Staff can access the same workspace when their email is added in Cloud Workspace settings.
 
 If Supabase is not configured or the user is signed out, the app still works with browser local storage.
+
+Purchase invoice soft-copy uploads use the private `purchase-invoices` Supabase Storage bucket. If uploads show a row-level security or storage permission error, rerun the latest `supabase-schema.sql` in the Supabase SQL editor so the storage policies are refreshed.
