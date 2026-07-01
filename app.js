@@ -1,4 +1,5 @@
 const STORAGE_KEY = "billingSoftware.v1";
+const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_SELECTED_WORKSPACE_KEY = "billingSoftware.cloudWorkspaceId";
@@ -10,6 +11,7 @@ const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
 const EWAY_DISTANCE_FUNCTION = "estimate-eway-distance";
+const ALL_MONTHS_KEY = "all";
 
 const EWAY_ADDRESS_PRESETS = [
   {
@@ -508,6 +510,93 @@ function normalizeState(value) {
   return value;
 }
 
+function rememberLocalStateBackup(snapshot = state, workspaceId = cloudWorkspace?.id || localStorage.getItem(CLOUD_SELECTED_WORKSPACE_KEY) || "") {
+  try {
+    localStorage.setItem(LOCAL_STATE_BACKUP_KEY, JSON.stringify({
+      savedAt: new Date().toISOString(),
+      workspaceId,
+      data: clone(snapshot)
+    }));
+  } catch {
+    // Storage can fail in private mode or when the browser quota is full.
+  }
+}
+
+function readLocalStateBackup(workspaceId = "") {
+  try {
+    const raw = localStorage.getItem(LOCAL_STATE_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (workspaceId && parsed?.workspaceId && parsed.workspaceId !== workspaceId) return null;
+    return parsed?.data ? normalizeState(parsed.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
+  const merged = normalizeState(clone(cloudData || defaultState));
+  let changed = false;
+  localCandidates.filter(Boolean).forEach(candidate => {
+    const local = normalizeState(clone(candidate));
+    changed = mergeByIdentity(merged.parties, local.parties, partyMergeKey) || changed;
+    changed = mergeByIdentity(merged.items, local.items, itemMergeKey) || changed;
+    changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
+    changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey) || changed;
+    mergeProfileCounters(merged.settings.profiles, local.settings.profiles);
+  });
+  return { state: normalizeState(merged), changed };
+}
+
+function mergeByIdentity(target = [], source = [], identityFn) {
+  const ids = new Set(target.map(row => row?.id).filter(Boolean));
+  const keys = new Set(target.map(identityFn).filter(Boolean));
+  let changed = false;
+  source.forEach(row => {
+    const id = row?.id || "";
+    const key = identityFn(row);
+    if ((id && ids.has(id)) || (key && keys.has(key))) return;
+    target.push(clone(row));
+    if (id) ids.add(id);
+    if (key) keys.add(key);
+    changed = true;
+  });
+  return changed;
+}
+
+function partyMergeKey(party = {}) {
+  const gstin = normalizeGstin(party.gstin);
+  if (gstin) return `gstin:${gstin}`;
+  return `party:${normalizeMergeText(party.name)}:${normalizeMergeText(party.type)}`;
+}
+
+function itemMergeKey(item = {}) {
+  return `item:${normalizeMergeText(item.name)}:${String(item.hsn || "").trim()}`;
+}
+
+function entryMergeKey(entry = {}) {
+  return [
+    entry.profileId || "",
+    String(entry.number || "").trim().toUpperCase(),
+    entry.partyId || "",
+    entry.date || "",
+    round2(entry.total)
+  ].join("|");
+}
+
+function mergeProfileCounters(targetProfiles = [], sourceProfiles = []) {
+  sourceProfiles.forEach(source => {
+    const target = targetProfiles.find(profile => profile.id === source.id);
+    if (!target) return;
+    target.nextSaleNo = Math.max(num(target.nextSaleNo), num(source.nextSaleNo));
+    target.nextPurchaseNo = Math.max(num(target.nextPurchaseNo), num(source.nextPurchaseNo));
+  });
+}
+
+function normalizeMergeText(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+}
+
 function isDefaultSampleProduct(item = {}) {
   return String(item.name || "").trim().toLowerCase() === "sample product"
     && String(item.hsn || "").trim() === DEFAULT_SALE_HSN
@@ -731,6 +820,7 @@ function shippingAddressSnapshot(address = {}, party = {}) {
 
 function saveState(options = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!options.skipLocalBackup) rememberLocalStateBackup(state);
   if (!options.skipCloud) scheduleCloudSave();
 }
 
@@ -857,6 +947,7 @@ function entryMonthKey(entry) {
 }
 
 function monthLabel(monthKey) {
+  if (monthKey === ALL_MONTHS_KEY) return "All months";
   const [year, month] = String(monthKey || currentMonthKey()).split("-").map(Number);
   if (!year || !month) return "Current month";
   return new Date(year, month - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
@@ -890,14 +981,19 @@ function selectedEntryMonth(kind) {
 
 function monthFilteredEntries(kind) {
   const monthKey = selectedEntryMonth(kind);
+  if (monthKey === ALL_MONTHS_KEY) return activeEntries(kind);
   return activeEntries(kind).filter(entry => entryMonthKey(entry) === monthKey);
 }
 
 function entryMonthOptions(kind) {
   const selected = selectedEntryMonth(kind);
-  return [...new Set([selected, currentMonthKey(), ...activeEntries(kind).map(entryMonthKey)])]
+  return [...new Set([ALL_MONTHS_KEY, selected, currentMonthKey(), ...activeEntries(kind).map(entryMonthKey)])]
     .filter(Boolean)
-    .sort((a, b) => b.localeCompare(a));
+    .sort((a, b) => {
+      if (a === ALL_MONTHS_KEY) return -1;
+      if (b === ALL_MONTHS_KEY) return 1;
+      return b.localeCompare(a);
+    });
 }
 
 function renderEntryMonthFilter(kind) {
@@ -1648,12 +1744,19 @@ async function createCloudWorkspace(name) {
 }
 
 function applyCloudWorkspace(workspace, message) {
+  const localBeforeCloud = normalizeState(clone(state || defaultState));
+  const previousWorkspaceId = cloudWorkspace?.id || localStorage.getItem(CLOUD_SELECTED_WORKSPACE_KEY) || "";
+  const canUseCurrentLocal = !previousWorkspaceId || previousWorkspaceId === workspace.id;
+  const localBackup = readLocalStateBackup(workspace.id);
+  if (canUseCurrentLocal) rememberLocalStateBackup(localBeforeCloud, workspace.id);
+  const merged = mergeCloudStateWithLocalCandidates(workspace.data || defaultState, [localBackup, canUseCurrentLocal ? localBeforeCloud : null]);
   cloudWorkspace = workspace;
   localStorage.setItem(CLOUD_SELECTED_WORKSPACE_KEY, workspace.id);
-  state = normalizeState(clone(workspace.data || defaultState));
-  saveState({ skipCloud: true });
+  state = merged.state;
+  saveState({ skipCloud: true, skipLocalBackup: true });
   renderAll();
-  if (message) toast(message);
+  if (merged.changed) scheduleCloudSave();
+  if (message) toast(merged.changed ? `${message}. Local saved entries kept.` : message);
 }
 
 function parseMemberEmails(value) {
@@ -1731,6 +1834,7 @@ function renderDashboard() {
 function renderEntries(kind) {
   renderEntryMonthFilter(kind);
   const entries = monthFilteredEntries(kind);
+  const allEntries = activeEntries(kind);
   if (kind === "purchase") {
     const visibleIds = new Set(entries.map(entry => entry.id));
     selectedPurchaseIds = new Set([...selectedPurchaseIds].filter(id => visibleIds.has(id)));
@@ -1772,8 +1876,15 @@ function renderEntries(kind) {
   const emptyLabel = kind === "sale"
     ? `No sales entries for ${monthLabel(selectedEntryMonth(kind))}`
     : `No purchase entries for ${monthLabel(selectedEntryMonth(kind))}`;
-  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = rows || emptyRow(emptyColspan, emptyLabel);
+  const filterNote = entryMonthFilterNote(kind, entries.length, allEntries.length, emptyColspan);
+  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
   if (kind === "purchase") bindPurchaseSelectors();
+}
+
+function entryMonthFilterNote(kind, visibleCount, totalCount, colspan) {
+  if (selectedEntryMonth(kind) === ALL_MONTHS_KEY || totalCount <= visibleCount) return "";
+  const label = kind === "sale" ? "sales" : "purchases";
+  return `<tr class="filter-note-row"><td colspan="${colspan}">Showing ${visibleCount} of ${totalCount} ${label}. Select All months or another month to view older entries.</td></tr>`;
 }
 
 function ewayReviewBadge(entry) {
