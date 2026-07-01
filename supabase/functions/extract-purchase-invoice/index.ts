@@ -106,7 +106,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Extract supplier and buyer address/place when visible; return an empty string when not visible. Separate CGST, SGST and IGST exactly as shown. Add reviewMessages for unclear buyer, supplier, GSTIN, address, missing HSN, unreadable values, or tax mode mismatch."
+              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Extract supplier and buyer address/place when visible; return an empty string when not visible. Separate CGST, SGST and IGST exactly as shown. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, missing HSN, unreadable values, or tax mode mismatch."
             }
           ]
         },

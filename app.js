@@ -2823,6 +2823,8 @@ function normalizeLineRateForEntry(line = {}) {
 function addLineRow(line = blankLine(entryMode)) {
   const row = document.createElement("div");
   row.className = "line-row";
+  row.dataset.grossRate = num(line.grossRate) ? String(num(line.grossRate)) : "";
+  row.dataset.taxableRate = num(line.rate) ? String(num(line.rate)) : "";
   row.innerHTML = `
     <label>Item<select class="line-item">${itemOptions(line.itemId)}</select></label>
     <label>Qty<input class="line-qty" type="number" min="0" step="0.01" value="${num(line.qty)}"></label>
@@ -2834,9 +2836,17 @@ function addLineRow(line = blankLine(entryMode)) {
   `;
   row.querySelector(".line-item").addEventListener("change", event => {
     const item = state.items.find(candidate => candidate.id === event.target.value);
+    row.dataset.grossRate = "";
+    row.dataset.taxableRate = "";
     row.querySelector(".line-rate").value = entryMode === "sale" ? num(item?.saleRate) : num(item?.purchaseRate);
     row.querySelector(".line-gst").value = num(item?.gstRate);
     updateEntryTotals();
+  });
+  row.querySelector(".line-rate").addEventListener("input", () => {
+    if (row.dataset.taxableRate && !amountsClose(row.querySelector(".line-rate").value, row.dataset.taxableRate, 0.001)) {
+      row.dataset.grossRate = "";
+      row.dataset.taxableRate = "";
+    }
   });
   row.querySelectorAll("input, select, textarea").forEach(input => input.addEventListener("input", updateEntryTotals));
   row.querySelector("button").addEventListener("click", () => {
@@ -2855,10 +2865,20 @@ function collectLines(options = {}) {
     itemId: row.querySelector(".line-item").value,
     qty: num(row.querySelector(".line-qty").value),
     rate: num(row.querySelector(".line-rate").value),
+    grossRate: purchaseGrossRateFromRow(row),
     gstRate: num(row.querySelector(".line-gst").value),
     imeiNumbers: normalizeImeiNumbers(row.querySelector(".line-imei")?.value || "")
   })).filter(line => line.itemId && line.qty > 0);
   return normalizeRates ? lines.map(normalizeLineRateForEntry) : lines;
+}
+
+function purchaseGrossRateFromRow(row) {
+  if (entryMode !== "purchase") return 0;
+  const grossRate = num(row.dataset.grossRate);
+  if (!grossRate) return 0;
+  const taxableRate = num(row.dataset.taxableRate);
+  const currentRate = num(row.querySelector(".line-rate").value);
+  return taxableRate && amountsClose(currentRate, taxableRate, 0.001) ? grossRate : 0;
 }
 
 function updateEntryTotals() {
@@ -2869,7 +2889,8 @@ function updateEntryTotals() {
     const gstRate = num(row.querySelector(".line-gst").value);
     const taxableRate = includeGst ? taxableRateFromInclusive(rawRate, gstRate) : rawRate;
     const taxable = qty * taxableRate;
-    const amount = taxable + (taxable * gstRate / 100);
+    const grossRate = purchaseGrossRateFromRow(row);
+    const amount = grossRate ? qty * grossRate : taxable + (taxable * gstRate / 100);
     row.querySelector(".line-amount").value = money(amount);
   });
   const calculated = totals(collectLines());
@@ -6089,13 +6110,21 @@ async function processQueuedPurchaseInvoiceUpload() {
 
 async function buildPurchaseDraftFromFile(file) {
   const attachment = await createPurchaseAttachment(file);
-  let parsed = await extractPurchaseInvoiceWithCloud(file);
+  let pdfText = "";
+  if (file.type === "application/pdf") {
+    try {
+      pdfText = await extractPdfText(file);
+    } catch (error) {
+      console.warn("Local PDF text extraction unavailable", error);
+    }
+  }
+  let parsed = pdfText ? parseSpecialPurchaseInvoiceText(pdfText, file.name) : null;
+  if (!parsed) parsed = await extractPurchaseInvoiceWithCloud(file);
   if (!parsed && file.type === "application/pdf") {
-    const text = await extractPdfText(file);
-    if (!text.trim()) {
+    if (!pdfText.trim()) {
       parsed = buildManualReviewPurchase(file, "No readable text found in PDF. Please review and enter values manually.");
     } else {
-      parsed = parsePurchaseInvoiceText(text, file.name);
+      parsed = parsePurchaseInvoiceText(pdfText, file.name);
     }
   }
   if (!parsed) {
@@ -6219,6 +6248,8 @@ async function extractPdfText(file) {
 
 function parsePurchaseInvoiceText(text, fileName) {
   const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const special = parseSpecialPurchaseInvoiceText(cleaned, fileName);
+  if (special) return special;
   const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
   const gstins = [...new Set((cleaned.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/gi) || []).map(normalizeGstin))];
   const matchedProfile = gstins.map(profileByGstin).find(Boolean);
@@ -6269,6 +6300,158 @@ function parsePurchaseInvoiceText(text, fileName) {
       gstRate: inferGstRate(fallbackTaxable, amounts.gst)
     }]
   };
+}
+
+function parseSpecialPurchaseInvoiceText(text, fileName) {
+  if (isReliancePurchaseInvoice(text)) return parseReliancePurchaseInvoiceText(text, fileName);
+  return null;
+}
+
+function isReliancePurchaseInvoice(text) {
+  return /reliance/i.test(text)
+    && /GSTN\s*#?:?\s*33AABCR1718E1ZW|Supply\s+State\s+GSTN\s+Number\s*:?\s*33AABCR1718E1ZW/i.test(text)
+    && /Net\s+Sales\s+Value|GST\s+RECEIPT\s+SUMMARY/i.test(text);
+}
+
+function parseReliancePurchaseInvoiceText(text, fileName) {
+  const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
+  const profile = profileByGstin(relianceBuyerGstin(cleaned)) || activeProfile();
+  const buyerGstin = normalizeGstin(profile.gstin || relianceBuyerGstin(cleaned));
+  const supplierGstin = normalizeGstin(
+    cleaned.match(/Supply\s+State\s+GSTN\s+Number\s*:?\s*([0-9A-Z]{15})/i)?.[1]
+    || cleaned.match(/GSTN\s*#?:?\s*([0-9A-Z]{15})/i)?.[1]
+    || "33AABCR1718E1ZW"
+  );
+  const invoiceNumber = cleaned.match(/Tax\s+Invoice#\s*([A-Z0-9]+)/i)?.[1]
+    || findInvoiceNumber(lines)
+    || nextEntryNumber("purchase", profile.id);
+  const relianceDate = cleaned.match(/\bDt\s*:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i)?.[1] || "";
+  const invoiceDate = relianceDate ? toDateInput(relianceDate) : (findInvoiceDate(cleaned) || today());
+  const totalSummary = relianceTotalSummary(lines);
+  const hsnSummaries = relianceHsnSummaries(lines);
+  const itemDetails = relianceItemDetails(lines);
+  const parsedLines = hsnSummaries.map(summary => {
+    const item = itemDetails.find(detail => detail.hsn === summary.hsn) || {};
+    const qty = num(item.qty) || 1;
+    return {
+      name: item.name || `Reliance item ${summary.hsn}`,
+      hsn: summary.hsn,
+      qty,
+      rate: qty ? round2(summary.taxable / qty) : summary.taxable,
+      grossRate: qty ? round2(summary.total / qty) : summary.total,
+      gstRate: summary.gstRate || inferGstRate(summary.taxable, summary.tax),
+      imeiNumbers: item.imeiNumbers || ""
+    };
+  });
+  const taxable = totalSummary.taxable || round2(hsnSummaries.reduce((sum, row) => sum + row.taxable, 0));
+  const gst = totalSummary.gst || round2(hsnSummaries.reduce((sum, row) => sum + row.tax, 0));
+  const total = totalSummary.total || round2(hsnSummaries.reduce((sum, row) => sum + row.total, 0));
+  return {
+    fileName,
+    profileId: profile.id,
+    supplierName: "Reliance Retail Limited",
+    supplierGstin,
+    supplierAddress: "Reliance Corporate Park",
+    supplierPlace: stateNameFromGstin(supplierGstin) || "Tamil Nadu",
+    buyerName: profile.businessName || relianceBuyerName(lines) || profile.label || "",
+    buyerGstin,
+    buyerAddress: relianceBuyerAddress(lines),
+    buyerPlace: profile.state || stateNameFromGstin(buyerGstin) || "",
+    invoiceNumber,
+    invoiceDate,
+    taxable,
+    gst,
+    total,
+    extractedTaxes: {
+      taxable,
+      cgst: 0,
+      sgst: 0,
+      igst: gst,
+      gst,
+      total
+    },
+    reviewMessages: parsedLines.length ? [] : ["Reliance invoice detected, but item HSN summary was not fully readable. Review item values before saving."],
+    lines: parsedLines.length ? parsedLines : [{
+      name: "Reliance Purchase",
+      hsn: DEFAULT_SALE_HSN,
+      qty: 1,
+      rate: taxable,
+      grossRate: total,
+      gstRate: inferGstRate(taxable, gst)
+    }]
+  };
+}
+
+function relianceBuyerGstin(text) {
+  return normalizeGstin(text.match(/GSTIN\s+Number\s*:?\s*([0-9A-Z]{15})/i)?.[1] || "");
+}
+
+function relianceBuyerName(lines = []) {
+  const index = lines.findIndex(line => /^Customer\s+Address\s*:?$/i.test(line));
+  if (index < 0) return "";
+  return lines[index + 1] || "";
+}
+
+function relianceBuyerAddress(lines = []) {
+  const start = lines.findIndex(line => /^Customer\s+Address\s*:?$/i.test(line));
+  if (start < 0) return "";
+  const end = lines.findIndex((line, index) => index > start && /^Relationship\s+ID|^GSTIN\s+Number/i.test(line));
+  return lines.slice(start + 2, end > start ? end : start + 12).join(", ");
+}
+
+function relianceTotalSummary(lines = []) {
+  const result = { taxable: 0, gst: 0, total: 0 };
+  for (const line of lines) {
+    const match = line.replace(/,/g, "").match(/^TOTAL:\s*(\d+(?:\.\d{1,2})?)\s+(\d+(?:\.\d{1,2})?)\s+(\d+(?:\.\d{1,2})?)/i);
+    if (!match) continue;
+    result.taxable = Number(match[1]);
+    result.gst = Number(match[2]);
+    result.total = Number(match[3]);
+    break;
+  }
+  if (!result.total) {
+    result.total = Number(String(lines.find(line => /Net\s+Sales\s+Value/i.test(line)) || "").replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)\s*$/)?.[1] || 0);
+  }
+  return result;
+}
+
+function relianceHsnSummaries(lines = []) {
+  const summaries = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].replace(/,/g, "").match(/^(\d{4,8})\s+(\d+(?:\.\d{1,2})?)\s+(\d+(?:\.\d{1,2})?)\s+(\d+(?:\.\d{1,2})?)$/);
+    if (!match) continue;
+    const rateLine = lines.slice(index + 1, index + 4).find(line => /\bIGST\b|\bCGST\b|\bSGST\b/i.test(line)) || "";
+    const gstRate = Number(rateLine.match(/(\d+(?:\.\d+)?)\s*%/)?.[1] || 18);
+    summaries.push({
+      hsn: match[1],
+      taxable: Number(match[2]),
+      tax: Number(match[3]),
+      total: Number(match[4]),
+      gstRate
+    });
+  }
+  return summaries;
+}
+
+function relianceItemDetails(lines = []) {
+  const details = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].replace(/,/g, "").match(/^(.+?)\s+(\d+(?:\.\d+)?)\s*EA\s+(\d+(?:\.\d{1,2})?)$/i);
+    if (!match || /items?\s+purchased/i.test(lines[index])) continue;
+    const following = lines.slice(index + 1, index + 5).join(" ");
+    const hsn = following.match(/\b(\d{8})\b/)?.[1] || "";
+    if (!hsn) continue;
+    const imeiNumbers = [...new Set((following.match(/\b\d{14,17}\b/g) || []).filter(value => value !== hsn))].join("\n");
+    details.push({
+      name: match[1].trim(),
+      qty: Number(match[2]),
+      listedAmount: Number(match[3]),
+      hsn,
+      imeiNumbers
+    });
+  }
+  return details;
 }
 
 function findSupplierName(lines, supplierGstin) {
@@ -6407,7 +6590,9 @@ function buildPurchaseDraft(parsed) {
       itemId: item.id,
       qty: num(line.qty) || 1,
       rate: num(line.rate),
-      gstRate: num(line.gstRate)
+      grossRate: num(line.grossRate),
+      gstRate: num(line.gstRate),
+      imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
     };
   });
   return {
