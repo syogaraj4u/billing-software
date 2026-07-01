@@ -2384,18 +2384,22 @@ function purchaseTotalWithRoundOff(calculated = {}, roundOff = 0) {
 
 function renderExtractedTaxReview(extracted = {}, calculated = {}) {
   if (!Object.values(extracted).some(value => num(value))) return "";
-  const rows = [
+  const comparisons = [
     ["Taxable", extracted.taxable, calculated.taxable],
     ["CGST", extracted.cgst, calculated.cgst],
     ["SGST", extracted.sgst, calculated.sgst],
     ["IGST", extracted.igst, calculated.igst],
     ["GST", num(extracted.gst) || num(extracted.cgst) + num(extracted.sgst) + num(extracted.igst), calculated.gst],
     ["Total", extracted.total, calculated.total]
-  ].map(([label, uploaded, appValue]) => {
+  ].filter(([label, uploaded, appValue]) => num(uploaded) || num(appValue) || ["GST", "Total"].includes(label));
+  const rows = comparisons.map(([label, uploaded, appValue]) => {
     const mismatch = (num(uploaded) || num(appValue)) && !amountsClose(uploaded, appValue);
-    return `<div class="${mismatch ? "tax-mismatch" : ""}">
+    const difference = round2(num(uploaded) - num(appValue));
+    return `<div class="${mismatch ? "tax-mismatch" : "tax-match"}">
       <span>${escapeHtml(label)}</span>
-      <strong>Uploaded ${money(uploaded)} | App ${money(appValue)}</strong>
+      ${mismatch
+        ? `<strong>Difference ${money(Math.abs(difference))}</strong><small>Uploaded ${money(uploaded)} | App ${money(appValue)}</small>`
+        : `<strong class="tax-match-mark">✓ Matched</strong>`}
     </div>`;
   }).join("");
   return `<div class="purchase-review-extracted">

@@ -1116,11 +1116,28 @@ textarea { resize: vertical; }
   background: #fff2e8;
 }
 
+.tax-comparison-grid > div.tax-match {
+  border-color: #b9dfc8;
+  background: #f1faf4;
+}
+
 .tax-comparison-grid strong {
   display: block;
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.tax-comparison-grid small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tax-match-mark {
+  color: #0f7a45;
 }
 
 .purchase-review-items,
