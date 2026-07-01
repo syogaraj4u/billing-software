@@ -918,6 +918,10 @@ textarea { resize: vertical; }
   padding: 0 20px 18px;
 }
 
+.entry-meta-head {
+  display: none;
+}
+
 .line-head {
   justify-content: space-between;
   margin-bottom: 10px;
@@ -925,6 +929,13 @@ textarea { resize: vertical; }
 
 .line-head h4 {
   margin: 0;
+}
+
+.line-editor-hint {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .line-row {
@@ -1202,6 +1213,146 @@ textarea { resize: vertical; }
   height: 18px;
   margin: 0;
   accent-color: var(--primary);
+}
+
+.purchase-entry-dialog {
+  width: min(960px, calc(100vw - 28px));
+}
+
+.purchase-entry-dialog form {
+  background: #f5f7f7;
+}
+
+.purchase-entry-dialog .dialog-head {
+  background: #fff;
+}
+
+.purchase-entry-dialog .dialog-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #f5f7f7;
+}
+
+.purchase-entry-dialog #purchaseReviewPanel {
+  order: 1;
+}
+
+.purchase-entry-dialog .entry-meta-panel {
+  order: 2;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.purchase-entry-dialog .entry-meta-head {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.purchase-entry-dialog .entry-meta-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.purchase-entry-dialog .entry-meta-head strong {
+  font-size: 15px;
+}
+
+.purchase-entry-dialog .form-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.purchase-entry-dialog .form-grid .span-2 {
+  grid-column: span 2;
+}
+
+.purchase-entry-dialog .form-grid label,
+.purchase-entry-dialog .entry-party-field > label {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.purchase-entry-dialog .entry-party-field {
+  align-items: stretch;
+}
+
+.purchase-entry-dialog .purchase-review-panel {
+  margin: 0;
+  padding: 14px;
+  background: #fff;
+}
+
+.purchase-entry-dialog .purchase-review-head {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.purchase-entry-dialog .purchase-review-items,
+.purchase-entry-dialog .purchase-review-extracted,
+.purchase-entry-dialog .purchase-review-attachments,
+.purchase-entry-dialog .purchase-review-totals {
+  background: #fff;
+}
+
+.purchase-entry-dialog .purchase-review-items table {
+  width: 100%;
+  min-width: 0;
+}
+
+.purchase-entry-dialog .line-editor {
+  order: 3;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.purchase-entry-dialog .line-row {
+  background: #fff;
+}
+
+.purchase-entry-dialog .totals-box {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 16px;
+  background: #fff;
+}
+
+.purchase-entry-dialog .totals-box div {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfb;
+  text-align: left;
+}
+
+.purchase-entry-dialog .totals-box div:last-child {
+  border-color: var(--primary-dark);
+  background: var(--primary-dark);
+  color: #fff;
+}
+
+.purchase-entry-dialog .totals-box div:last-child span {
+  color: rgba(255,255,255,.75);
+}
+
+.purchase-entry-dialog .totals-box strong {
+  font-size: 16px;
 }
 
 .segmented button {
@@ -2588,6 +2739,103 @@ textarea { resize: vertical; }
     display: grid;
     grid-template-columns: 1fr;
     padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+  .purchase-entry-dialog .dialog-head {
+    padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+  }
+  .purchase-entry-dialog .dialog-scroll {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+  .purchase-entry-dialog .form-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px;
+  }
+  .purchase-entry-dialog .form-grid .span-2 {
+    grid-column: span 1;
+  }
+  .purchase-entry-dialog .purchase-review-panel,
+  .purchase-entry-dialog .line-editor {
+    padding: 10px;
+  }
+  .purchase-entry-dialog .purchase-review-grid,
+  .purchase-entry-dialog .purchase-review-totals,
+  .purchase-entry-dialog .tax-comparison-grid {
+    gap: 6px;
+  }
+  .purchase-entry-dialog .purchase-review-items {
+    overflow: visible;
+  }
+  .purchase-entry-dialog .purchase-review-items table,
+  .purchase-entry-dialog .purchase-review-items tbody,
+  .purchase-entry-dialog .purchase-review-items tr,
+  .purchase-entry-dialog .purchase-review-items td {
+    display: block;
+    width: 100%;
+  }
+  .purchase-entry-dialog .purchase-review-items thead {
+    display: none;
+  }
+  .purchase-entry-dialog .purchase-review-items tr {
+    display: grid;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f8fbfb;
+  }
+  .purchase-entry-dialog .purchase-review-items tr:last-child {
+    margin-bottom: 0;
+  }
+  .purchase-entry-dialog .purchase-review-items td {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 0;
+    text-align: left;
+  }
+  .purchase-entry-dialog .purchase-review-items td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-align: left;
+  }
+  .purchase-entry-dialog .line-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .purchase-entry-dialog .line-row label:first-child,
+  .purchase-entry-dialog .line-imei-field {
+    grid-column: 1 / -1;
+  }
+  .purchase-entry-dialog .line-row button {
+    min-height: 42px;
+    width: 100%;
+  }
+  .purchase-entry-dialog .totals-box {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px 12px;
+  }
+  .purchase-entry-dialog .totals-box div {
+    min-width: 0;
+    padding: 7px;
+  }
+  .purchase-entry-dialog .totals-box span {
+    font-size: 10px;
+  }
+  .purchase-entry-dialog .totals-box strong {
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+  .purchase-entry-dialog .dialog-actions {
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+    gap: 8px;
+    padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
   }
   .filters label,
   .filters .secondary-btn {

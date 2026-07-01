@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260701-purchase-flow">
+  <link rel="stylesheet" href="styles.css?v=20260701-purchase-review-cards">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -267,17 +267,23 @@
         <button class="icon-btn" type="button" data-close-dialog="entryDialog" title="Close"><i data-lucide="x"></i></button>
       </div>
       <div class="dialog-scroll">
-        <div class="form-grid">
-          <label class="span-2">Business GST<select name="profileId" required></select></label>
-          <label>Date<input name="date" type="date" required></label>
-          <label>Number<input name="number" required></label>
-          <div class="entry-party-field">
-            <label><span id="entryPartyLabelText">Party</span><select name="partyId" required></select></label>
-            <button class="secondary-btn" id="entryAddBuyerBtn" type="button"><i data-lucide="user-plus"></i><span>New Buyer</span></button>
+        <section class="entry-meta-panel">
+          <div class="entry-meta-head">
+            <span id="entryMetaLabel">Invoice Details</span>
+            <strong id="entryMetaTitle">Check the basic details</strong>
           </div>
-          <label id="entryStatusLabel">Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
-          <label class="span-2" id="entryNotesLabel">Notes<input name="notes"></label>
-        </div>
+          <div class="form-grid">
+            <label class="span-2"><span id="entryProfileLabelText">Business GST</span><select name="profileId" required></select></label>
+            <label>Date<input name="date" type="date" required></label>
+            <label>Number<input name="number" required></label>
+            <div class="entry-party-field">
+              <label><span id="entryPartyLabelText">Party</span><select name="partyId" required></select></label>
+              <button class="secondary-btn" id="entryAddBuyerBtn" type="button"><i data-lucide="user-plus"></i><span>New Buyer</span></button>
+            </div>
+            <label id="entryStatusLabel">Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
+            <label class="span-2" id="entryNotesLabel">Notes<input name="notes"></label>
+          </div>
+        </section>
         <section class="sales-address-panel" id="salesAddressPanel" hidden>
           <div class="sales-address-grid">
             <div class="sales-address-card" id="billToPreview"></div>
@@ -305,7 +311,10 @@
         <div id="purchaseReviewPanel"></div>
         <div class="line-editor">
           <div class="line-head">
-            <h4>Items</h4>
+            <div>
+              <h4 id="lineEditorTitle">Items</h4>
+              <span class="line-editor-hint" id="lineEditorHint"></span>
+            </div>
             <button type="button" class="secondary-btn" id="addLineBtn"><i data-lucide="plus"></i><span>Add Item</span></button>
           </div>
           <div id="lineRows"></div>
@@ -444,6 +453,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260701-purchase-flow"></script>
+  <script src="app.js?v=20260701-purchase-review-cards"></script>
 </body>
 </html>

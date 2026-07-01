@@ -1792,9 +1792,17 @@ function openEntry(kind, id = null, draft = null) {
   const form = $("#entryForm");
   form.reset();
   $("#entryKindLabel").textContent = kind === "sale" ? "Sales Bill" : "Purchase Entry";
-  $("#entryDialogTitle").textContent = id ? "Edit Entry" : (kind === "sale" ? "New Sales Invoice" : "New Entry");
+  $("#entryDialogTitle").textContent = id
+    ? (kind === "purchase" ? "Edit Purchase" : "Edit Entry")
+    : (kind === "sale" ? "New Sales Invoice" : "Purchase Review");
   $("#entryDialog").classList.toggle("sale-entry-dialog", kind === "sale");
   $("#entryDialog").classList.toggle("purchase-entry-dialog", kind === "purchase");
+  $("#entryMetaLabel").textContent = kind === "sale" ? "Invoice Details" : "Editable Details";
+  $("#entryMetaTitle").textContent = kind === "sale" ? "Check the basic details" : "Correct supplier, buyer GST, invoice number and date";
+  $("#entryProfileLabelText").textContent = kind === "sale" ? "Business GST" : "Buyer GST";
+  $("#lineEditorTitle").textContent = kind === "sale" ? "Items" : "Items from invoice";
+  $("#lineEditorHint").textContent = kind === "sale" ? "" : "Edit item, quantity, rate, GST or IMEI before saving.";
+  $("#saveEntryBtn span").textContent = kind === "sale" ? "Save Entry" : "Save Purchase";
   form.elements.date.value = source?.date || today();
   form.elements.date.oninput = updateEntryTotals;
   form.elements.number.value = kind === "sale"
@@ -1809,8 +1817,8 @@ function openEntry(kind, id = null, draft = null) {
     updateEntryTotals();
   };
   form.elements.status.value = source?.status || "Paid";
-  $("#entryStatusLabel").hidden = kind === "sale";
-  $("#entryNotesLabel").hidden = kind === "sale";
+  $("#entryStatusLabel").hidden = true;
+  $("#entryNotesLabel").hidden = true;
   form.elements.notes.value = kind === "sale" ? "" : (source?.notes || "");
   $("#entryPartyLabelText").textContent = kind === "sale" ? "Buyer" : "Supplier";
   $("#entryAddBuyerBtn").hidden = kind !== "sale";
@@ -1820,8 +1828,7 @@ function openEntry(kind, id = null, draft = null) {
     updateEntryTotals();
   };
   setupSalesAddressPanel(kind, source);
-  $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview(kind, source);
-  bindPurchaseReviewControls();
+  $("#purchaseReviewPanel").innerHTML = "";
   $("#lineRows").innerHTML = "";
   (source?.lines?.length ? source.lines : [blankLine(kind)]).forEach(line => addLineRow(line));
   updateEntryTotals();
@@ -1960,8 +1967,6 @@ function renderPurchaseUploadReview(kind, source) {
     ...purchaseTaxReviewMessages(extracted, calculated),
     ...purchaseDuplicateReviewMessages(source, source.id || editingEntryId)
   ]);
-  const hasUploadContext = source.source === "purchase-upload" || (source.attachments || []).length || Object.values(extracted).some(value => num(value));
-  if (!hasUploadContext && !messages.length) return "";
   syncPurchaseReviewAcceptance(messages);
   const attachments = source.attachments || [];
   const taxModeLabel = calculated.taxMode === "IGST" ? "IGST" : "CGST/SGST";
@@ -1981,7 +1986,9 @@ function renderPurchaseUploadReview(kind, source) {
       ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", `GSTIN: ${source.buyerGstin || profile.gstin || "-"}`, profile.address ? `Address: ${profile.address}` : `Place: ${profile.state || "-"}`)}
       ${purchaseReviewCard("Invoice", source.number || "-", `Date: ${formatInvoiceDate(source.date || today())}`, `File: ${attachments.map(file => file.name).join(", ") || "-"}`)}
     </div>
+    ${messages.length ? `<div class="purchase-review-warnings">${messages.map(renderPurchaseWarning).join("")}</div>` : ""}
     ${renderPurchaseItemReview(source.lines || [])}
+    ${renderExtractedTaxReview(extracted, calculated)}
     <div class="purchase-review-totals">
       <span>Taxable</span><strong>${money(calculated.taxable)}</strong>
       <span>CGST</span><strong>${money(calculated.cgst)}</strong>
@@ -1990,9 +1997,7 @@ function renderPurchaseUploadReview(kind, source) {
       <span>GST</span><strong>${money(calculated.gst)}</strong>
       <span>Total</span><strong>${money(calculated.total)}</strong>
     </div>
-    ${renderExtractedTaxReview(extracted, calculated)}
     ${renderPurchaseAttachmentReview(attachments)}
-    ${messages.length ? `<div class="purchase-review-warnings">${messages.map(renderPurchaseWarning).join("")}</div>` : ""}
     ${renderPurchaseReviewAcceptance(messages)}
   </section>`;
 }
@@ -2113,12 +2118,12 @@ function renderPurchaseItemReview(lines = []) {
   const rows = lines.map(line => {
     const item = state.items.find(row => row.id === line.itemId) || {};
     return `<tr>
-      <td>${escapeHtml(item.name || itemName(line.itemId))}</td>
-      <td>${escapeHtml(item.hsn || "")}</td>
-      <td class="num">${num(line.qty)}</td>
-      <td class="num">${money(line.rate)}</td>
-      <td class="num">${num(line.gstRate)}%</td>
-      <td class="num">${money(lineTaxableAmount(line))}</td>
+      <td data-label="Item">${escapeHtml(item.name || itemName(line.itemId))}</td>
+      <td data-label="HSN/SAC">${escapeHtml(item.hsn || "")}</td>
+      <td data-label="Qty" class="num">${num(line.qty)}</td>
+      <td data-label="Rate" class="num">${money(line.rate)}</td>
+      <td data-label="GST" class="num">${num(line.gstRate)}%</td>
+      <td data-label="Taxable" class="num">${money(lineTaxableAmount(line))}</td>
     </tr>`;
   }).join("");
   return `<div class="purchase-review-items">
@@ -2253,7 +2258,7 @@ function updateEntryTotals() {
   $("#entryIgst").textContent = money(calculated.igst);
   $("#entryGst").textContent = money(calculated.gst);
   $("#entryTotal").textContent = money(calculated.total);
-  if (entryMode === "purchase" && (entryDraftMeta.source === "purchase-upload" || $("#purchaseReviewPanel").innerHTML.trim())) {
+  if (entryMode === "purchase") {
     rememberPurchaseReviewAcceptance();
     $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", currentPurchaseReviewSource());
     bindPurchaseReviewControls();
