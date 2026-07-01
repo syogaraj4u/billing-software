@@ -1639,7 +1639,9 @@ function renderEntries(kind) {
     const purchaseSelect = kind === "purchase" ? `
       <td><input class="purchase-select" type="checkbox" aria-label="Select ${escapeHtml(entry.number)}" data-purchase-id="${entry.id}" ${selectedPurchaseIds.has(entry.id) ? "checked" : ""}></td>
     ` : "";
-    const reviewCell = kind === "purchase" ? `<td>${reviewBadge(entry)}</td>` : "";
+    const statusCell = kind === "purchase"
+      ? `<td>${ewayReviewBadge(entry)}</td>`
+      : `<td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span></td>`;
     return `
     <tr class="${cancelled ? "cancelled-row" : ""}">
       ${purchaseSelect}
@@ -1647,8 +1649,7 @@ function renderEntries(kind) {
       <td>${escapeHtml(entry.number)}</td>
       <td>${escapeHtml(profileName(entry.profileId))}</td>
       <td>${escapeHtml(partyName(entry.partyId))}</td>
-      <td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span></td>
-      ${reviewCell}
+      ${statusCell}
       <td class="num">${money(entry.taxable)}</td>
       <td class="num">${money(entry.gst)}</td>
       <td class="num">${money(entry.total)}</td>
@@ -1664,7 +1665,7 @@ function renderEntries(kind) {
     </tr>
   `;
   }).join("");
-  const emptyColspan = kind === "sale" ? 9 : 11;
+  const emptyColspan = kind === "sale" ? 9 : 10;
   const emptyLabel = kind === "sale"
     ? `No sales entries for ${monthLabel(selectedEntryMonth(kind))}`
     : `No purchase entries for ${monthLabel(selectedEntryMonth(kind))}`;
@@ -1672,12 +1673,27 @@ function renderEntries(kind) {
   if (kind === "purchase") bindPurchaseSelectors();
 }
 
-function reviewBadge(entry) {
-  const status = entry.reviewStatus || "Ready";
-  const message = (entry.reviewMessages || []).join(" ");
-  const className = status === "Needs Review" ? "warn" : "";
-  const title = message ? ` title="${escapeHtml(message)}"` : "";
-  return `<span class="badge ${className}"${title}>${escapeHtml(status)}</span>`;
+function ewayReviewBadge(entry) {
+  const messages = ewayReviewMessages(entry);
+  if (!messages.length) return `<span class="badge ok">OK</span>`;
+  const shortName = ewayReviewShortName(messages);
+  return `<span class="badge warn eway-review-badge" title="${escapeHtml(messages.join(" | "))}">${escapeHtml(shortName)}</span>`;
+}
+
+function ewayReviewMessages(entry) {
+  return buildEwayBill(entry).reviewMessages;
+}
+
+function ewayReviewShortName(messages = []) {
+  const text = messages.join(" ").toLowerCase();
+  const codes = [];
+  if (text.includes("vehicle")) codes.push("VEH");
+  if (text.includes("distance")) codes.push("DIST");
+  if (text.includes("pincode")) codes.push("PIN");
+  if (text.includes("gstin")) codes.push("GSTIN");
+  if (text.includes("hsn")) codes.push("HSN");
+  if (text.includes("quantity") || text.includes("item")) codes.push("ITEM");
+  return codes.length ? codes.slice(0, 3).join("/") : "CHECK";
 }
 
 function bindPurchaseSelectors() {
@@ -4242,21 +4258,18 @@ function renderReport() {
 function exportSelectedEwayJson() {
   const purchases = monthFilteredEntries("purchase").filter(entry => selectedPurchaseIds.has(entry.id));
   if (!purchases.length) return toast("Select purchase bills first");
-  const reviewMeta = [];
+  let warningCount = 0;
   const billLists = purchases.map(entry => {
     const result = buildEwayBill(entry);
-    if (result.reviewMessages.length) {
-      reviewMeta.push({ docNo: entry.number, messages: result.reviewMessages });
-    }
+    if (result.reviewMessages.length) warningCount += 1;
     return result.bill;
   });
   const payload = {
     version: EWAY_DOCUMENT_VERSION,
-    billLists,
-    reviewMeta
+    billLists
   };
   downloadJson(payload, `purchase-eway-${today()}.json`);
-  toast(reviewMeta.length ? "E-way JSON downloaded with review notes" : "E-way JSON downloaded");
+  toast(warningCount ? "E-way JSON downloaded. Check E-Way badges for warnings." : "E-way JSON downloaded");
 }
 
 function buildEwayBill(entry) {

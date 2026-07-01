@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260701-purchase-eway-details">
+  <link rel="stylesheet" href="styles.css?v=20260701-eway-review-badges">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -148,7 +148,7 @@
         </div>
         <div class="table-wrap panel">
           <table>
-            <thead><tr><th><input id="selectAllPurchases" type="checkbox" aria-label="Select all purchases"></th><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>Status</th><th>Review</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
+            <thead><tr><th><input id="selectAllPurchases" type="checkbox" aria-label="Select all purchases"></th><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>E-Way</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
             <tbody id="purchaseRows"></tbody>
           </table>
         </div>
@@ -489,6 +489,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260701-purchase-eway-details"></script>
+  <script src="app.js?v=20260701-eway-review-badges"></script>
 </body>
 </html>
