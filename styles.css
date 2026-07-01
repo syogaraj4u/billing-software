@@ -972,7 +972,7 @@ textarea { resize: vertical; }
 
 .line-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) 86px 110px 100px 110px 36px;
+  grid-template-columns: minmax(180px, 1.2fr) 96px 86px 110px 100px 110px 36px;
   gap: 8px;
   align-items: end;
   padding: 10px;
@@ -2377,8 +2377,8 @@ textarea { resize: vertical; }
   .line-row {
     grid-template-columns: 1fr 80px 100px;
   }
-  .line-row label:nth-child(4),
   .line-row label:nth-child(5),
+  .line-row label:nth-child(6),
   .line-row button {
     grid-column: span 1;
   }

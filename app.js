@@ -2150,6 +2150,7 @@ function setupPurchaseEwayPanel(kind, source = null) {
   form.elements.ewayTransType.value = details.transType || "1";
   form.elements.ewayTransMode.value = details.transMode || "1";
   form.elements.ewayVehicleNoEntry.value = details.vehicleNo || "";
+  form.elements.ewaySupplierPincodeEntry.value = details.fromPincode || "";
   form.elements.ewayDestinationPreset.innerHTML = ewayDestinationPresetOptions(details.destinationPreset);
   form.elements.ewayDestinationPreset.value = details.destinationPreset || (details.shipToAddress ? "custom" : "buyer");
   form.elements.ewayDispatchFromAddress.value = details.dispatchFromAddress || "";
@@ -2160,7 +2161,7 @@ function setupPurchaseEwayPanel(kind, source = null) {
   form.elements.ewayTransDocNo.value = details.transDocNo || "";
   form.elements.ewayTransDocDate.value = details.transDocDate || "";
   form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = "";
-  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewayDestinationPreset", "ewayDispatchFromAddress", "ewayShipToAddress", "ewayTransporterName", "ewayTransporterId", "ewayTransDocNo", "ewayTransDocDate"].forEach(name => {
+  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewaySupplierPincodeEntry", "ewayDestinationPreset", "ewayDispatchFromAddress", "ewayShipToAddress", "ewayTransporterName", "ewayTransporterId", "ewayTransDocNo", "ewayTransDocDate"].forEach(name => {
     form.elements[name].oninput = updatePurchaseEwayPanel;
     form.elements[name].onchange = updatePurchaseEwayPanel;
   });
@@ -2182,6 +2183,7 @@ function updatePurchaseEwayPanel() {
   const transType = form.elements.ewayTransType.value || "1";
   const route = purchaseEwayRouteFromValues(profile, supplier, {
     transType,
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value,
     destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
@@ -2197,11 +2199,13 @@ function updatePurchaseEwayPanel() {
   }
   const refreshedRoute = purchaseEwayRouteFromValues(profile, supplier, {
     transType,
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value,
     destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
   });
   applyEwayDistanceSuggestion(refreshedRoute, form);
+  $("#ewaySupplierPincodeLabel").hidden = Boolean(refreshedRoute.defaultFromPincode) && !form.elements.ewaySupplierPincodeEntry.value.trim();
   $("#ewayBillToPreview").hidden = !ewayUsesShipTo(transType);
   $("#ewayFromPreview").innerHTML = ewayAddressPreview(ewayUsesDispatchFrom(transType) ? "Dispatch From" : "From", refreshedRoute.fromName, refreshedRoute.fromAddress, refreshedRoute.fromPincode);
   $("#ewayBillToPreview").innerHTML = ewayAddressPreview("Bill To", refreshedRoute.billToName, refreshedRoute.billToAddress, refreshedRoute.billToPincode);
@@ -2244,7 +2248,7 @@ function applyEwayDistanceSuggestion(route, form) {
 }
 
 function samePincodeDistanceKm(route) {
-  return route.fromPincode && route.toPincode && route.fromPincode === route.toPincode ? 2 : 0;
+  return route.fromPincode && route.toPincode && String(route.fromPincode) === String(route.toPincode) ? 2 : 0;
 }
 
 function calculateEwayDistance(fromPincode, toPincode) {
@@ -2325,7 +2329,8 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
         ? (String(details.shipToAddress || "").trim() || defaultToAddress)
         : defaultToAddress
     : defaultToAddress;
-  const fromPincode = extractPincode(fromAddress);
+  const defaultFromPincode = extractPincode(fromAddress);
+  const fromPincode = normalizePincode(details.fromPincode) || defaultFromPincode;
   const billToPincode = extractPincode(billToAddress);
   const toPincode = selectedPreset ? String(selectedPreset.toPincode) : extractPincode(toAddress);
   const routeKey = ewayRouteKey(fromPincode, toPincode);
@@ -2341,6 +2346,7 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
     toName: selectedPreset?.label || (ewayUsesShipTo(transType) ? "Delivery Address" : (profile.businessName || profile.label || "Buyer GST")),
     fromAddress,
     toAddress,
+    defaultFromPincode,
     fromPincode,
     toPincode,
     routeKey,
@@ -2417,6 +2423,7 @@ async function estimateEwayDistanceWithCloud(route, key) {
     const supplier = partyById(form.elements.partyId.value) || {};
     const currentRoute = purchaseEwayRouteFromValues(profile, supplier, {
       transType: form.elements.ewayTransType.value || "1",
+      fromPincode: form.elements.ewaySupplierPincodeEntry.value,
       destinationPreset: form.elements.ewayDestinationPreset.value,
       dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
       shipToAddress: form.elements.ewayShipToAddress.value
@@ -2436,6 +2443,7 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
   const transMode = form.elements.ewayTransMode.value || "1";
   const route = purchaseEwayRouteFromValues(profile, supplier, {
     transType,
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value,
     destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
@@ -2453,7 +2461,7 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
     transporterId: form.elements.ewayTransporterId.value,
     transDocNo: form.elements.ewayTransDocNo.value,
     transDocDate: form.elements.ewayTransDocDate.value,
-    fromPincode: route.fromPincode,
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value || route.fromPincode,
     toPincode: route.toPincode,
     routeKey: route.routeKey
   });
@@ -2747,9 +2755,10 @@ function renderPurchaseItemReview(lines = []) {
   if (!lines.length) return "";
   const rows = lines.map(line => {
     const item = state.items.find(row => row.id === line.itemId) || {};
+    const hsn = lineHsn(line, item);
     return `<tr>
       <td data-label="Item">${escapeHtml(item.name || itemName(line.itemId))}</td>
-      <td data-label="HSN/SAC">${escapeHtml(item.hsn || "")}</td>
+      <td data-label="HSN/SAC">${escapeHtml(hsn)}</td>
       <td data-label="Qty" class="num">${num(line.qty)}</td>
       <td data-label="Rate" class="num">${money(line.rate)}</td>
       <td data-label="GST" class="num">${num(line.gstRate)}%</td>
@@ -2811,6 +2820,11 @@ function lineInputRate(line = {}) {
   return num(line.rate);
 }
 
+function lineInputHsn(line = {}) {
+  const item = state.items.find(row => row.id === line.itemId) || {};
+  return String(line.hsn || item.hsn || "").trim();
+}
+
 function normalizeLineRateForEntry(line = {}) {
   const rawRate = num(line.rate);
   if (entryMode === "sale" && salesRatesIncludeGst()) {
@@ -2836,6 +2850,7 @@ function addLineRow(line = blankLine(entryMode)) {
   row.dataset.taxableRate = num(line.rate) ? String(num(line.rate)) : "";
   row.innerHTML = `
     <label>Item<select class="line-item">${itemOptions(line.itemId)}</select></label>
+    <label class="line-hsn-field">HSN/SAC<input class="line-hsn" inputmode="numeric" maxlength="8" value="${escapeHtml(lineInputHsn(line))}" placeholder="85171300"></label>
     <label>Qty<input class="line-qty" type="number" min="0" step="0.01" value="${num(line.qty)}"></label>
     <label>Rate<input class="line-rate" type="number" min="0" step="0.01" value="${lineInputRate(line)}"></label>
     <label>GST %<input class="line-gst" type="number" min="0" step="0.01" value="${num(line.gstRate)}"></label>
@@ -2847,6 +2862,7 @@ function addLineRow(line = blankLine(entryMode)) {
     const item = state.items.find(candidate => candidate.id === event.target.value);
     row.dataset.grossRate = "";
     row.dataset.taxableRate = "";
+    row.querySelector(".line-hsn").value = String(item?.hsn || "");
     row.querySelector(".line-rate").value = entryMode === "sale" ? num(item?.saleRate) : num(item?.purchaseRate);
     row.querySelector(".line-gst").value = num(item?.gstRate);
     updateEntryTotals();
@@ -2872,6 +2888,7 @@ function collectLines(options = {}) {
   const { normalizeRates = true } = options;
   const lines = $$(".line-row").map(row => ({
     itemId: row.querySelector(".line-item").value,
+    hsn: normalizeLineHsn(row.querySelector(".line-hsn")?.value || ""),
     qty: num(row.querySelector(".line-qty").value),
     rate: num(row.querySelector(".line-rate").value),
     grossRate: purchaseGrossRateFromRow(row),
@@ -2879,6 +2896,24 @@ function collectLines(options = {}) {
     imeiNumbers: normalizeImeiNumbers(row.querySelector(".line-imei")?.value || "")
   })).filter(line => line.itemId && line.qty > 0);
   return normalizeRates ? lines.map(normalizeLineRateForEntry) : lines;
+}
+
+function normalizeLineHsn(value) {
+  return String(value || "").toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 8);
+}
+
+function lineHsn(line = {}, item = null) {
+  const sourceItem = item || state.items.find(row => row.id === line.itemId) || {};
+  return normalizeLineHsn(line.hsn || sourceItem.hsn || "");
+}
+
+function applyLineHsnToItems(lines = []) {
+  lines.forEach(line => {
+    const hsn = normalizeLineHsn(line.hsn);
+    if (!hsn) return;
+    const item = state.items.find(row => row.id === line.itemId);
+    if (item && normalizeLineHsn(item.hsn) !== hsn) item.hsn = hsn;
+  });
 }
 
 function purchaseGrossRateFromRow(row) {
@@ -2942,7 +2977,7 @@ function purchaseMissingReviewMessages(source, profile, supplier, lines = []) {
     const label = `Item ${index + 1}`;
     const item = state.items.find(row => row.id === line.itemId) || {};
     if (!item.name || /^imported purchase|imported item$/i.test(item.name)) messages.push(`Missing detail: ${label} name should be reviewed.`);
-    if (!String(item.hsn || "").trim()) messages.push(`Missing detail: ${label} HSN/SAC is required.`);
+    if (!lineHsn(line, item)) messages.push(`Missing detail: ${label} HSN/SAC is required.`);
     if (num(line.qty) <= 0) messages.push(`Missing detail: ${label} quantity is required.`);
     if (num(line.rate) <= 0) messages.push(`Missing detail: ${label} rate is required.`);
   });
@@ -3055,6 +3090,7 @@ function saveEntry(event) {
     toast("Add at least one item");
     return;
   }
+  if (entryMode === "purchase") applyLineHsnToItems(lines);
   const profile = profileById(form.elements.profileId.value);
   const party = partyById(form.elements.partyId.value);
   if (entryMode === "sale" && !isValidGstin(party?.gstin)) {
@@ -4772,7 +4808,7 @@ function mainHsnCodeForEntry(entry = {}) {
   const firstHsn = (entry.lines || [])
     .map(line => {
       const item = state.items.find(row => row.id === line.itemId) || {};
-      return String(item.hsn || "").trim();
+      return lineHsn(line, item);
     })
     .find(Boolean);
   return Number(firstHsn || DEFAULT_SALE_HSN);
@@ -4850,7 +4886,7 @@ function ewayItem(line, serialNo, taxMode) {
     itemNo: serialNo,
     productName: name,
     productDesc: imeis.length ? [...new Set(imeis)].join(", ") : name,
-    hsnCode: item.hsn || DEFAULT_SALE_HSN,
+    hsnCode: lineHsn(line, item),
     quantity: num(line.qty),
     qtyUnit: "PCS",
     taxableAmount: round2(taxable),
