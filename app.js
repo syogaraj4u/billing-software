@@ -11,6 +11,7 @@ const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
 const EWAY_DISTANCE_FUNCTION = "estimate-eway-distance";
+const GSTIN_PINCODE_FUNCTION = "resolve-purchase-pincodes";
 const ALL_MONTHS_KEY = "all";
 
 const EWAY_ADDRESS_PRESETS = [
@@ -4956,6 +4957,11 @@ function extractPincode(value) {
   return match ? Number(match[0]) : 0;
 }
 
+function normalizePincode(value) {
+  const match = String(value || "").match(/\b\d{6}\b/);
+  return match ? match[0] : "";
+}
+
 function ewayDate(value) {
   const [year, month, day] = String(value || today()).split("-");
   return `${day}/${month}/${year}`;
@@ -6138,6 +6144,7 @@ async function buildPurchaseDraftFromFile(file) {
   if (!parsed) {
     parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
   }
+  parsed = await enrichPurchasePincodes(parsed);
   parsed.attachments = [attachment];
   return buildPurchaseDraft(parsed);
 }
@@ -6196,6 +6203,145 @@ async function extractPurchaseInvoiceWithCloud(file) {
     console.warn("Cloud purchase extractor unavailable", error);
     return null;
   }
+}
+
+async function enrichPurchasePincodes(parsed = {}) {
+  const enriched = enrichPurchasePincodesFromMaster({ ...parsed });
+  if (!purchaseNeedsPincodeHelp(enriched)) return enriched;
+  const cloudResult = await resolvePurchasePincodesWithCloud(enriched);
+  return applyPurchasePincodeResolution(enriched, cloudResult);
+}
+
+function enrichPurchasePincodesFromMaster(parsed = {}) {
+  const supplierGstin = normalizeGstin(parsed.supplierGstin);
+  const buyerGstin = normalizeGstin(parsed.buyerGstin || profileById(parsed.profileId)?.gstin);
+  const supplierMaster = partyAddressContextByGstin(supplierGstin);
+  const buyerMaster = profileAddressContextByGstin(buyerGstin);
+  const supplierPin = extractPincode(parsed.supplierAddress) || supplierMaster.pincode;
+  const buyerPin = extractPincode(parsed.buyerAddress) || buyerMaster.pincode;
+  if (supplierPin && !extractPincode(parsed.supplierAddress)) {
+    parsed.supplierAddress = addressWithPincode(parsed.supplierAddress || supplierMaster.address, supplierPin);
+  }
+  if (!String(parsed.supplierAddress || "").trim() && supplierMaster.address) parsed.supplierAddress = supplierMaster.address;
+  if (!String(parsed.supplierPlace || "").trim() && supplierMaster.place) parsed.supplierPlace = supplierMaster.place;
+  if (buyerPin && !extractPincode(parsed.buyerAddress)) {
+    parsed.buyerAddress = addressWithPincode(parsed.buyerAddress || buyerMaster.address, buyerPin);
+  }
+  if (!String(parsed.buyerAddress || "").trim() && buyerMaster.address) parsed.buyerAddress = buyerMaster.address;
+  if (!String(parsed.buyerPlace || "").trim() && buyerMaster.place) parsed.buyerPlace = buyerMaster.place;
+  return parsed;
+}
+
+function purchaseNeedsPincodeHelp(parsed = {}) {
+  const supplierHasGstin = isValidGstin(parsed.supplierGstin);
+  const buyerProfile = profileById(parsed.profileId) || profileByGstin(parsed.buyerGstin) || {};
+  const buyerHasGstin = isValidGstin(parsed.buyerGstin || buyerProfile.gstin);
+  const supplierNeedsPin = supplierHasGstin && !extractPincode(parsed.supplierAddress);
+  const buyerNeedsPin = buyerHasGstin && !extractPincode(parsed.buyerAddress || buyerProfile.address);
+  return supplierNeedsPin || buyerNeedsPin;
+}
+
+async function resolvePurchasePincodesWithCloud(parsed = {}) {
+  if (!cloudConfigured() || !cloudClient || !cloudSession) return null;
+  try {
+    const buyerProfile = profileById(parsed.profileId) || profileByGstin(parsed.buyerGstin) || activeProfile();
+    const { data, error } = await cloudClient.functions.invoke(GSTIN_PINCODE_FUNCTION, {
+      body: {
+        supplier: purchasePincodeLookupPayload({
+          name: parsed.supplierName,
+          gstin: parsed.supplierGstin,
+          address: parsed.supplierAddress,
+          place: parsed.supplierPlace
+        }),
+        buyer: purchasePincodeLookupPayload({
+          name: parsed.buyerName || buyerProfile.businessName || buyerProfile.label,
+          gstin: parsed.buyerGstin || buyerProfile.gstin,
+          address: parsed.buyerAddress || buyerProfile.address,
+          place: parsed.buyerPlace || buyerProfile.state
+        })
+      }
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    return data || null;
+  } catch (error) {
+    console.warn("GSTIN pincode resolver unavailable", error);
+    return null;
+  }
+}
+
+function purchasePincodeLookupPayload(source = {}) {
+  return {
+    name: String(source.name || "").trim(),
+    gstin: normalizeGstin(source.gstin),
+    address: String(source.address || "").trim(),
+    place: String(source.place || stateNameFromGstin(source.gstin) || "").trim()
+  };
+}
+
+function applyPurchasePincodeResolution(parsed = {}, result = null) {
+  if (!result) return parsed;
+  const reviewMessages = [...(parsed.reviewMessages || [])];
+  applyPartyPincodeResolution(parsed, "supplier", result.supplier || {}, reviewMessages);
+  applyPartyPincodeResolution(parsed, "buyer", result.buyer || {}, reviewMessages);
+  parsed.reviewMessages = uniqueMessages([...reviewMessages, ...(result.reviewMessages || [])]);
+  return enrichPurchasePincodesFromMaster(parsed);
+}
+
+function applyPartyPincodeResolution(parsed, type, resolution = {}, reviewMessages = []) {
+  const addressKey = `${type}Address`;
+  const placeKey = `${type}Place`;
+  const label = type === "supplier" ? "Supplier" : "Buyer";
+  const pin = normalizePincode(resolution.pincode || resolution.pin || "");
+  const existingPin = extractPincode(parsed[addressKey]);
+  const confidence = resolution.confidence || "unknown";
+  if (!existingPin && pin && confidence === "high") {
+    parsed[addressKey] = addressWithPincode(resolution.address || parsed[addressKey], pin);
+    if (!String(parsed[placeKey] || "").trim() && resolution.place) parsed[placeKey] = resolution.place;
+    return;
+  }
+  if (!existingPin && pin) {
+    reviewMessages.push(`${label} PIN ${pin} was suggested with ${confidence} confidence. Confirm and enter it before E-Way export.`);
+  }
+  if (!pin && !existingPin && resolution.reason) {
+    reviewMessages.push(`${label} PIN could not be filled automatically: ${resolution.reason}`);
+  }
+}
+
+function partyAddressContextByGstin(gstin) {
+  const normalized = normalizeGstin(gstin);
+  if (!normalized) return {};
+  const party = state.parties.find(row => normalizeGstin(row.gstin) === normalized) || {};
+  return addressContextFromRecord(party);
+}
+
+function profileAddressContextByGstin(gstin) {
+  const profile = profileByGstin(gstin) || {};
+  return addressContextFromRecord({
+    name: profile.businessName || profile.label,
+    gstin: profile.gstin,
+    address: profile.address,
+    place: profile.state
+  });
+}
+
+function addressContextFromRecord(record = {}) {
+  const address = String(record.address || "").trim();
+  return {
+    name: record.name || record.businessName || record.label || "",
+    gstin: normalizeGstin(record.gstin),
+    address,
+    place: record.place || record.state || stateNameFromGstin(record.gstin) || "",
+    pincode: extractPincode(address)
+  };
+}
+
+function addressWithPincode(address = "", pincode = "") {
+  const pin = normalizePincode(pincode);
+  const cleaned = String(address || "").trim().replace(/\s*,\s*/g, ", ");
+  if (!pin) return cleaned;
+  if (extractPincode(cleaned)) return cleaned;
+  return [cleaned, pin].filter(Boolean).join(", ");
 }
 
 async function fileToBase64(file) {
