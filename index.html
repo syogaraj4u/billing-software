@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260701-purchase-preserve">
+  <link rel="stylesheet" href="styles.css?v=20260701-logoff-button">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -90,6 +90,7 @@
             <i data-lucide="building-2"></i>
             <span><small>Company</small><strong id="activeCompanyName">Select company</strong></span>
           </button>
+          <button class="secondary-btn logoff-btn" id="topbarLogoffBtn" type="button"><i data-lucide="log-out"></i><span>Log off</span></button>
           <button class="icon-btn" id="backupBtn" title="Export backup"><i data-lucide="download"></i></button>
           <label class="icon-btn file-btn" title="Import backup">
             <i data-lucide="upload"></i>
@@ -491,6 +492,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260701-reliance-purchase"></script>
+  <script src="app.js?v=20260701-logoff-button"></script>
 </body>
 </html>

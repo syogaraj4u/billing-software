@@ -422,6 +422,10 @@ button > *,
   text-overflow: ellipsis;
 }
 
+.logoff-btn {
+  min-width: 98px;
+}
+
 .primary-btn {
   background: var(--primary);
   color: #fff;
@@ -2463,6 +2467,9 @@ textarea { resize: vertical; }
   }
   .company-switcher strong {
     max-width: none;
+  }
+  .logoff-btn {
+    width: 100%;
   }
   #chatBillBtn {
     width: 100%;
