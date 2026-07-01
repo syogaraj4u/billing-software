@@ -2053,8 +2053,9 @@ function openEntry(kind, id = null, draft = null) {
     sellerGstin: source?.sellerGstin || "",
     buyerGstin: source?.buyerGstin || "",
     roundOff: num(source?.roundOff),
-    purchaseReviewAccepted: false,
-    purchaseReviewSignature: ""
+    purchaseReviewAccepted: Boolean(id && kind === "purchase"),
+    purchaseReviewSignature: "",
+    preserveInitialReviewAcceptance: Boolean(id && kind === "purchase")
   };
   const form = $("#entryForm");
   form.reset();
@@ -2609,11 +2610,16 @@ function syncPurchaseReviewAcceptance(messages = []) {
   if (!signature) {
     entryDraftMeta.purchaseReviewSignature = "";
     entryDraftMeta.purchaseReviewAccepted = false;
+    entryDraftMeta.preserveInitialReviewAcceptance = false;
     return;
   }
   if (entryDraftMeta.purchaseReviewSignature !== signature) {
+    const keepAccepted = entryDraftMeta.preserveInitialReviewAcceptance
+      && entryDraftMeta.purchaseReviewAccepted
+      && !entryDraftMeta.purchaseReviewSignature;
     entryDraftMeta.purchaseReviewSignature = signature;
-    entryDraftMeta.purchaseReviewAccepted = false;
+    entryDraftMeta.purchaseReviewAccepted = keepAccepted;
+    entryDraftMeta.preserveInitialReviewAcceptance = false;
   }
 }
 
