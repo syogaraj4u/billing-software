@@ -11,6 +11,96 @@ const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
 const EWAY_DISTANCE_FUNCTION = "estimate-eway-distance";
 
+const EWAY_ADDRESS_PRESETS = [
+  {
+    id: "tirupati-kranthi-nagar",
+    label: "Tirupati - Kranthi Nagar",
+    toAddr1: "21-10-518/A Kranthi nagar",
+    toAddr2: "Jeevakona",
+    toPlace: "Tirupati",
+    toPincode: 517507,
+    actualToStateCode: 37
+  },
+  {
+    id: "tirupati-snr-heights",
+    label: "Tirupati - SNR Heights",
+    toAddr1: "SNR Heights",
+    toAddr2: "Thiminadirupalem Rd",
+    toPlace: "Tirupati",
+    toPincode: 517507,
+    actualToStateCode: 37
+  },
+  {
+    id: "tirupati-upadyay-nagar",
+    label: "Tirupati - Upadyay Nagar",
+    toAddr1: "22-8-97/2",
+    toAddr2: "Upadyay Nagar 11th Cross",
+    toPlace: "Tirupati",
+    toPincode: 517507,
+    actualToStateCode: 37
+  },
+  {
+    id: "chennai-royappuram",
+    label: "Chennai - Royappuram",
+    toAddr1: "no 5/3 grace garden 4th lane",
+    toAddr2: "Royappuram",
+    toPlace: "Chennai",
+    toPincode: 600021,
+    actualToStateCode: 33
+  }
+];
+
+const EWAY_SPECIAL_DISTANCE_KM = {
+  "517501-517507": 2,
+  "517507-517501": 2,
+  "625516-600021": 545,
+  "600021-625516": 545,
+  "532222-600021": 981,
+  "600021-532222": 981
+};
+
+const EWAY_PINCODE_COORDS = {
+  517001: [13.21925, 79.09725],
+  517501: [13.6288, 79.4192],
+  517507: [13.6288, 79.4192],
+  517590: [13.3217778, 79.5858333],
+  600021: [13.1139, 80.2558],
+  625516: [9.7358, 77.2807],
+  532222: [18.7667, 84.4167]
+};
+
+const EWAY_STATE_NAME_CODES = {
+  "andhra pradesh": 37,
+  "tamil nadu": 33,
+  tamilnadu: 33,
+  karnataka: 29,
+  telangana: 36,
+  maharashtra: 27,
+  chhattisgarh: 22,
+  delhi: 7,
+  haryana: 6,
+  gujarat: 24
+};
+
+const EWAY_PIN_PREFIX_STATE_CODES = {
+  110: 7,
+  122: 6,
+  380: 24,
+  400: 27,
+  411: 27,
+  425: 27,
+  492: 22,
+  500: 36,
+  504: 36,
+  517: 37,
+  530: 37,
+  532: 37,
+  560: 29,
+  600: 33,
+  625: 33,
+  628: 33
+};
+
 const OFFICIAL_GST_PROFILES = [
   {
     id: "gst-1",
@@ -285,9 +375,7 @@ const defaultState = {
     },
     ewayRouteDistances: {}
   },
-  items: [
-    { id: uid(), name: "Sample Product", hsn: "85171300", gstRate: 18, saleRate: 1000, purchaseRate: 850, openingStock: 10, minStock: 2 }
-  ],
+  items: [],
   parties: [
     { id: uid(), name: "Cash Customer", type: "Customer", gstin: "", phone: "", place: "Local", address: "" },
     { id: uid(), name: "Default Supplier", type: "Supplier", gstin: "", phone: "", place: "Local", address: "" }
@@ -407,7 +495,7 @@ function normalizeState(value) {
   if (!profiles.some(profile => profile.id === value.settings.activeProfileId)) {
     value.settings.activeProfileId = profiles[0].id;
   }
-  value.items = Array.isArray(value.items) ? value.items : [];
+  value.items = (Array.isArray(value.items) ? value.items : []).filter(item => !isDefaultSampleProduct(item));
   value.parties = Array.isArray(value.parties) ? value.parties.map(normalizePartyForState) : [];
   mergeTallyBuyerMaster(value);
   value.sales = Array.isArray(value.sales) ? value.sales : [];
@@ -418,6 +506,13 @@ function normalizeState(value) {
   value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties));
   value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties));
   return value;
+}
+
+function isDefaultSampleProduct(item = {}) {
+  return String(item.name || "").trim().toLowerCase() === "sample product"
+    && String(item.hsn || "").trim() === DEFAULT_SALE_HSN
+    && num(item.saleRate) === 1000
+    && num(item.purchaseRate) === 850;
 }
 
 function normalizePartyForState(party) {
@@ -463,8 +558,13 @@ function normalizePurchaseEwayDetails(details = {}) {
     vehicleNo: normalizeVehicleNumber(details.vehicleNo || ""),
     vehicleType: details.vehicleType === "O" ? "O" : "R",
     distanceKm: Math.max(0, num(details.distanceKm)),
+    destinationPreset: String(details.destinationPreset || "").trim(),
     dispatchFromAddress: String(details.dispatchFromAddress || "").trim(),
     shipToAddress: String(details.shipToAddress || "").trim(),
+    transporterName: String(details.transporterName || "").trim(),
+    transporterId: normalizeGstin(details.transporterId || ""),
+    transDocNo: String(details.transDocNo || "").trim(),
+    transDocDate: String(details.transDocDate || "").trim(),
     fromPincode: String(details.fromPincode || "").trim(),
     toPincode: String(details.toPincode || "").trim(),
     routeKey: String(details.routeKey || "").trim()
@@ -1822,6 +1922,7 @@ function partyOptions(kind, selected = "") {
 }
 
 function itemOptions(selected = "") {
+  if (!state.items.length) return `<option value="">Add item first</option>`;
   return state.items.map(item => `<option value="${item.id}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
 }
 
@@ -1934,11 +2035,17 @@ function setupPurchaseEwayPanel(kind, source = null) {
   form.elements.ewayTransType.value = details.transType || "1";
   form.elements.ewayTransMode.value = details.transMode || "1";
   form.elements.ewayVehicleNoEntry.value = details.vehicleNo || "";
+  form.elements.ewayDestinationPreset.innerHTML = ewayDestinationPresetOptions(details.destinationPreset);
+  form.elements.ewayDestinationPreset.value = details.destinationPreset || (details.shipToAddress ? "custom" : "buyer");
   form.elements.ewayDispatchFromAddress.value = details.dispatchFromAddress || "";
   form.elements.ewayShipToAddress.value = details.shipToAddress || "";
   form.elements.ewayDistanceKmEntry.value = details.distanceKm || "";
+  form.elements.ewayTransporterName.value = details.transporterName || "";
+  form.elements.ewayTransporterId.value = details.transporterId || "";
+  form.elements.ewayTransDocNo.value = details.transDocNo || "";
+  form.elements.ewayTransDocDate.value = details.transDocDate || "";
   form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = "";
-  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewayDispatchFromAddress", "ewayShipToAddress"].forEach(name => {
+  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewayDestinationPreset", "ewayDispatchFromAddress", "ewayShipToAddress", "ewayTransporterName", "ewayTransporterId", "ewayTransDocNo", "ewayTransDocDate"].forEach(name => {
     form.elements[name].oninput = updatePurchaseEwayPanel;
     form.elements[name].onchange = updatePurchaseEwayPanel;
   });
@@ -1960,19 +2067,22 @@ function updatePurchaseEwayPanel() {
   const transType = form.elements.ewayTransType.value || "1";
   const route = purchaseEwayRouteFromValues(profile, supplier, {
     transType,
+    destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
   });
+  $("#ewayDestinationPresetLabel").hidden = !ewayUsesShipTo(transType);
   $("#ewayDispatchFromLabel").hidden = !ewayUsesDispatchFrom(transType);
-  $("#ewayShipToLabel").hidden = !ewayUsesShipTo(transType);
+  $("#ewayShipToLabel").hidden = !ewayUsesShipTo(transType) || form.elements.ewayDestinationPreset.value !== "custom";
   if (ewayUsesDispatchFrom(transType) && !form.elements.ewayDispatchFromAddress.value.trim()) {
     form.elements.ewayDispatchFromAddress.value = route.defaultFromAddress;
   }
-  if (ewayUsesShipTo(transType) && !form.elements.ewayShipToAddress.value.trim()) {
+  if (ewayUsesShipTo(transType) && form.elements.ewayDestinationPreset.value === "custom" && !form.elements.ewayShipToAddress.value.trim()) {
     form.elements.ewayShipToAddress.value = route.defaultToAddress;
   }
   const refreshedRoute = purchaseEwayRouteFromValues(profile, supplier, {
     transType,
+    destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
   });
@@ -2002,6 +2112,13 @@ function applyEwayDistanceSuggestion(route, form) {
     distanceInput.dataset.autoRouteKey = routeKey;
     return;
   }
+  const calculatedDistance = calculateEwayDistance(route.fromPincode, route.toPincode);
+  if (calculatedDistance) {
+    clearTimeout(ewayDistanceEstimateTimer);
+    distanceInput.value = calculatedDistance;
+    distanceInput.dataset.autoRouteKey = routeKey;
+    return;
+  }
   if (route.savedDistance) {
     clearTimeout(ewayDistanceEstimateTimer);
     distanceInput.value = route.savedDistance;
@@ -2015,6 +2132,46 @@ function samePincodeDistanceKm(route) {
   return route.fromPincode && route.toPincode && route.fromPincode === route.toPincode ? 2 : 0;
 }
 
+function calculateEwayDistance(fromPincode, toPincode) {
+  const fromPin = Number(String(fromPincode || "").replace(/\D/g, ""));
+  const toPin = Number(String(toPincode || "").replace(/\D/g, ""));
+  if (!fromPin || !toPin) return 0;
+  if (fromPin === toPin) return 2;
+  const special = EWAY_SPECIAL_DISTANCE_KM[`${fromPin}-${toPin}`];
+  if (special) return special;
+  const coordA = EWAY_PINCODE_COORDS[fromPin];
+  const coordB = EWAY_PINCODE_COORDS[toPin];
+  if (coordA && coordB) return Math.round(haversineKm(coordA, coordB) * 1.18);
+  return estimateDistanceFromPinCodes(fromPin, toPin);
+}
+
+function haversineKm(a, b) {
+  const [lat1Raw, lon1Raw] = a;
+  const [lat2Raw, lon2Raw] = b;
+  const lat1 = radians(lat1Raw);
+  const lat2 = radians(lat2Raw);
+  const dlat = radians(lat2Raw - lat1Raw);
+  const dlon = radians(lon2Raw - lon1Raw);
+  const hav = Math.sin(dlat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dlon / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.sqrt(hav));
+}
+
+function radians(value) {
+  return value * Math.PI / 180;
+}
+
+function estimateDistanceFromPinCodes(fromPin, toPin) {
+  const fromPrefix = Math.floor(fromPin / 1000);
+  const toPrefix = Math.floor(toPin / 1000);
+  if (fromPrefix === toPrefix) {
+    const digitGap = Math.abs(fromPin - toPin);
+    return Math.max(5, Math.round(digitGap / 18) + 4);
+  }
+  const prefixGap = Math.abs(fromPrefix - toPrefix);
+  const digitGap = Math.abs(fromPin - toPin);
+  return Math.max(2, prefixGap * 45 + Math.round(digitGap / 12000));
+}
+
 function ewayUsesShipTo(transType) {
   return transType === "2" || transType === "4";
 }
@@ -2023,8 +2180,23 @@ function ewayUsesDispatchFrom(transType) {
   return transType === "3" || transType === "4";
 }
 
+function ewayDestinationPresetOptions(selected = "buyer") {
+  const options = [
+    `<option value="buyer" ${selected === "buyer" ? "selected" : ""}>Buyer billing address</option>`,
+    ...EWAY_ADDRESS_PRESETS.map(preset => `<option value="${escapeHtml(preset.id)}" ${selected === preset.id ? "selected" : ""}>${escapeHtml(preset.label)}</option>`),
+    `<option value="custom" ${selected === "custom" ? "selected" : ""}>Custom Ship To address</option>`
+  ];
+  return options.join("");
+}
+
+function ewayPresetById(id) {
+  return EWAY_ADDRESS_PRESETS.find(preset => preset.id === id) || null;
+}
+
 function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) {
   const transType = String(details.transType || "1");
+  const destinationPreset = String(details.destinationPreset || "buyer");
+  const selectedPreset = ewayUsesShipTo(transType) ? ewayPresetById(destinationPreset) : null;
   const defaultFromAddress = supplier.address || supplier.place || "";
   const defaultToAddress = profile.address || profile.state || "";
   const billToAddress = defaultToAddress;
@@ -2032,20 +2204,26 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
     ? (String(details.dispatchFromAddress || "").trim() || defaultFromAddress)
     : defaultFromAddress;
   const toAddress = ewayUsesShipTo(transType)
-    ? (String(details.shipToAddress || "").trim() || defaultToAddress)
+    ? selectedPreset
+      ? ewayPresetAddressText(selectedPreset)
+      : destinationPreset === "custom"
+        ? (String(details.shipToAddress || "").trim() || defaultToAddress)
+        : defaultToAddress
     : defaultToAddress;
   const fromPincode = extractPincode(fromAddress);
   const billToPincode = extractPincode(billToAddress);
-  const toPincode = extractPincode(toAddress);
+  const toPincode = selectedPreset ? String(selectedPreset.toPincode) : extractPincode(toAddress);
   const routeKey = ewayRouteKey(fromPincode, toPincode);
   return {
     defaultFromAddress,
     defaultToAddress,
+    destinationPreset: selectedPreset?.id || destinationPreset,
+    destinationPresetData: selectedPreset,
     fromName: supplier.name || "Supplier",
     billToName: profile.businessName || profile.label || "Buyer GST",
     billToAddress,
     billToPincode,
-    toName: ewayUsesShipTo(transType) ? "Delivery Address" : (profile.businessName || profile.label || "Buyer GST"),
+    toName: selectedPreset?.label || (ewayUsesShipTo(transType) ? "Delivery Address" : (profile.businessName || profile.label || "Buyer GST")),
     fromAddress,
     toAddress,
     fromPincode,
@@ -2053,6 +2231,10 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
     routeKey,
     savedDistance: savedEwayRouteDistance(routeKey)
   };
+}
+
+function ewayPresetAddressText(preset = {}) {
+  return [preset.toAddr1, preset.toAddr2, preset.toPlace, preset.toPincode].filter(Boolean).join(", ");
 }
 
 function ewayRouteKey(fromPincode, toPincode) {
@@ -2120,6 +2302,7 @@ async function estimateEwayDistanceWithCloud(route, key) {
     const supplier = partyById(form.elements.partyId.value) || {};
     const currentRoute = purchaseEwayRouteFromValues(profile, supplier, {
       transType: form.elements.ewayTransType.value || "1",
+      destinationPreset: form.elements.ewayDestinationPreset.value,
       dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
       shipToAddress: form.elements.ewayShipToAddress.value
     });
@@ -2138,6 +2321,7 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
   const transMode = form.elements.ewayTransMode.value || "1";
   const route = purchaseEwayRouteFromValues(profile, supplier, {
     transType,
+    destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
   });
@@ -2146,9 +2330,14 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
     transMode,
     vehicleNo: form.elements.ewayVehicleNoEntry.value,
     vehicleType: "R",
-    distanceKm: num(form.elements.ewayDistanceKmEntry.value) || route.savedDistance,
+    distanceKm: num(form.elements.ewayDistanceKmEntry.value) || route.savedDistance || calculateEwayDistance(route.fromPincode, route.toPincode),
+    destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value,
+    transporterName: form.elements.ewayTransporterName.value,
+    transporterId: form.elements.ewayTransporterId.value,
+    transDocNo: form.elements.ewayTransDocNo.value,
+    transDocDate: form.elements.ewayTransDocDate.value,
     fromPincode: route.fromPincode,
     toPincode: route.toPincode,
     routeKey: route.routeKey
@@ -4371,8 +4560,62 @@ function exportSelectedEwayJson() {
     version: EWAY_DOCUMENT_VERSION,
     billLists
   };
+  const payloadMessages = validateEwayPayload(payload);
+  if (payloadMessages.length) warningCount += 1;
   downloadJson(payload, `purchase-eway-${today()}.json`);
   toast(warningCount ? "E-way JSON downloaded. Check E-Way badges for warnings." : "E-way JSON downloaded");
+}
+
+function ewayAddressParts(address = "", preset = null, fallbackPlace = "", fallbackStateCode = 0) {
+  if (preset) {
+    return {
+      addr1: preset.toAddr1 || "",
+      addr2: preset.toAddr2 || "",
+      place: preset.toPlace || fallbackPlace || "",
+      pincode: Number(preset.toPincode) || 0,
+      actualStateCode: Number(preset.actualToStateCode) || fallbackStateCode || 0
+    };
+  }
+  const value = String(address || "").trim();
+  const segments = value.split(",").map(part => part.trim()).filter(Boolean);
+  const pincode = Number(extractPincode(value)) || 0;
+  const place = fallbackPlace || ewayPlaceFromAddressSegments(segments) || "";
+  return {
+    addr1: segments[0] || value || fallbackPlace || "",
+    addr2: segments.slice(1, 3).join(", "),
+    place,
+    pincode,
+    actualStateCode: stateCodeFromAddress(value, pincode, fallbackStateCode)
+  };
+}
+
+function ewayPlaceFromAddressSegments(segments = []) {
+  return [...segments].reverse().find(part => !/^\d{6}$/.test(part) && !stateCodeFromAddress(part, 0, 0)) || "";
+}
+
+function stateCodeFromAddress(address = "", pincode = 0, fallback = 0) {
+  const lower = String(address || "").toLowerCase();
+  for (const [name, code] of Object.entries(EWAY_STATE_NAME_CODES)) {
+    if (lower.includes(name)) return code;
+  }
+  const prefix = Number(String(pincode || "").slice(0, 3));
+  return EWAY_PIN_PREFIX_STATE_CODES[prefix] || fallback || 0;
+}
+
+function ewayEntryOtherValue(entry = {}) {
+  const expected = round2(num(entry.taxable) + num(entry.cgst) + num(entry.sgst) + num(entry.igst));
+  const difference = round2(num(entry.total) - expected);
+  return Math.abs(difference) >= 0.01 ? difference : 0;
+}
+
+function mainHsnCodeForEntry(entry = {}) {
+  const firstHsn = (entry.lines || [])
+    .map(line => {
+      const item = state.items.find(row => row.id === line.itemId) || {};
+      return String(item.hsn || "").trim();
+    })
+    .find(Boolean);
+  return Number(firstHsn || DEFAULT_SALE_HSN);
 }
 
 function buildEwayBill(entry) {
@@ -4386,46 +4629,52 @@ function buildEwayBill(entry) {
   const route = purchaseEwayRouteFromValues(profile, supplier, ewayDetails);
   const fromPincode = route.fromPincode || extractPincode(supplier.address || supplier.place);
   const toPincode = route.toPincode || extractPincode(profile.address);
-  const distanceKm = ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey);
+  const fromParts = ewayAddressParts(route.fromAddress || supplier.address || supplier.place, null, supplier.place, fromStateCode);
+  const toParts = ewayAddressParts(route.toAddress || profile.address, route.destinationPresetData, profile.state, toStateCode);
+  const distanceKm = ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey) || calculateEwayDistance(fromPincode, toPincode);
+  const otherValue = ewayEntryOtherValue(entry);
   const bill = {
     userGstin: toGstin,
     supplyType: "I",
     subSupplyType: 1,
+    subSupplyDesc: "",
     docType: "INV",
     docNo: entry.number,
     docDate: ewayDate(entry.date),
     transType: ewayDetails.transType || "1",
     fromGstin: fromGstin || "URP",
     fromTrdName: supplier.name || partyName(entry.partyId),
-    fromAddr1: route.fromAddress || supplier.address || supplier.place || "",
-    fromAddr2: "",
-    fromPlace: supplier.place || "",
-    fromPincode,
-    actFromStateCode: fromStateCode || 0,
+    fromAddr1: fromParts.addr1,
+    fromAddr2: fromParts.addr2,
+    fromPlace: fromParts.place,
+    fromPincode: fromParts.pincode || Number(fromPincode) || 0,
     fromStateCode: fromStateCode || 0,
+    actualFromStateCode: fromParts.actualStateCode || fromStateCode || 0,
     toGstin,
     toTrdName: profile.businessName || profile.label,
-    toAddr1: route.toAddress || profile.address || "",
-    toAddr2: "",
-    toPlace: profile.state || "",
-    toPincode,
-    actToStateCode: toStateCode || 0,
+    toAddr1: toParts.addr1,
+    toAddr2: toParts.addr2,
+    toPlace: toParts.place,
+    toPincode: toParts.pincode || Number(toPincode) || 0,
     toStateCode: toStateCode || 0,
+    actualToStateCode: toParts.actualStateCode || toStateCode || 0,
     totalValue: round2(entry.taxable),
     cgstValue: round2(entry.cgst),
     sgstValue: round2(entry.sgst),
     igstValue: round2(entry.igst),
     cessValue: 0,
-    cessNonAdvolValue: 0,
+    TotNonAdvolVal: 0,
+    OthValue: otherValue,
     totInvValue: round2(entry.total),
     transMode: ewayDetails.transMode || "1",
     transDistance: String(num(distanceKm) || 0),
-    transporterName: "",
-    transporterId: "",
-    transDocNo: "",
-    transDocDate: "",
+    transporterName: ewayDetails.transporterName || "",
+    transporterId: ewayDetails.transporterId || "",
+    transDocNo: ewayDetails.transDocNo || "",
+    transDocDate: ewayDetails.transDocDate ? ewayDate(ewayDetails.transDocDate) : "",
     vehicleNo: ewayDetails.vehicleNo || "",
     vehicleType: ewayDetails.vehicleType || "R",
+    mainHsnCode: mainHsnCodeForEntry(entry),
     itemList: entry.lines.map((line, index) => ewayItem(line, index + 1, entry.taxMode))
   };
   return { bill, reviewMessages: validateEwayBill(bill) };
@@ -4435,25 +4684,34 @@ function ewayItem(line, serialNo, taxMode) {
   const item = state.items.find(row => row.id === line.itemId) || {};
   const taxable = lineTaxableAmount(line);
   const gstRate = num(line.gstRate);
+  const imeis = imeiNumbersFromText(line.imeiNumbers);
+  const name = item.name || itemName(line.itemId);
   return {
     itemNo: serialNo,
-    productName: item.name || itemName(line.itemId),
-    productDesc: item.name || itemName(line.itemId),
-    hsnCode: item.hsn || "",
+    productName: name,
+    productDesc: imeis.length ? [...new Set(imeis)].join(", ") : name,
+    hsnCode: item.hsn || DEFAULT_SALE_HSN,
     quantity: num(line.qty),
-    qtyUnit: "NOS",
+    qtyUnit: "PCS",
     taxableAmount: round2(taxable),
     sgstRate: taxMode === "IGST" ? 0 : gstRate / 2,
     cgstRate: taxMode === "IGST" ? 0 : gstRate / 2,
     igstRate: taxMode === "IGST" ? gstRate : 0,
-    cessRate: 0
+    cessRate: 0,
+    cessNonAdvol: 0
   };
 }
 
 function validateEwayBill(bill) {
   const messages = [];
+  if (!Array.isArray(bill.itemList)) messages.push("E-way bill itemList missing.");
+  if (bill.userGstin && bill.toGstin && bill.userGstin !== bill.toGstin) messages.push("userGstin must match buyer toGstin.");
+  if (bill.supplyType !== "I") messages.push("Supply type must be I for inward purchase.");
+  if (!bill.transType || Object.prototype.hasOwnProperty.call(bill, "transactionType")) messages.push("transType missing or wrong field name used.");
   if (!bill.userGstin) messages.push("Buyer GSTIN missing.");
   if (!bill.fromGstin || bill.fromGstin === "URP") messages.push("Supplier GSTIN missing.");
+  if (!bill.docNo) messages.push("Document number missing.");
+  if (!bill.docDate) messages.push("Document date missing.");
   if (!bill.fromPincode) messages.push("Supplier pincode missing.");
   if (!bill.toPincode) messages.push("Buyer pincode missing.");
   if (!bill.vehicleNo) messages.push("Vehicle number missing in Purchase Review E-Way Details.");
@@ -4463,7 +4721,18 @@ function validateEwayBill(bill) {
     if (!item.hsnCode) messages.push(`${item.productName}: HSN missing.`);
     if (!item.quantity) messages.push(`${item.productName}: quantity missing.`);
   });
+  const itemTaxable = round2(bill.itemList.reduce((sum, item) => sum + num(item.taxableAmount), 0));
+  if (!amountsClose(itemTaxable, bill.totalValue, 1)) messages.push("Item taxable values do not match e-way totalValue.");
+  const taxablePlusTaxes = round2(num(bill.totalValue) + num(bill.cgstValue) + num(bill.sgstValue) + num(bill.igstValue) + num(bill.OthValue));
+  if (!amountsClose(taxablePlusTaxes, bill.totInvValue, 1)) messages.push("E-way totalValue plus taxes does not match invoice total.");
   return uniqueMessages(messages);
+}
+
+function validateEwayPayload(payload = {}) {
+  const messages = [];
+  if (!Array.isArray(payload.billLists)) messages.push("E-way JSON billLists must be an array.");
+  if (!payload.version) messages.push("E-way JSON version missing.");
+  return messages;
 }
 
 function exportPurchaseRegister() {

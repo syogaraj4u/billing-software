@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260701-gst-check-ticks">
+  <link rel="stylesheet" href="styles.css?v=20260701-eway-nic-flow">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -337,8 +337,13 @@
             </select></label>
             <label>Vehicle No.<input name="ewayVehicleNoEntry" placeholder="AP03AB1234"></label>
             <label>Transport Distance KM<input name="ewayDistanceKmEntry" type="number" min="0" step="1" placeholder="Auto / enter later"></label>
+            <label class="span-2" id="ewayDestinationPresetLabel">Destination Address<select name="ewayDestinationPreset"></select></label>
             <label class="span-2" id="ewayDispatchFromLabel">Dispatch From Address<textarea name="ewayDispatchFromAddress" rows="2"></textarea></label>
             <label class="span-2" id="ewayShipToLabel">Ship To Address<textarea name="ewayShipToAddress" rows="2"></textarea></label>
+            <label>Transporter Name<input name="ewayTransporterName" placeholder="Optional"></label>
+            <label>Transporter ID<input name="ewayTransporterId" placeholder="Optional"></label>
+            <label>Transport Doc No.<input name="ewayTransDocNo" placeholder="Optional"></label>
+            <label>Transport Doc Date<input name="ewayTransDocDate" type="date"></label>
           </div>
         </section>
         <div class="line-editor">
@@ -486,6 +491,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260701-gst-check-ticks"></script>
+  <script src="app.js?v=20260701-eway-nic-flow"></script>
 </body>
 </html>
