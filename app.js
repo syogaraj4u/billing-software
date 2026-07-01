@@ -281,7 +281,8 @@ const defaultState = {
       vehicleType: "R",
       transMode: "1",
       transType: "1"
-    }
+    },
+    ewayRouteDistances: {}
   },
   items: [
     { id: uid(), name: "Sample Product", hsn: "85171300", gstRate: 18, saleRate: 1000, purchaseRate: 850, openingStock: 10, minStock: 2 }
@@ -383,6 +384,7 @@ function normalizeState(value) {
   }
   syncSaleNumberingForProfiles(profiles, Array.isArray(value.sales) ? value.sales : []);
   const existingEwayDefaults = value.settings.ewayDefaults || {};
+  const existingEwayRouteDistances = value.settings.ewayRouteDistances || {};
   value.settings = {
     currency: value.settings.currency || "Rs.",
     activeProfileId: value.settings.activeProfileId || profiles[0].id,
@@ -396,7 +398,8 @@ function normalizeState(value) {
       vehicleType: existingEwayDefaults.vehicleType || "R",
       transMode: existingEwayDefaults.transMode || "1",
       transType: existingEwayDefaults.transType || "1"
-    }
+    },
+    ewayRouteDistances: normalizeEwayRouteDistances(existingEwayRouteDistances)
   };
   if (!profiles.some(profile => profile.id === value.settings.activeProfileId)) {
     value.settings.activeProfileId = profiles[0].id;
@@ -438,6 +441,31 @@ function normalizeShippingAddresses(addresses = []) {
     place: address.place || "",
     address: address.address || ""
   })).filter(address => address.address || address.name || address.gstin || address.place);
+}
+
+function normalizeEwayRouteDistances(value = {}) {
+  return Object.fromEntries(Object.entries(value || {})
+    .map(([key, distance]) => [String(key || "").trim(), Math.max(0, num(distance))])
+    .filter(([key, distance]) => key && distance > 0));
+}
+
+function normalizeVehicleNumber(value = "") {
+  return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function normalizePurchaseEwayDetails(details = {}) {
+  return {
+    transType: ["1", "2", "3", "4"].includes(String(details.transType || "")) ? String(details.transType) : "1",
+    transMode: ["1", "2", "3", "4"].includes(String(details.transMode || "")) ? String(details.transMode) : "1",
+    vehicleNo: normalizeVehicleNumber(details.vehicleNo || ""),
+    vehicleType: details.vehicleType === "O" ? "O" : "R",
+    distanceKm: Math.max(0, num(details.distanceKm)),
+    dispatchFromAddress: String(details.dispatchFromAddress || "").trim(),
+    shipToAddress: String(details.shipToAddress || "").trim(),
+    fromPincode: String(details.fromPincode || "").trim(),
+    toPincode: String(details.toPincode || "").trim(),
+    routeKey: String(details.routeKey || "").trim()
+  };
 }
 
 function formatShippingAddressesForForm(addresses = []) {
@@ -538,14 +566,19 @@ function normalizeEntryForState(entry, kind, parties = []) {
   entry.sgst = num(entry.sgst);
   entry.igst = num(entry.igst);
   entry.gst = num(entry.gst) || entry.cgst + entry.sgst + entry.igst || calculated.gst;
-  entry.total = num(entry.total) || entry.taxable + entry.gst;
+  entry.roundOff = num(entry.roundOff);
+  entry.total = num(entry.total) || round2(entry.taxable + entry.gst + entry.roundOff);
   entry.taxMode = entry.taxMode || (entry.igst > 0 ? "IGST" : "CGST_SGST");
   entry.reviewMessages = Array.isArray(entry.reviewMessages) ? entry.reviewMessages : [];
   entry.reviewStatus = entry.reviewStatus || (entry.reviewMessages.length ? "Needs Review" : "Ready");
   entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
   entry.rateIncludesGst = Boolean(entry.rateIncludesGst);
   if (kind === "sale") normalizeSaleAddressSnapshots(entry, parties);
-  if (kind === "purchase") entry.source = entry.source || "manual";
+  if (kind === "purchase") {
+    entry.source = entry.source || "manual";
+    entry.ewayDetails = normalizePurchaseEwayDetails(entry.ewayDetails || {});
+    if (entry.roundOff) entry.total = round2(entry.taxable + entry.gst + entry.roundOff);
+  }
 }
 
 function normalizeSaleAddressSnapshots(entry, parties = []) {
@@ -1786,6 +1819,7 @@ function openEntry(kind, id = null, draft = null) {
     extractedTaxes: clone(source?.extractedTaxes || null),
     sellerGstin: source?.sellerGstin || "",
     buyerGstin: source?.buyerGstin || "",
+    roundOff: num(source?.roundOff),
     purchaseReviewAccepted: false,
     purchaseReviewSignature: ""
   };
@@ -1825,9 +1859,11 @@ function openEntry(kind, id = null, draft = null) {
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
   form.elements.partyId.onchange = () => {
     updateSalesAddressPanel();
+    updatePurchaseEwayPanel();
     updateEntryTotals();
   };
   setupSalesAddressPanel(kind, source);
+  setupPurchaseEwayPanel(kind, source);
   $("#purchaseReviewPanel").innerHTML = "";
   $("#lineRows").innerHTML = "";
   (source?.lines?.length ? source.lines : [blankLine(kind)]).forEach(line => addLineRow(line));
@@ -1866,6 +1902,151 @@ function setupSalesAddressPanel(kind, source = null) {
   form.elements.shipToAddress.value = useCustom ? shipTo.address : "";
   form.elements.saveShipTo.checked = false;
   updateSalesAddressPanel();
+}
+
+function setupPurchaseEwayPanel(kind, source = null) {
+  const panel = $("#purchaseEwayPanel");
+  const form = $("#entryForm");
+  if (!panel || !form) return;
+  const isPurchase = kind === "purchase";
+  panel.hidden = !isPurchase;
+  if (!isPurchase) return;
+  const details = normalizePurchaseEwayDetails(source?.ewayDetails || {});
+  form.elements.ewayTransType.value = details.transType || "1";
+  form.elements.ewayTransMode.value = details.transMode || "1";
+  form.elements.ewayVehicleNoEntry.value = details.vehicleNo || "";
+  form.elements.ewayVehicleType.value = details.vehicleType || "R";
+  form.elements.ewayDispatchFromAddress.value = details.dispatchFromAddress || "";
+  form.elements.ewayShipToAddress.value = details.shipToAddress || "";
+  form.elements.ewayDistanceKmEntry.value = details.distanceKm || "";
+  ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewayVehicleType", "ewayDistanceKmEntry", "ewayDispatchFromAddress", "ewayShipToAddress"].forEach(name => {
+    form.elements[name].oninput = updatePurchaseEwayPanel;
+    form.elements[name].onchange = updatePurchaseEwayPanel;
+  });
+  updatePurchaseEwayPanel();
+}
+
+function updatePurchaseEwayPanel() {
+  if (entryMode !== "purchase") return;
+  const panel = $("#purchaseEwayPanel");
+  const form = $("#entryForm");
+  if (!panel || panel.hidden || !form) return;
+  const profile = profileById(form.elements.profileId.value);
+  const supplier = partyById(form.elements.partyId.value) || {};
+  const transType = form.elements.ewayTransType.value || "1";
+  const route = purchaseEwayRouteFromValues(profile, supplier, {
+    transType,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value
+  });
+  $("#ewayDispatchFromLabel").hidden = !ewayUsesDispatchFrom(transType);
+  $("#ewayShipToLabel").hidden = !ewayUsesShipTo(transType);
+  $("#ewayVehicleTypeLabel").hidden = form.elements.ewayTransMode.value !== "1";
+  if (ewayUsesDispatchFrom(transType) && !form.elements.ewayDispatchFromAddress.value.trim()) {
+    form.elements.ewayDispatchFromAddress.value = route.defaultFromAddress;
+  }
+  if (ewayUsesShipTo(transType) && !form.elements.ewayShipToAddress.value.trim()) {
+    form.elements.ewayShipToAddress.value = route.defaultToAddress;
+  }
+  const refreshedRoute = purchaseEwayRouteFromValues(profile, supplier, {
+    transType,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value
+  });
+  if (!num(form.elements.ewayDistanceKmEntry.value) && refreshedRoute.savedDistance) {
+    form.elements.ewayDistanceKmEntry.value = refreshedRoute.savedDistance;
+  }
+  $("#ewayFromPreview").innerHTML = ewayAddressPreview("From", refreshedRoute.fromName, refreshedRoute.fromAddress, refreshedRoute.fromPincode);
+  $("#ewayToPreview").innerHTML = ewayAddressPreview("To", refreshedRoute.toName, refreshedRoute.toAddress, refreshedRoute.toPincode);
+  $("#ewayDistanceHint").textContent = ewayDistanceHint(refreshedRoute, form.elements.ewayDistanceKmEntry.value);
+}
+
+function ewayUsesShipTo(transType) {
+  return transType === "2" || transType === "4";
+}
+
+function ewayUsesDispatchFrom(transType) {
+  return transType === "3" || transType === "4";
+}
+
+function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) {
+  const transType = String(details.transType || "1");
+  const defaultFromAddress = supplier.address || supplier.place || "";
+  const defaultToAddress = profile.address || profile.state || "";
+  const fromAddress = ewayUsesDispatchFrom(transType)
+    ? (String(details.dispatchFromAddress || "").trim() || defaultFromAddress)
+    : defaultFromAddress;
+  const toAddress = ewayUsesShipTo(transType)
+    ? (String(details.shipToAddress || "").trim() || defaultToAddress)
+    : defaultToAddress;
+  const fromPincode = extractPincode(fromAddress);
+  const toPincode = extractPincode(toAddress);
+  const routeKey = ewayRouteKey(fromPincode, toPincode);
+  return {
+    defaultFromAddress,
+    defaultToAddress,
+    fromName: supplier.name || "Supplier",
+    toName: profile.businessName || profile.label || "Buyer GST",
+    fromAddress,
+    toAddress,
+    fromPincode,
+    toPincode,
+    routeKey,
+    savedDistance: savedEwayRouteDistance(routeKey)
+  };
+}
+
+function ewayRouteKey(fromPincode, toPincode) {
+  return fromPincode && toPincode ? `${fromPincode}-${toPincode}` : "";
+}
+
+function savedEwayRouteDistance(routeKey) {
+  return routeKey ? num(state.settings.ewayRouteDistances?.[routeKey]) : 0;
+}
+
+function ewayAddressPreview(title, name, address, pincode) {
+  return `<span>${escapeHtml(title)}</span>
+    <strong>${escapeHtml(name || "-")}</strong>
+    <p>${escapeHtml(address || "-")}</p>
+    <small>PIN: ${escapeHtml(pincode || "-")}</small>`;
+}
+
+function ewayDistanceHint(route, currentDistance) {
+  if (num(currentDistance)) return route.routeKey ? `Distance saved for route ${route.routeKey}.` : "Distance entered.";
+  if (route.savedDistance) return `Auto-filled saved route distance ${route.savedDistance} KM.`;
+  if (!route.fromPincode || !route.toPincode) return "Add supplier and buyer pincodes to remember route distance.";
+  return "Enter once; this route distance will auto-fill next time.";
+}
+
+function collectPurchaseEwayDetails(form, profile, supplier) {
+  const transType = form.elements.ewayTransType.value || "1";
+  const transMode = form.elements.ewayTransMode.value || "1";
+  const route = purchaseEwayRouteFromValues(profile, supplier, {
+    transType,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value
+  });
+  return normalizePurchaseEwayDetails({
+    transType,
+    transMode,
+    vehicleNo: form.elements.ewayVehicleNoEntry.value,
+    vehicleType: form.elements.ewayVehicleType.value,
+    distanceKm: num(form.elements.ewayDistanceKmEntry.value) || route.savedDistance,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value,
+    fromPincode: route.fromPincode,
+    toPincode: route.toPincode,
+    routeKey: route.routeKey
+  });
+}
+
+function rememberPurchaseEwayRoute(details = {}) {
+  const normalized = normalizePurchaseEwayDetails(details);
+  if (!normalized.routeKey || !normalized.distanceKm) return;
+  state.settings.ewayRouteDistances = {
+    ...(state.settings.ewayRouteDistances || {}),
+    [normalized.routeKey]: normalized.distanceKm
+  };
 }
 
 function shipToAddressOptions(party = {}, selectedId = "", shipTo = {}, same = true) {
@@ -1970,6 +2151,8 @@ function renderPurchaseUploadReview(kind, source) {
   syncPurchaseReviewAcceptance(messages);
   const attachments = source.attachments || [];
   const taxModeLabel = calculated.taxMode === "IGST" ? "IGST" : "CGST/SGST";
+  const roundOff = purchaseRoundOffForSource(source, calculated);
+  const payableTotal = purchaseTotalWithRoundOff(calculated, roundOff);
   return `<section class="purchase-review-panel">
     <div class="purchase-review-head">
       <div>
@@ -1978,13 +2161,14 @@ function renderPurchaseUploadReview(kind, source) {
       </div>
       <div>
         <span>${messages.length ? "Needs Review" : "Ready"} | ${taxModeLabel}</span>
-        <strong>${money(calculated.total)}</strong>
+        <strong>${money(payableTotal)}</strong>
       </div>
     </div>
     <div class="purchase-review-grid">
       ${purchaseReviewCard("Supplier", supplier.name || "-", `GSTIN: ${supplier.gstin || source.sellerGstin || "-"}`, supplier.address ? `Address: ${supplier.address}` : `Place: ${supplier.place || "-"}`)}
       ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", `GSTIN: ${source.buyerGstin || profile.gstin || "-"}`, profile.address ? `Address: ${profile.address}` : `Place: ${profile.state || "-"}`)}
-      ${purchaseReviewCard("Invoice", source.number || "-", `Date: ${formatInvoiceDate(source.date || today())}`, `File: ${attachments.map(file => file.name).join(", ") || "-"}`)}
+      ${purchaseReviewCard("Invoice No.", source.number || "-", "Supplier invoice number", "")}
+      ${purchaseReviewCard("Invoice Date", formatInvoiceDate(source.date || today()), "Supplier invoice date", "")}
     </div>
     ${messages.length ? `<div class="purchase-review-warnings">${messages.map(renderPurchaseWarning).join("")}</div>` : ""}
     ${renderPurchaseItemReview(source.lines || [])}
@@ -1995,7 +2179,8 @@ function renderPurchaseUploadReview(kind, source) {
       <span>SGST</span><strong>${money(calculated.sgst)}</strong>
       <span>IGST</span><strong>${money(calculated.igst)}</strong>
       <span>GST</span><strong>${money(calculated.gst)}</strong>
-      <span>Total</span><strong>${money(calculated.total)}</strong>
+      <span>Round Off</span><strong>${money(roundOff)}</strong>
+      <span>Total</span><strong>${money(payableTotal)}</strong>
     </div>
     ${renderPurchaseAttachmentReview(attachments)}
     ${renderPurchaseReviewAcceptance(messages)}
@@ -2049,6 +2234,7 @@ function currentPurchaseReviewSource(lines = collectLines()) {
     lines,
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
+    roundOff: num(entryDraftMeta.roundOff),
     sellerGstin: normalizeGstin(party.gstin || entryDraftMeta.sellerGstin),
     buyerGstin: normalizeGstin(profile.gstin || entryDraftMeta.buyerGstin),
     reviewMessages: clone(entryDraftMeta.reviewMessages || []),
@@ -2060,9 +2246,25 @@ function purchaseReviewCard(title, main, detail, extra) {
   return `<div class="purchase-review-card">
     <span>${escapeHtml(title)}</span>
     <strong>${escapeHtml(main || "-")}</strong>
-    <p>${escapeHtml(detail || "-")}</p>
-    <p>${escapeHtml(extra || "-")}</p>
+    ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+    ${extra ? `<p>${escapeHtml(extra)}</p>` : ""}
   </div>`;
+}
+
+function purchaseRoundOffForSource(source = {}, calculated = {}) {
+  const extractedTotal = num(source?.extractedTaxes?.total);
+  if (extractedTotal) {
+    const adjustment = round2(extractedTotal - num(calculated.total));
+    return Math.abs(adjustment) <= 1 && Math.abs(adjustment) >= 0.01 ? adjustment : 0;
+  }
+  const explicitRoundOff = num(source?.roundOff);
+  if (Math.abs(explicitRoundOff) >= 0.01) return round2(explicitRoundOff);
+  const roundedAdjustment = round2(Math.round(num(calculated.total)) - num(calculated.total));
+  return Math.abs(roundedAdjustment) >= 0.01 ? roundedAdjustment : 0;
+}
+
+function purchaseTotalWithRoundOff(calculated = {}, roundOff = 0) {
+  return round2(num(calculated.total) + num(roundOff));
 }
 
 function renderExtractedTaxReview(extracted = {}, calculated = {}) {
@@ -2252,15 +2454,20 @@ function updateEntryTotals() {
     row.querySelector(".line-amount").value = money(amount);
   });
   const calculated = totals(collectLines());
+  const purchaseSource = entryMode === "purchase" ? currentPurchaseReviewSource(collectLines()) : null;
+  const purchaseRoundOff = entryMode === "purchase" ? purchaseRoundOffForSource(purchaseSource, calculated) : 0;
+  const payableTotal = entryMode === "purchase" ? purchaseTotalWithRoundOff(calculated, purchaseRoundOff) : calculated.total;
   $("#entryTaxable").textContent = money(calculated.taxable);
   $("#entryCgst").textContent = money(calculated.cgst);
   $("#entrySgst").textContent = money(calculated.sgst);
   $("#entryIgst").textContent = money(calculated.igst);
   $("#entryGst").textContent = money(calculated.gst);
-  $("#entryTotal").textContent = money(calculated.total);
+  $("#entryRoundOffBlock").hidden = entryMode !== "purchase";
+  $("#entryRoundOff").textContent = money(purchaseRoundOff);
+  $("#entryTotal").textContent = money(payableTotal);
   if (entryMode === "purchase") {
     rememberPurchaseReviewAcceptance();
-    $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", currentPurchaseReviewSource());
+    $("#purchaseReviewPanel").innerHTML = renderPurchaseUploadReview("purchase", purchaseSource);
     bindPurchaseReviewControls();
   }
 }
@@ -2416,6 +2623,11 @@ function saveEntry(event) {
   }
   const calculated = calculateEntryTotals(lines, profile, party, entryMode);
   const purchaseReviewSource = entryMode === "purchase" ? currentPurchaseReviewSource(lines) : null;
+  const purchaseRoundOff = entryMode === "purchase" ? purchaseRoundOffForSource(purchaseReviewSource, calculated) : 0;
+  const entryTotals = entryMode === "purchase"
+    ? { ...calculated, roundOff: purchaseRoundOff, total: purchaseTotalWithRoundOff(calculated, purchaseRoundOff) }
+    : calculated;
+  const purchaseEwayDetails = entryMode === "purchase" ? collectPurchaseEwayDetails(form, profile, party || {}) : null;
   const reviewMessages = uniqueMessages([
     ...calculated.reviewMessages,
     ...(entryMode === "purchase" ? activePurchaseReviewMessages(entryDraftMeta.reviewMessages) : (entryDraftMeta.reviewMessages || [])),
@@ -2434,7 +2646,7 @@ function saveEntry(event) {
     status: form.elements.status.value,
     notes: entryMode === "sale" ? "" : form.elements.notes.value.trim(),
     lines,
-    ...calculated,
+    ...entryTotals,
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
@@ -2445,6 +2657,7 @@ function saveEntry(event) {
     shipToSnapshot: saleAddress?.shipToSnapshot || null,
     shipToSameAsBillTo: saleAddress?.shipToSameAsBillTo ?? true,
     shipToAddressId: saleAddress?.shipToAddressId || "",
+    ewayDetails: purchaseEwayDetails,
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
   };
@@ -2463,6 +2676,7 @@ function saveEntry(event) {
       }
     }
   }
+  if (entryMode === "purchase") rememberPurchaseEwayRoute(entry.ewayDetails);
   if (entryMode === "sale") saveShipToAddressIfNeeded(form, party, saleAddress);
   const list = entryList(entryMode);
   const index = list.findIndex(row => row.id === entry.id);
@@ -4048,13 +4262,15 @@ function exportSelectedEwayJson() {
 function buildEwayBill(entry) {
   const profile = profileById(entry.profileId);
   const supplier = partyById(entry.partyId) || {};
+  const ewayDetails = normalizePurchaseEwayDetails(entry.ewayDetails || {});
   const fromGstin = normalizeGstin(supplier.gstin);
   const toGstin = normalizeGstin(profile.gstin);
   const fromStateCode = Number(stateCodeFromGstin(fromGstin) || stateCodeFromGstin(entry.sellerGstin));
   const toStateCode = Number(stateCodeFromGstin(toGstin) || stateCodeFromGstin(entry.buyerGstin));
-  const fromPincode = extractPincode(supplier.address || supplier.place);
-  const toPincode = extractPincode(profile.address);
-  const defaults = state.settings.ewayDefaults || {};
+  const route = purchaseEwayRouteFromValues(profile, supplier, ewayDetails);
+  const fromPincode = route.fromPincode || extractPincode(supplier.address || supplier.place);
+  const toPincode = route.toPincode || extractPincode(profile.address);
+  const distanceKm = ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey);
   const bill = {
     userGstin: toGstin,
     supplyType: "I",
@@ -4062,10 +4278,10 @@ function buildEwayBill(entry) {
     docType: "INV",
     docNo: entry.number,
     docDate: ewayDate(entry.date),
-    transType: defaults.transType || "1",
+    transType: ewayDetails.transType || "1",
     fromGstin: fromGstin || "URP",
     fromTrdName: supplier.name || partyName(entry.partyId),
-    fromAddr1: supplier.address || supplier.place || "",
+    fromAddr1: route.fromAddress || supplier.address || supplier.place || "",
     fromAddr2: "",
     fromPlace: supplier.place || "",
     fromPincode,
@@ -4073,7 +4289,7 @@ function buildEwayBill(entry) {
     fromStateCode: fromStateCode || 0,
     toGstin,
     toTrdName: profile.businessName || profile.label,
-    toAddr1: profile.address || "",
+    toAddr1: route.toAddress || profile.address || "",
     toAddr2: "",
     toPlace: profile.state || "",
     toPincode,
@@ -4086,14 +4302,14 @@ function buildEwayBill(entry) {
     cessValue: 0,
     cessNonAdvolValue: 0,
     totInvValue: round2(entry.total),
-    transMode: defaults.transMode || "1",
-    transDistance: String(num(defaults.distanceKm) || 0),
+    transMode: ewayDetails.transMode || "1",
+    transDistance: String(num(distanceKm) || 0),
     transporterName: "",
     transporterId: "",
     transDocNo: "",
     transDocDate: "",
-    vehicleNo: defaults.vehicleNo || "",
-    vehicleType: defaults.vehicleType || "R",
+    vehicleNo: ewayDetails.vehicleNo || "",
+    vehicleType: ewayDetails.vehicleType || "R",
     itemList: entry.lines.map((line, index) => ewayItem(line, index + 1, entry.taxMode))
   };
   return { bill, reviewMessages: validateEwayBill(bill) };
@@ -4124,8 +4340,8 @@ function validateEwayBill(bill) {
   if (!bill.fromGstin || bill.fromGstin === "URP") messages.push("Supplier GSTIN missing.");
   if (!bill.fromPincode) messages.push("Supplier pincode missing.");
   if (!bill.toPincode) messages.push("Buyer pincode missing.");
-  if (!bill.vehicleNo) messages.push("Default vehicle number missing in Settings.");
-  if (!bill.transDistance || bill.transDistance === "0") messages.push("Transport distance missing in Settings.");
+  if (!bill.vehicleNo) messages.push("Vehicle number missing in Purchase Review E-Way Details.");
+  if (!bill.transDistance || bill.transDistance === "0") messages.push("Transport distance missing in Purchase Review E-Way Details.");
   if (!bill.itemList.length) messages.push("No item lines found.");
   bill.itemList.forEach(item => {
     if (!item.hsnCode) messages.push(`${item.productName}: HSN missing.`);

@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260701-purchase-review-cards">
+  <link rel="stylesheet" href="styles.css?v=20260701-purchase-eway-details">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -309,6 +309,41 @@
           </div>
         </section>
         <div id="purchaseReviewPanel"></div>
+        <section class="purchase-eway-panel" id="purchaseEwayPanel" hidden>
+          <div class="purchase-eway-head">
+            <div>
+              <span>E-Way Details</span>
+              <strong>Optional now, required before E-Way JSON</strong>
+            </div>
+            <span id="ewayDistanceHint">Distance will auto-fill when saved for this route.</span>
+          </div>
+          <div class="purchase-eway-route">
+            <div class="purchase-eway-address" id="ewayFromPreview"></div>
+            <div class="purchase-eway-address" id="ewayToPreview"></div>
+          </div>
+          <div class="form-grid purchase-eway-grid">
+            <label>Transaction Type<select name="ewayTransType">
+              <option value="1">Regular</option>
+              <option value="2">Bill To - Ship To</option>
+              <option value="3">Bill From - Dispatch From</option>
+              <option value="4">Bill From/To - Dispatch/Ship</option>
+            </select></label>
+            <label>Transport Mode<select name="ewayTransMode">
+              <option value="1">Road</option>
+              <option value="2">Rail</option>
+              <option value="3">Air</option>
+              <option value="4">Ship</option>
+            </select></label>
+            <label>Vehicle No.<input name="ewayVehicleNoEntry" placeholder="AP03AB1234"></label>
+            <label id="ewayVehicleTypeLabel">Vehicle Type<select name="ewayVehicleType">
+              <option value="R">Regular</option>
+              <option value="O">ODC</option>
+            </select></label>
+            <label>Transport Distance KM<input name="ewayDistanceKmEntry" type="number" min="0" step="1" placeholder="Auto / enter later"></label>
+            <label class="span-2" id="ewayDispatchFromLabel">Dispatch From Address<textarea name="ewayDispatchFromAddress" rows="2"></textarea></label>
+            <label class="span-2" id="ewayShipToLabel">Ship To Address<textarea name="ewayShipToAddress" rows="2"></textarea></label>
+          </div>
+        </section>
         <div class="line-editor">
           <div class="line-head">
             <div>
@@ -326,6 +361,7 @@
         <div><span>SGST</span><strong id="entrySgst">0</strong></div>
         <div><span>IGST</span><strong id="entryIgst">0</strong></div>
         <div><span>GST</span><strong id="entryGst">0</strong></div>
+        <div id="entryRoundOffBlock"><span>Round Off</span><strong id="entryRoundOff">0</strong></div>
         <div><span>Total</span><strong id="entryTotal">0</strong></div>
       </div>
       <menu class="dialog-actions">
@@ -453,6 +489,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260701-storage-rls-fix"></script>
+  <script src="app.js?v=20260701-purchase-eway-details"></script>
 </body>
 </html>
