@@ -2799,7 +2799,7 @@ function renderPurchaseUploadReview(kind, source) {
       <span>SGST</span><strong>${money(calculated.sgst)}</strong>
       <span>IGST</span><strong>${money(calculated.igst)}</strong>
       <span>GST</span><strong>${money(calculated.gst)}</strong>
-      <span>Round Off</span><strong>${money(roundOff)}</strong>
+      <span>${escapeHtml(purchaseAdjustmentLabel(roundOff))}</span><strong>${money(roundOff)}</strong>
       <span>Total</span><strong>${money(payableTotal)}</strong>
     </div>
     ${renderPurchaseAttachmentReview(attachments)}
@@ -2877,19 +2877,23 @@ function purchaseReviewCard(title, main, detail, extra) {
 }
 
 function purchaseRoundOffForSource(source = {}, calculated = {}) {
+  const explicitRoundOff = num(source?.roundOff);
+  if (Math.abs(explicitRoundOff) >= 0.01) return round2(explicitRoundOff);
   const extractedTotal = num(source?.extractedTaxes?.total);
   if (extractedTotal) {
     const adjustment = round2(extractedTotal - num(calculated.total));
     return Math.abs(adjustment) <= 1 && Math.abs(adjustment) >= 0.01 ? adjustment : 0;
   }
-  const explicitRoundOff = num(source?.roundOff);
-  if (Math.abs(explicitRoundOff) >= 0.01) return round2(explicitRoundOff);
   const roundedAdjustment = round2(Math.round(num(calculated.total)) - num(calculated.total));
   return Math.abs(roundedAdjustment) >= 0.01 ? roundedAdjustment : 0;
 }
 
 function purchaseTotalWithRoundOff(calculated = {}, roundOff = 0) {
   return round2(num(calculated.total) + num(roundOff));
+}
+
+function purchaseAdjustmentLabel(roundOff = 0) {
+  return Math.abs(num(roundOff)) > 1 ? "Adjustment" : "Round Off";
 }
 
 function renderExtractedTaxReview(extracted = {}, calculated = {}) {
@@ -3147,6 +3151,7 @@ function updateEntryTotals() {
   $("#entryIgst").textContent = money(calculated.igst);
   $("#entryGst").textContent = money(calculated.gst);
   $("#entryRoundOffBlock").hidden = entryMode !== "purchase";
+  $("#entryRoundOffBlock span").textContent = purchaseAdjustmentLabel(purchaseRoundOff);
   $("#entryRoundOff").textContent = money(purchaseRoundOff);
   $("#entryTotal").textContent = money(payableTotal);
   if (entryMode === "purchase") {
@@ -6463,9 +6468,42 @@ async function buildPurchaseDraftFromFile(file) {
   if (!parsed) {
     parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
   }
+  if (pdfText.trim()) parsed = applyPurchasePaymentAdjustments(parsed, pdfText);
   parsed = await enrichPurchasePincodes(parsed);
   parsed.attachments = [attachment];
   return buildPurchaseDraft(parsed);
+}
+
+function applyPurchasePaymentAdjustments(parsed = {}, text = "") {
+  const adjustment = purchasePaymentAdjustmentFromText(text);
+  if (!adjustment) return parsed;
+  const existingRoundOff = num(parsed.roundOff);
+  const reviewMessages = uniqueMessages([
+    ...(parsed.reviewMessages || []),
+    `Payment adjustment detected: card cashback ${money(Math.abs(adjustment))} reduced the debited amount.`
+  ]);
+  return {
+    ...parsed,
+    roundOff: Math.abs(existingRoundOff) >= 0.01 ? existingRoundOff : adjustment,
+    reviewMessages
+  };
+}
+
+function purchasePaymentAdjustmentFromText(text = "") {
+  const lines = String(text || "").split(/\n+/).map(line => line.trim()).filter(Boolean);
+  const cashback = lines.reduce((sum, line) => {
+    if (!/\b(?:card\s*)?cash\s*back\b|\bcashback\b/i.test(line)) return sum;
+    return sum + purchaseAdjustmentAmountFromLine(line);
+  }, 0);
+  return cashback ? -round2(cashback) : 0;
+}
+
+function purchaseAdjustmentAmountFromLine(line = "") {
+  const cleaned = String(line || "").replace(/,/g, "");
+  const cashbackMatch = cleaned.match(/(?:card\s*)?cash\s*back|cashback/i);
+  const scoped = cashbackMatch ? cleaned.slice(cashbackMatch.index) : cleaned;
+  const amounts = scoped.match(/\d+(?:\.\d{1,2})?/g) || [];
+  return amounts.length ? Number(amounts[amounts.length - 1]) : 0;
 }
 
 async function createPurchaseAttachment(file) {
@@ -6682,6 +6720,7 @@ function buildManualReviewPurchase(file, message) {
     taxable: 0,
     gst: 0,
     total: 0,
+    roundOff: 0,
     extractedTaxes: { cgst: 0, sgst: 0, igst: 0, gst: 0 },
     reviewMessages: [message],
     lines: [{
@@ -6736,6 +6775,7 @@ function parsePurchaseInvoiceText(text, fileName) {
   const amounts = findInvoiceAmounts(lines);
   const parsedLines = findItemLines(lines);
   const fallbackTaxable = amounts.taxable || Math.max(0, amounts.total - amounts.gst) || amounts.total;
+  const roundOff = purchasePaymentAdjustmentFromText(cleaned);
   const expectedTax = taxModeFromGstins(supplierGstin, buyerGstin);
   const reviewMessages = uniqueMessages([
     matchedProfile ? "" : "Buyer GSTIN did not match one of your 8 GST profiles. Confirm the business GST before saving.",
@@ -6756,6 +6796,7 @@ function parsePurchaseInvoiceText(text, fileName) {
     taxable: fallbackTaxable,
     gst: amounts.gst,
     total: amounts.total || fallbackTaxable + amounts.gst,
+    roundOff,
     extractedTaxes: {
       taxable: fallbackTaxable,
       cgst: amounts.cgst,
@@ -6820,6 +6861,7 @@ function parseReliancePurchaseInvoiceText(text, fileName) {
   const taxable = totalSummary.taxable || round2(hsnSummaries.reduce((sum, row) => sum + row.taxable, 0));
   const gst = totalSummary.gst || round2(hsnSummaries.reduce((sum, row) => sum + row.tax, 0));
   const total = totalSummary.total || round2(hsnSummaries.reduce((sum, row) => sum + row.total, 0));
+  const roundOff = purchasePaymentAdjustmentFromText(cleaned);
   return {
     fileName,
     profileId: profile.id,
@@ -6836,6 +6878,7 @@ function parseReliancePurchaseInvoiceText(text, fileName) {
     taxable,
     gst,
     total,
+    roundOff,
     extractedTaxes: {
       taxable,
       cgst: 0,
@@ -7079,6 +7122,7 @@ function buildPurchaseDraft(parsed) {
     lines,
     attachments: clone(parsed.attachments || []),
     extractedTaxes: clone(parsed.extractedTaxes || null),
+    roundOff: round2(num(parsed.roundOff)),
     sellerGstin: parsed.supplierGstin || "",
     buyerGstin,
     reviewMessages,

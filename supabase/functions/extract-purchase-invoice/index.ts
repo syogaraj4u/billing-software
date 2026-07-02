@@ -23,6 +23,7 @@ const invoiceSchema = {
     "taxable",
     "gst",
     "total",
+    "roundOff",
     "extractedTaxes",
     "reviewMessages",
     "lines"
@@ -43,6 +44,7 @@ const invoiceSchema = {
     taxable: { type: "number" },
     gst: { type: "number" },
     total: { type: "number" },
+    roundOff: { type: "number" },
     extractedTaxes: {
       type: "object",
       additionalProperties: false,
@@ -106,7 +108,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Extract supplier and buyer address/place when visible; return an empty string when not visible. Separate CGST, SGST and IGST exactly as shown. If an item HSN/SAC is not visible, use default HSN 85171300. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, unreadable values, or tax mode mismatch."
+              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Extract supplier and buyer address/place when visible; return an empty string when not visible. Separate CGST, SGST and IGST exactly as shown. If an item HSN/SAC is not visible, use default HSN 85171300. If payment lines show card cashback, cashback, debit note, or any post-total payment adjustment, return it in roundOff as a negative number; for example CARD CASH BACK - 6000 means roundOff -6000. Keep extractedTaxes.total as the invoice total before cashback, while total may be the net debited/payable total. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, unreadable values, payment adjustment, or tax mode mismatch."
             }
           ]
         },
