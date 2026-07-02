@@ -664,8 +664,8 @@ function normalizePurchaseEwayDetails(details = {}) {
     transporterId: normalizeGstin(details.transporterId || ""),
     transDocNo: String(details.transDocNo || "").trim(),
     transDocDate: String(details.transDocDate || "").trim(),
-    fromPincode: String(details.fromPincode || "").trim(),
-    toPincode: String(details.toPincode || "").trim(),
+    fromPincode: normalizePincode(details.fromPincode || ""),
+    toPincode: normalizePincode(details.toPincode || ""),
     routeKey: String(details.routeKey || "").trim()
   };
 }
@@ -2261,6 +2261,7 @@ function openEntry(kind, id = null, draft = null) {
     reviewMessages: clone(source?.reviewMessages || []),
     source: source?.source || (draft ? "imported" : "manual"),
     extractedTaxes: clone(source?.extractedTaxes || null),
+    ewayDetails: normalizePurchaseEwayDetails(source?.ewayDetails || {}),
     sellerGstin: source?.sellerGstin || "",
     buyerGstin: source?.buyerGstin || "",
     roundOff: num(source?.roundOff),
@@ -2357,10 +2358,13 @@ function setupPurchaseEwayPanel(kind, source = null) {
   panel.hidden = !isPurchase;
   if (!isPurchase) return;
   const details = normalizePurchaseEwayDetails(source?.ewayDetails || {});
+  const supplier = partyById(source?.partyId) || {};
+  const supplierDefaultPincode = normalizePincode(details.fromPincode)
+    || normalizePincode(extractPreferredPincode(supplier.address || supplier.place));
   form.elements.ewayTransType.value = details.transType || "1";
   form.elements.ewayTransMode.value = details.transMode || "1";
   form.elements.ewayVehicleNoEntry.value = details.vehicleNo || "";
-  form.elements.ewaySupplierPincodeEntry.value = details.fromPincode || "";
+  form.elements.ewaySupplierPincodeEntry.value = supplierDefaultPincode || "";
   form.elements.ewayDestinationPreset.innerHTML = ewayDestinationPresetOptions(details.destinationPreset);
   form.elements.ewayDestinationPreset.value = details.destinationPreset || (details.shipToAddress ? "custom" : "buyer");
   form.elements.ewayDispatchFromAddress.value = details.dispatchFromAddress || "";
@@ -2553,10 +2557,10 @@ function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) 
         ? (String(details.shipToAddress || "").trim() || defaultToAddress)
         : defaultToAddress
     : defaultToAddress;
-  const defaultFromPincode = extractPincode(fromAddress);
+  const defaultFromPincode = extractPreferredPincode(fromAddress);
   const fromPincode = normalizePincode(details.fromPincode) || defaultFromPincode;
-  const billToPincode = extractPincode(billToAddress);
-  const toPincode = selectedPreset ? String(selectedPreset.toPincode) : extractPincode(toAddress);
+  const billToPincode = extractPreferredPincode(billToAddress);
+  const toPincode = selectedPreset ? String(selectedPreset.toPincode) : extractPreferredPincode(toAddress);
   const routeKey = ewayRouteKey(fromPincode, toPincode);
   return {
     defaultFromAddress,
@@ -2791,6 +2795,9 @@ function renderPurchaseUploadReview(kind, source) {
   if (kind !== "purchase" || !source) return "";
   const profile = profileById(source.profileId || activeProfileId());
   const supplier = partyById(source.partyId) || {};
+  const sourceEwayDetails = normalizePurchaseEwayDetails(source.ewayDetails || entryDraftMeta.ewayDetails || {});
+  const supplierReviewAddress = sourceEwayDetails.dispatchFromAddress || supplier.address || "";
+  const supplierReviewPincode = sourceEwayDetails.fromPincode || normalizePincode(extractPreferredPincode(supplierReviewAddress || supplier.place));
   const calculated = calculateEntryTotals(source.lines || [], profile, supplier, "purchase");
   const extracted = source.extractedTaxes || {};
   const messages = uniqueMessages([
@@ -2816,7 +2823,7 @@ function renderPurchaseUploadReview(kind, source) {
       </div>
     </div>
     <div class="purchase-review-grid">
-      ${purchaseReviewCard("Supplier", supplier.name || "-", `GSTIN: ${supplier.gstin || source.sellerGstin || "-"}`, supplier.address ? `Address: ${supplier.address}` : `Place: ${supplier.place || "-"}`)}
+      ${purchaseReviewCard("Supplier", supplier.name || "-", `GSTIN: ${supplier.gstin || source.sellerGstin || "-"}`, supplierReviewAddress ? `Address: ${supplierReviewAddress}` : `Place: ${supplier.place || "-"}`, supplierReviewPincode ? `PIN: ${supplierReviewPincode}` : "")}
       ${purchaseReviewCard("Buyer GST", profile.businessName || profile.label || "-", `GSTIN: ${source.buyerGstin || profile.gstin || "-"}`, profile.address ? `Address: ${profile.address}` : `Place: ${profile.state || "-"}`)}
       ${purchaseReviewCard("Invoice No.", source.number || "-", "Supplier invoice number", "")}
       ${purchaseReviewCard("Invoice Date", formatInvoiceDate(source.date || today()), "Supplier invoice date", "")}
@@ -2890,6 +2897,13 @@ function currentPurchaseReviewSource(lines = collectLines()) {
     lines,
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
+    ewayDetails: normalizePurchaseEwayDetails({
+      ...(entryDraftMeta.ewayDetails || {}),
+      fromPincode: form?.elements?.ewaySupplierPincodeEntry?.value || entryDraftMeta.ewayDetails?.fromPincode || "",
+      destinationPreset: form?.elements?.ewayDestinationPreset?.value || entryDraftMeta.ewayDetails?.destinationPreset || "",
+      dispatchFromAddress: form?.elements?.ewayDispatchFromAddress?.value || entryDraftMeta.ewayDetails?.dispatchFromAddress || "",
+      shipToAddress: form?.elements?.ewayShipToAddress?.value || entryDraftMeta.ewayDetails?.shipToAddress || ""
+    }),
     roundOff: num(entryDraftMeta.roundOff),
     sellerGstin: normalizeGstin(party.gstin || entryDraftMeta.sellerGstin),
     buyerGstin: normalizeGstin(profile.gstin || entryDraftMeta.buyerGstin),
@@ -2898,12 +2912,13 @@ function currentPurchaseReviewSource(lines = collectLines()) {
   };
 }
 
-function purchaseReviewCard(title, main, detail, extra) {
+function purchaseReviewCard(title, main, detail, extra, note) {
   return `<div class="purchase-review-card">
     <span>${escapeHtml(title)}</span>
     <strong>${escapeHtml(main || "-")}</strong>
     ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
     ${extra ? `<p>${escapeHtml(extra)}</p>` : ""}
+    ${note ? `<p>${escapeHtml(note)}</p>` : ""}
   </div>`;
 }
 
@@ -5098,7 +5113,7 @@ function ewayAddressParts(address = "", preset = null, fallbackPlace = "", fallb
   }
   const value = String(address || "").trim();
   const segments = value.split(",").map(part => part.trim()).filter(Boolean);
-  const pincode = Number(extractPincode(value)) || 0;
+  const pincode = Number(extractPreferredPincode(value)) || 0;
   const place = fallbackPlace || ewayPlaceFromAddressSegments(segments) || "";
   return {
     addr1: segments[0] || value || fallbackPlace || "",
@@ -5147,8 +5162,8 @@ function buildEwayBill(entry) {
   const fromStateCode = Number(stateCodeFromGstin(fromGstin) || stateCodeFromGstin(entry.sellerGstin));
   const toStateCode = Number(stateCodeFromGstin(toGstin) || stateCodeFromGstin(entry.buyerGstin));
   const route = purchaseEwayRouteFromValues(profile, supplier, ewayDetails);
-  const fromPincode = route.fromPincode || extractPincode(supplier.address || supplier.place);
-  const toPincode = route.toPincode || extractPincode(profile.address);
+  const fromPincode = route.fromPincode || extractPreferredPincode(supplier.address || supplier.place);
+  const toPincode = route.toPincode || extractPreferredPincode(profile.address);
   const fromParts = ewayAddressParts(route.fromAddress || supplier.address || supplier.place, null, supplier.place, fromStateCode);
   const toParts = ewayAddressParts(route.toAddress || profile.address, route.destinationPresetData, profile.state, toStateCode);
   const distanceKm = fixedEwayRouteDistance(fromPincode, toPincode) || ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey) || calculateEwayDistance(fromPincode, toPincode);
@@ -5315,6 +5330,15 @@ function csvCell(value) {
 function extractPincode(value) {
   const match = String(value || "").match(/\b\d{6}\b/);
   return match ? Number(match[0]) : 0;
+}
+
+function extractPincodes(value) {
+  return [...String(value || "").matchAll(/\b\d{6}\b/g)].map(match => Number(match[0])).filter(Boolean);
+}
+
+function extractPreferredPincode(value) {
+  const pins = extractPincodes(value);
+  return pins.length ? pins[pins.length - 1] : 0;
 }
 
 function normalizePincode(value) {
@@ -6611,14 +6635,14 @@ function enrichPurchasePincodesFromMaster(parsed = {}) {
   const buyerGstin = normalizeGstin(parsed.buyerGstin || profileById(parsed.profileId)?.gstin);
   const supplierMaster = partyAddressContextByGstin(supplierGstin);
   const buyerMaster = profileAddressContextByGstin(buyerGstin);
-  const supplierPin = extractPincode(parsed.supplierAddress) || supplierMaster.pincode;
-  const buyerPin = extractPincode(parsed.buyerAddress) || buyerMaster.pincode;
-  if (supplierPin && !extractPincode(parsed.supplierAddress)) {
+  const supplierPin = extractPreferredPincode(parsed.supplierAddress) || extractPreferredPincode(parsed.supplierPlace) || supplierMaster.pincode;
+  const buyerPin = extractPreferredPincode(parsed.buyerAddress) || extractPreferredPincode(parsed.buyerPlace) || buyerMaster.pincode;
+  if (supplierPin && !extractPreferredPincode(parsed.supplierAddress)) {
     parsed.supplierAddress = addressWithPincode(parsed.supplierAddress || supplierMaster.address, supplierPin);
   }
   if (!String(parsed.supplierAddress || "").trim() && supplierMaster.address) parsed.supplierAddress = supplierMaster.address;
   if (!String(parsed.supplierPlace || "").trim() && supplierMaster.place) parsed.supplierPlace = supplierMaster.place;
-  if (buyerPin && !extractPincode(parsed.buyerAddress)) {
+  if (buyerPin && !extractPreferredPincode(parsed.buyerAddress)) {
     parsed.buyerAddress = addressWithPincode(parsed.buyerAddress || buyerMaster.address, buyerPin);
   }
   if (!String(parsed.buyerAddress || "").trim() && buyerMaster.address) parsed.buyerAddress = buyerMaster.address;
@@ -6630,8 +6654,8 @@ function purchaseNeedsPincodeHelp(parsed = {}) {
   const supplierHasGstin = isValidGstin(parsed.supplierGstin);
   const buyerProfile = profileById(parsed.profileId) || profileByGstin(parsed.buyerGstin) || {};
   const buyerHasGstin = isValidGstin(parsed.buyerGstin || buyerProfile.gstin);
-  const supplierNeedsPin = supplierHasGstin && !extractPincode(parsed.supplierAddress);
-  const buyerNeedsPin = buyerHasGstin && !extractPincode(parsed.buyerAddress || buyerProfile.address);
+  const supplierNeedsPin = supplierHasGstin && !extractPreferredPincode(parsed.supplierAddress);
+  const buyerNeedsPin = buyerHasGstin && !extractPreferredPincode(parsed.buyerAddress || buyerProfile.address);
   return supplierNeedsPin || buyerNeedsPin;
 }
 
@@ -6687,7 +6711,7 @@ function applyPartyPincodeResolution(parsed, type, resolution = {}, reviewMessag
   const placeKey = `${type}Place`;
   const label = type === "supplier" ? "Supplier" : "Buyer";
   const pin = normalizePincode(resolution.pincode || resolution.pin || "");
-  const existingPin = extractPincode(parsed[addressKey]);
+  const existingPin = extractPreferredPincode(parsed[addressKey]);
   const confidence = resolution.confidence || "unknown";
   if (!existingPin && pin && confidence === "high") {
     parsed[addressKey] = addressWithPincode(resolution.address || parsed[addressKey], pin);
@@ -6726,7 +6750,7 @@ function addressContextFromRecord(record = {}) {
     gstin: normalizeGstin(record.gstin),
     address,
     place: record.place || record.state || stateNameFromGstin(record.gstin) || "",
-    pincode: extractPincode(address)
+    pincode: extractPreferredPincode(address)
   };
 }
 
@@ -6806,6 +6830,7 @@ function parsePurchaseInvoiceText(text, fileName) {
   const buyerGstin = normalizeGstin(profile.gstin);
   const supplierGstin = gstins.find(gstin => gstin !== buyerGstin) || "";
   const supplierName = findSupplierName(lines, supplierGstin) || fileName.replace(/\.pdf$/i, "");
+  const supplierAddress = findSupplierAddress(lines, supplierGstin);
   const detectedInvoiceNumber = findInvoiceNumber(lines);
   const invoiceNumber = detectedInvoiceNumber || nextEntryNumber("purchase", profile.id);
   const invoiceDate = findInvoiceDate(cleaned) || today();
@@ -6827,6 +6852,8 @@ function parsePurchaseInvoiceText(text, fileName) {
     profileId: profile.id,
     supplierName,
     supplierGstin,
+    supplierAddress,
+    supplierPlace: supplierAddress ? stateNameFromGstin(supplierGstin) : "",
     buyerGstin,
     invoiceNumber,
     invoiceDate,
@@ -7007,6 +7034,36 @@ function relianceItemDetails(lines = []) {
   return details;
 }
 
+function findSupplierAddress(lines, supplierGstin = "") {
+  const addressStart = lines.findIndex(line => /^(?:ho\s*)?address\s*:/i.test(line) && !/billed|shipped|customer|buyer/i.test(line));
+  if (addressStart >= 0) return collectSupplierAddressBlock(lines, addressStart);
+  const gstinIndex = supplierGstin ? lines.findIndex(line => line.includes(supplierGstin)) : -1;
+  if (gstinIndex >= 0) {
+    const start = Math.max(0, gstinIndex - 5);
+    const candidate = collectSupplierAddressBlock(lines, start, gstinIndex);
+    if (extractPreferredPincode(candidate)) return candidate;
+  }
+  const pincodeIndex = lines.findIndex((line, index) => index < 12 && /\b(?:pin\s*code|pincode|pin)\b|\b\d{6}\b/i.test(line));
+  return pincodeIndex >= 0 ? collectSupplierAddressBlock(lines, Math.max(0, pincodeIndex - 2), Math.min(lines.length, pincodeIndex + 1)) : "";
+}
+
+function collectSupplierAddressBlock(lines = [], startIndex = 0, endIndex = 0) {
+  const stop = endIndex || Math.min(lines.length, startIndex + 6);
+  const parts = [];
+  for (let index = startIndex; index < stop; index += 1) {
+    const line = String(lines[index] || "").trim();
+    if (!line) continue;
+    if (index > startIndex && /^(?:phone|ho\s*phone|email|invoice|inv\s*no|bill|ship|billed|shipped|sales\s*person|state\s*:|name\s*:|gstn?\s*(?:no|number)?\s*:|ho\s*gst)\b/i.test(line)) break;
+    const cleaned = line
+      .replace(/^(?:ho\s*)?address\s*:\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (cleaned) parts.push(cleaned);
+    if (extractPreferredPincode(cleaned) && index > startIndex) break;
+  }
+  return parts.join(", ").replace(/\s*,\s*/g, ", ").replace(/(?:,\s*){2,}/g, ", ").trim();
+}
+
 function findSupplierName(lines, supplierGstin) {
   const skip = /^(tax invoice|invoice|bill of supply|gstin|gst|original|duplicate|date|state|place|ship|bill|to|from)$/i;
   if (supplierGstin) {
@@ -7137,6 +7194,7 @@ function buildPurchaseDraft(parsed) {
   ]);
   const reviewMessages = uniqueMessages([...(parsed.reviewMessages || []), ...contextMessages]);
   const partyId = ensureImportedSupplier(parsed);
+  const supplierInvoicePincode = normalizePincode(extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace));
   const lines = parsed.lines.map(line => {
     const item = ensureImportedItem(line);
     return {
@@ -7159,6 +7217,10 @@ function buildPurchaseDraft(parsed) {
     lines,
     attachments: clone(parsed.attachments || []),
     extractedTaxes: clone(parsed.extractedTaxes || null),
+    ewayDetails: normalizePurchaseEwayDetails({
+      fromPincode: supplierInvoicePincode,
+      dispatchFromAddress: parsed.supplierAddress || ""
+    }),
     roundOff: round2(num(parsed.roundOff)),
     sellerGstin: parsed.supplierGstin || "",
     buyerGstin,
@@ -7196,6 +7258,10 @@ function ensureImportedSupplier(parsed) {
 function updateExistingImportedSupplier(party, parsed, supplierGstin) {
   if (!normalizeGstin(party.gstin) && supplierGstin) party.gstin = supplierGstin;
   if (!String(party.address || "").trim() && parsed.supplierAddress) party.address = parsed.supplierAddress;
+  else if (parsed.supplierAddress && !extractPreferredPincode(party.address)) {
+    const parsedPin = extractPreferredPincode(parsed.supplierAddress);
+    if (parsedPin) party.address = addressWithPincode(party.address, parsedPin);
+  }
   if (!String(party.place || "").trim()) {
     party.place = parsed.supplierPlace || stateNameFromGstin(supplierGstin) || stateCodeFromGstin(supplierGstin) || "";
   }
