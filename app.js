@@ -298,14 +298,14 @@ const SALE_INVOICE_NUMBER_RULES = {
 };
 
 const FIRM_LOGOS = {
-  "gst-1": { initials: "NS", kind: "apex", primary: "#0f766e", accent: "#1e40af", ink: "#111827" },
-  "gst-2": { initials: "KN", kind: "lotus", primary: "#9f1239", accent: "#b45309", ink: "#2b0f18" },
-  "gst-3": { initials: "HM", kind: "device", primary: "#047857", accent: "#1d4ed8", ink: "#062e29" },
-  "gst-4": { initials: "SN", kind: "wave", primary: "#3730a3", accent: "#c2410c", ink: "#111827" },
-  "gst-5": { initials: "SD", kind: "grid", primary: "#0369a1", accent: "#0f766e", ink: "#111827" },
-  "gst-6": { initials: "KI", kind: "node", primary: "#6d28d9", accent: "#0f766e", ink: "#111827" },
-  "gst-7": { initials: "LJT", kind: "trade", primary: "#166534", accent: "#a16207", ink: "#111827" },
-  "gst-8": { initials: "SLD", kind: "lens", primary: "#b91c1c", accent: "#ea580c", ink: "#111827" }
+  "gst-1": { initials: "NS", kind: "phoneOrbit", primary: "#0f766e", accent: "#2563eb", ink: "#0f172a" },
+  "gst-2": { initials: "KN", kind: "deviceSpark", primary: "#111827", accent: "#d97706", ink: "#111827" },
+  "gst-3": { initials: "HHM", kind: "dualPhones", primary: "#7c3aed", accent: "#0f766e", ink: "#1e1b4b" },
+  "gst-4": { initials: "SNC", kind: "signalPhone", primary: "#1d4ed8", accent: "#0891b2", ink: "#111827" },
+  "gst-5": { initials: "SD", kind: "pixelPhone", primary: "#0369a1", accent: "#14b8a6", ink: "#0f172a" },
+  "gst-6": { initials: "KI", kind: "cameraChip", primary: "#4f46e5", accent: "#06b6d4", ink: "#111827" },
+  "gst-7": { initials: "LJT", kind: "stackedPhones", primary: "#166534", accent: "#64748b", ink: "#111827" },
+  "gst-8": { initials: "SLD", kind: "retailDevice", primary: "#b91c1c", accent: "#f59e0b", ink: "#111827" }
 };
 
 const HOME_COMPANY_PROFILE_ORDER = ["gst-1", "gst-2", "gst-7", "gst-5", "gst-6", "gst-8", "gst-4", "gst-3"];
@@ -879,62 +879,78 @@ function fallbackFirmLogo(profile) {
 
 function firmLogoSvg(logo) {
   const initials = escapeHtml(logo.initials || "");
-  const fontSize = initials.length > 2 ? 13 : 16;
+  const fontSize = initials.length > 2 ? 11 : 14;
   const base = `
     <rect x="5" y="5" width="54" height="54" rx="15" fill="#ffffff" stroke="#d1d5db" stroke-width="1.5"/>
-    <path d="M6 46c15-11 32-14 52-8v21H6z" fill="${logo.primary}" opacity=".09"/>
-    <path d="M11 50h42" fill="none" stroke="${logo.primary}" stroke-width="3" stroke-linecap="round"/>`;
+    <path d="M7 47c15-9 32-12 50-6v18H7z" fill="${logo.primary}" opacity=".08"/>
+    <path d="M13 50h38" fill="none" stroke="${logo.primary}" stroke-width="3" stroke-linecap="round"/>`;
   const mark = firmLogoMark(logo);
-  const text = `<text x="32" y="38" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="800" fill="${logo.ink}" letter-spacing="0">${initials}</text>`;
+  const text = `<text x="32" y="55" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="800" fill="${logo.ink}" letter-spacing="0">${initials}</text>`;
   return `<svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">${base}${mark}${text}</svg>`;
 }
 
 function firmLogoMark(logo) {
   switch (logo.kind) {
+    case "phoneOrbit":
+      return `
+        <rect x="24" y="12" width="16" height="27" rx="4.5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <path d="M28 17h8M31 34h2" stroke="${logo.accent}" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M17 25c7-8 24-10 31-1M18 31c8 7 23 7 29-1" fill="none" stroke="${logo.accent}" stroke-width="2.5" stroke-linecap="round"/>`;
+    case "deviceSpark":
+      return `
+        <rect x="21" y="12" width="21" height="28" rx="5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <path d="M26 18h11M28 35h7" stroke="${logo.accent}" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M47 14l1.8 4.1 4.2 1.7-4.2 1.8L47 26l-1.8-4.4-4.2-1.8 4.2-1.7z" fill="${logo.accent}"/>`;
+    case "stackedPhones":
+      return `
+        <rect x="18" y="17" width="16" height="24" rx="4" fill="#ffffff" stroke="${logo.accent}" stroke-width="2.7"/>
+        <rect x="29" y="12" width="18" height="29" rx="4.5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <path d="M34 18h8M36 36h4" stroke="${logo.primary}" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="25" cy="35" r="1.3" fill="${logo.accent}"/>`;
+    case "pixelPhone":
+      return `
+        <rect x="20" y="12" width="24" height="30" rx="5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <rect x="25" y="18" width="5" height="5" rx="1.2" fill="${logo.primary}"/>
+        <rect x="34" y="18" width="5" height="5" rx="1.2" fill="${logo.accent}"/>
+        <rect x="25" y="27" width="5" height="5" rx="1.2" fill="${logo.accent}"/>
+        <rect x="34" y="27" width="5" height="5" rx="1.2" fill="${logo.primary}"/>
+        <path d="M29 37h6" stroke="${logo.ink}" stroke-width="2.2" stroke-linecap="round"/>`;
+    case "cameraChip":
+      return `
+        <rect x="19" y="14" width="26" height="26" rx="6" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <circle cx="32" cy="27" r="7.5" fill="none" stroke="${logo.accent}" stroke-width="3"/>
+        <circle cx="32" cy="27" r="2.7" fill="${logo.ink}"/>
+        <path d="M16 21h4M16 33h4M44 21h4M44 33h4M26 11v4M38 11v4M26 39v4M38 39v4" stroke="${logo.primary}" stroke-width="2" stroke-linecap="round"/>`;
+    case "retailDevice":
+      return `
+        <rect x="22" y="13" width="17" height="28" rx="5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <path d="M27 18h7M29 36h3" stroke="${logo.accent}" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M41 20h8l-1.5 11h-5z" fill="#ffffff" stroke="${logo.accent}" stroke-width="2.4" stroke-linejoin="round"/>
+        <path d="M43 20c0-3 3-4 4 0" fill="none" stroke="${logo.accent}" stroke-width="2.1" stroke-linecap="round"/>`;
+    case "signalPhone":
+      return `
+        <rect x="22" y="14" width="18" height="27" rx="4.5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <path d="M27 19h8M29 36h4" stroke="${logo.accent}" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M42 18c3 2 5 5 5 9s-2 7-5 9M46 13c5 4 8 8 8 14s-3 11-8 15" fill="none" stroke="${logo.accent}" stroke-width="2.5" stroke-linecap="round"/>`;
+    case "dualPhones":
+      return `
+        <rect x="18" y="16" width="16" height="24" rx="4" fill="#ffffff" stroke="${logo.primary}" stroke-width="2.8"/>
+        <rect x="31" y="12" width="17" height="29" rx="4.5" fill="#ffffff" stroke="${logo.accent}" stroke-width="2.8"/>
+        <path d="M23 21h6M36 18h7M24 36h4M37 37h5" stroke="${logo.ink}" stroke-width="2" stroke-linecap="round"/>
+        <path d="M15 29h4M48 25h4" stroke="${logo.primary}" stroke-width="2.4" stroke-linecap="round"/>`;
     case "lotus":
-      return `
-        <path d="M22 18c6 1 9 5 10 11-6-1-10-5-10-11z" fill="${logo.primary}" opacity=".9"/>
-        <path d="M42 18c-6 1-9 5-10 11 6-1 10-5 10-11z" fill="${logo.accent}" opacity=".9"/>
-        <path d="M32 16c4 4 5 8 0 13-5-5-4-9 0-13z" fill="${logo.primary}" opacity=".75"/>`;
     case "device":
-      return `
-        <rect x="22" y="13" width="20" height="25" rx="6" fill="none" stroke="${logo.primary}" stroke-width="3"/>
-        <path d="M27 18h10M29 34h6" stroke="${logo.accent}" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M45 22h6M48 19l3 3-3 3" fill="none" stroke="${logo.accent}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
     case "wave":
-      return `
-        <path d="M17 23c8-7 22-7 30 0" fill="none" stroke="${logo.primary}" stroke-width="3" stroke-linecap="round"/>
-        <path d="M23 28c5-4 13-4 18 0" fill="none" stroke="${logo.accent}" stroke-width="3" stroke-linecap="round"/>
-        <circle cx="32" cy="31" r="3" fill="${logo.ink}"/>`;
     case "grid":
-      return `
-        <rect x="19" y="15" width="6" height="6" rx="1.5" fill="${logo.primary}"/>
-        <rect x="29" y="15" width="6" height="6" rx="1.5" fill="${logo.accent}"/>
-        <rect x="39" y="15" width="6" height="6" rx="1.5" fill="${logo.primary}"/>
-        <rect x="19" y="25" width="6" height="6" rx="1.5" fill="${logo.accent}"/>
-        <rect x="29" y="25" width="6" height="6" rx="1.5" fill="${logo.primary}"/>
-        <rect x="39" y="25" width="6" height="6" rx="1.5" fill="${logo.accent}"/>`;
     case "node":
-      return `
-        <path d="M21 27h22M32 17v20M21 27l-5-5M43 27l5-5" fill="none" stroke="${logo.accent}" stroke-width="2.5" stroke-linecap="round"/>
-        <circle cx="21" cy="27" r="3" fill="${logo.primary}"/>
-        <circle cx="43" cy="27" r="3" fill="${logo.primary}"/>
-        <circle cx="32" cy="17" r="3" fill="${logo.ink}"/>`;
     case "trade":
-      return `
-        <path d="M18 24h28v12H18z" fill="none" stroke="${logo.primary}" stroke-width="3" stroke-linejoin="round"/>
-        <path d="M23 18h28v12" fill="none" stroke="${logo.accent}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M18 18c6 1 10 4 12 10-7-1-11-4-12-10z" fill="${logo.primary}"/>`;
     case "lens":
-      return `
-        <circle cx="32" cy="25" r="12" fill="none" stroke="${logo.primary}" stroke-width="3"/>
-        <path d="M32 13l6 11M44 23l-12 2M39 36l-7-11M24 36l8-11M20 23l12 2M25 14l7 11" fill="none" stroke="${logo.accent}" stroke-width="2.3" stroke-linecap="round"/>
-        <circle cx="32" cy="25" r="3.5" fill="${logo.ink}"/>`;
     case "apex":
     default:
       return `
-        <path d="M19 30l13-17 13 17" fill="none" stroke="${logo.primary}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M25 30l7-9 7 9" fill="none" stroke="${logo.accent}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+        <rect x="23" y="13" width="18" height="28" rx="5" fill="#ffffff" stroke="${logo.primary}" stroke-width="3"/>
+        <path d="M28 18h8M29 36h6" stroke="${logo.accent}" stroke-width="2.3" stroke-linecap="round"/>
+        <circle cx="44" cy="18" r="3" fill="${logo.accent}"/>`;
   }
 }
 
