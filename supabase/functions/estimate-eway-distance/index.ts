@@ -17,7 +17,9 @@ const distanceSchema = {
 
 const specialDistanceKm: Record<string, number> = {
   "631001-517501": 80,
-  "517501-631001": 80
+  "517501-631001": 80,
+  "631001-600021": 92,
+  "600021-631001": 92
 };
 
 Deno.serve(async request => {
