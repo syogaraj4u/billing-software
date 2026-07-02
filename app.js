@@ -1822,19 +1822,36 @@ function maybeSwitchToPurchaseWorkspace() {
 
 async function createCloudWorkspace(name) {
   if (!cloudClient || !cloudSession) return toast("Sign in to create a workspace");
+  const workspaceName = String(name || "Main Business").trim() || "Main Business";
+  const existingWorkspace = cloudWorkspaces.find(row => normalizeCloudWorkspaceName(row.name) === normalizeCloudWorkspaceName(workspaceName));
+  if (existingWorkspace) {
+    applyCloudWorkspace(existingWorkspace, "Existing workspace opened");
+    return;
+  }
   const { data, error } = await cloudClient
     .from(CLOUD_WORKSPACE_TABLE)
     .insert({
       owner_id: cloudSession.user.id,
-      name,
+      name: workspaceName,
       member_emails: [],
       data: clone(state)
     })
     .select("id,name,owner_id,member_emails,data,updated_at,created_at")
     .single();
-  if (error) return toast(error.message);
+  if (error) {
+    if (/duplicate|unique/i.test(error.message || "")) {
+      await loadCloudWorkspaces();
+      toast("Existing workspace opened");
+      return;
+    }
+    return toast(error.message);
+  }
   cloudWorkspaces = [data, ...cloudWorkspaces.filter(row => row.id !== data.id)];
   applyCloudWorkspace(data, "Cloud workspace created");
+}
+
+function normalizeCloudWorkspaceName(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function applyCloudWorkspace(workspace, message) {

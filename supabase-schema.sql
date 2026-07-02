@@ -13,6 +13,9 @@ create table if not exists public.billing_cloud_workspaces (
 create index if not exists billing_cloud_workspaces_owner_id_idx
   on public.billing_cloud_workspaces(owner_id);
 
+create unique index if not exists billing_cloud_workspaces_owner_name_unique_idx
+  on public.billing_cloud_workspaces(owner_id, lower(name));
+
 create index if not exists billing_cloud_workspaces_member_emails_idx
   on public.billing_cloud_workspaces using gin(member_emails);
 
