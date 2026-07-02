@@ -7304,9 +7304,13 @@ function appendPartyAlias(party, alias) {
 
 function ensureImportedItem(line) {
   const hsn = normalizeLineHsn(line.hsn || DEFAULT_SALE_HSN);
-  const name = String(line.name || "Imported Purchase").trim() || "Imported Purchase";
-  const existing = state.items.find(item => item.name.toLowerCase() === name.toLowerCase() && normalizeLineHsn(item.hsn) === hsn);
-  if (existing) return existing;
+  const rawName = String(line.name || "Imported Purchase").trim() || "Imported Purchase";
+  const name = normalizeImportedItemName(rawName);
+  const existing = findImportedItemByNormalizedName(name, hsn);
+  if (existing) {
+    if (shouldRenameImportedItem(existing, name, hsn)) existing.name = name;
+    return existing;
+  }
   const item = {
     id: uid(),
     name,
@@ -7319,6 +7323,87 @@ function ensureImportedItem(line) {
   };
   state.items.push(item);
   return item;
+}
+
+function findImportedItemByNormalizedName(name, hsn) {
+  const normalizedName = normalizeForAlias(name);
+  return state.items.find(item => (
+    normalizeLineHsn(item.hsn) === hsn
+    && normalizeForAlias(item.name) === normalizedName
+  )) || state.items.find(item => (
+    normalizeLineHsn(item.hsn) === hsn
+    && normalizeForAlias(normalizeImportedItemName(item.name)) === normalizedName
+  ));
+}
+
+function shouldRenameImportedItem(item, cleanName, hsn) {
+  if (!item || !cleanName || /^imported purchase|imported item$/i.test(cleanName)) return false;
+  if (normalizeForAlias(item.name) === normalizeForAlias(cleanName)) return false;
+  const conflictingItem = state.items.find(candidate => (
+    candidate.id !== item.id
+    && normalizeLineHsn(candidate.hsn) === hsn
+    && normalizeForAlias(candidate.name) === normalizeForAlias(cleanName)
+  ));
+  return !conflictingItem && normalizeForAlias(normalizeImportedItemName(item.name)) === normalizeForAlias(cleanName);
+}
+
+function normalizeImportedItemName(value) {
+  const cleaned = cleanImportedItemNameText(value);
+  const appleName = normalizeAppleProductName(cleaned);
+  if (appleName) return appleName;
+  const generic = cleaned
+    .replace(/\s*\([^)]*(?:color|colour|clr|sku|code|ean|imei|serial|batch|hsn|gb|tb)[^)]*\)\s*/gi, " ")
+    .replace(/\s*\[[^\]]*(?:color|colour|clr|sku|code|ean|imei|serial|batch|hsn|gb|tb)[^\]]*\]\s*/gi, " ")
+    .replace(/\s+\b(?:black|white|blue|green|pink|yellow|red|purple|silver|gold|graphite|midnight|starlight|natural|titanium|orange|teal|sage|lavender)\b\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return generic || cleaned || "Imported Purchase";
+}
+
+function cleanImportedItemNameText(value) {
+  return String(value || "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/^[A-Z]{2,}\d{2,}\s*[-:]\s*/i, "")
+    .replace(/\b(?:sku|item\s*code|product\s*code|model\s*code|code|ean|imei|serial|batch)\s*[:#-]?\s*[A-Z0-9/_-]{4,}\b/gi, " ")
+    .replace(/\b(?:hsn|sac)\s*[:#-]?\s*\d{4,8}\b/gi, " ")
+    .replace(/\b\d{14,17}\b/g, " ")
+    .replace(/[|/]+/g, " ")
+    .replace(/\s*[-:]+\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeAppleProductName(value) {
+  const text = cleanImportedItemNameText(value);
+  const lower = text.toLowerCase().replace(/\bapple\b/g, " ").replace(/\s+/g, " ").trim();
+  if (!/\biphone\b|i\s*phone/i.test(lower)) return "";
+  const compact = lower.replace(/i\s*phone/g, "iphone").replace(/iphone\s*(\d)/g, "iphone $1");
+  const seriesMatch = compact.match(/\biphone\s*(se|x(?:r|s|s max)?|\d{1,2})\b/i);
+  if (!seriesMatch) return "";
+  const seriesRaw = seriesMatch[1].toUpperCase();
+  const series = seriesRaw === "SE" ? "SE" : seriesRaw.replace(/^X([R|S].*)$/i, match => match.toUpperCase());
+  const modelTail = compact.slice(seriesMatch.index);
+  const variant = normalizeAppleVariant(modelTail);
+  const storage = normalizeAppleStorage(compact);
+  return ["iPhone", series, variant, storage].filter(Boolean).join(" ");
+}
+
+function normalizeAppleVariant(value) {
+  const text = String(value || "").toLowerCase().replace(/pro\s*max|promax/g, "pro max");
+  if (/\bpro max\b/.test(text)) return "Pro Max";
+  if (/\bpro\b/.test(text)) return "Pro";
+  if (/\bplus\b/.test(text)) return "Plus";
+  if (/\bair\b/.test(text)) return "Air";
+  if (/\bmini\b/.test(text)) return "Mini";
+  return "";
+}
+
+function normalizeAppleStorage(value) {
+  const text = String(value || "").toLowerCase();
+  const match = text.match(/\b(64|128|256|512)\s*(?:gb|g)?\b|\b(1|2)\s*tb\b/);
+  if (!match) return "";
+  if (match[1]) return `${match[1]}GB`;
+  return `${match[2]}TB`;
 }
 
 window.openEntry = openEntry;
