@@ -1710,13 +1710,28 @@ async function signInWithCredentials({ email, password, button }) {
   if (!cloudClient) return toast("Login is not configured");
   if (!email || !password) return toast("Enter email and password");
   button.disabled = true;
-  const { error } = await cloudClient.auth.signInWithPassword({ email, password });
+  const { data, error } = await cloudClient.auth.signInWithPassword({ email, password });
   button.disabled = false;
   if (error) return toast(error.message);
+  await finishSuccessfulSignIn(data?.session);
   $("#cloudDialog")?.close();
   $("#appLoginPassword").value = "";
   $("#cloudPassword").value = "";
   toast("Logged in");
+}
+
+async function finishSuccessfulSignIn(session = null) {
+  if (session) cloudSession = session;
+  if (!cloudSession) {
+    const { data, error } = await cloudClient.auth.getSession();
+    if (error) return toast("Login session could not be loaded");
+    cloudSession = data.session;
+  }
+  if (!cloudSession) return;
+  passwordRecoveryMode = false;
+  forgotPasswordMode = false;
+  await loadCloudWorkspaces();
+  renderAll();
 }
 
 async function sendPasswordResetLink() {
