@@ -985,8 +985,21 @@ function defaultEntryMonth(kind, profileId = activeProfileId()) {
   return months[0] || currentMonthKey();
 }
 
+function isMobileDeviceView() {
+  return deviceViewMode === "mobile"
+    || document.documentElement.dataset.deviceView === "mobile"
+    || window.matchMedia?.("(max-width: 820px)").matches;
+}
+
+function mobilePurchaseUsesSpecificMonth(kind) {
+  return kind === "purchase" && isMobileDeviceView();
+}
+
 function selectedEntryMonth(kind) {
-  return entryMonthFilters[kind] || defaultEntryMonth(kind);
+  const selected = entryMonthFilters[kind] || defaultEntryMonth(kind);
+  return mobilePurchaseUsesSpecificMonth(kind) && selected === ALL_MONTHS_KEY
+    ? defaultEntryMonth(kind)
+    : selected;
 }
 
 function monthFilteredEntries(kind) {
@@ -997,7 +1010,11 @@ function monthFilteredEntries(kind) {
 
 function entryMonthOptions(kind) {
   const selected = selectedEntryMonth(kind);
-  return [...new Set([ALL_MONTHS_KEY, selected, currentMonthKey(), ...activeEntries(kind).map(entryMonthKey)])]
+  const entryMonths = activeEntries(kind).map(entryMonthKey);
+  const options = mobilePurchaseUsesSpecificMonth(kind)
+    ? [selected, ...entryMonths, ...(entryMonths.length ? [] : [currentMonthKey()])]
+    : [ALL_MONTHS_KEY, selected, currentMonthKey(), ...entryMonths];
+  return [...new Set(options)]
     .filter(Boolean)
     .sort((a, b) => {
       if (a === ALL_MONTHS_KEY) return -1;
