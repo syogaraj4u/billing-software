@@ -2359,15 +2359,16 @@ function setupPurchaseEwayPanel(kind, source = null) {
   if (!isPurchase) return;
   const details = normalizePurchaseEwayDetails(source?.ewayDetails || {});
   const supplier = partyById(source?.partyId) || {};
+  const supplierDefaultAddress = purchaseSupplierAddressForEway(details, supplier);
   const supplierDefaultPincode = normalizePincode(details.fromPincode)
-    || normalizePincode(extractPreferredPincode(supplier.address || supplier.place));
+    || normalizePincode(extractPreferredPincode(supplierDefaultAddress));
   form.elements.ewayTransType.value = details.transType || "1";
   form.elements.ewayTransMode.value = details.transMode || "1";
   form.elements.ewayVehicleNoEntry.value = details.vehicleNo || "";
   form.elements.ewaySupplierPincodeEntry.value = supplierDefaultPincode || "";
   form.elements.ewayDestinationPreset.innerHTML = ewayDestinationPresetOptions(details.destinationPreset);
   form.elements.ewayDestinationPreset.value = details.destinationPreset || (details.shipToAddress ? "custom" : "buyer");
-  form.elements.ewayDispatchFromAddress.value = details.dispatchFromAddress || "";
+  form.elements.ewayDispatchFromAddress.value = supplierDefaultAddress || "";
   form.elements.ewayShipToAddress.value = details.shipToAddress || "";
   form.elements.ewayDistanceKmEntry.value = details.distanceKm || "";
   form.elements.ewayTransporterName.value = details.transporterName || "";
@@ -2405,7 +2406,7 @@ function updatePurchaseEwayPanel() {
   $("#ewayDestinationPresetLabel").hidden = !ewayUsesShipTo(transType);
   $("#ewayDispatchFromLabel").hidden = !ewayUsesDispatchFrom(transType);
   $("#ewayShipToLabel").hidden = !ewayUsesShipTo(transType) || form.elements.ewayDestinationPreset.value !== "custom";
-  if (ewayUsesDispatchFrom(transType) && !form.elements.ewayDispatchFromAddress.value.trim()) {
+  if (!form.elements.ewayDispatchFromAddress.value.trim() && route.defaultFromAddress) {
     form.elements.ewayDispatchFromAddress.value = route.defaultFromAddress;
   }
   if (ewayUsesShipTo(transType) && form.elements.ewayDestinationPreset.value === "custom" && !form.elements.ewayShipToAddress.value.trim()) {
@@ -2540,11 +2541,17 @@ function ewayPresetById(id) {
   return EWAY_ADDRESS_PRESETS.find(preset => preset.id === id) || null;
 }
 
+function purchaseSupplierAddressForEway(details = {}, supplier = {}) {
+  const address = String(details.dispatchFromAddress || supplier.address || supplier.place || "").trim();
+  const pincode = normalizePincode(details.fromPincode) || normalizePincode(extractPreferredPincode(address));
+  return addressWithUpdatedPincode(address, pincode);
+}
+
 function purchaseEwayRouteFromValues(profile = {}, supplier = {}, details = {}) {
   const transType = String(details.transType || "1");
   const destinationPreset = String(details.destinationPreset || "buyer");
   const selectedPreset = ewayUsesShipTo(transType) ? ewayPresetById(destinationPreset) : null;
-  const defaultFromAddress = supplier.address || supplier.place || "";
+  const defaultFromAddress = purchaseSupplierAddressForEway(details, supplier);
   const defaultToAddress = profile.address || profile.state || "";
   const billToAddress = defaultToAddress;
   const fromAddress = ewayUsesDispatchFrom(transType)
@@ -2676,6 +2683,11 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     shipToAddress: form.elements.ewayShipToAddress.value
   });
+  const dispatchFromAddress = purchaseSupplierAddressForEway({
+    ...(entryDraftMeta.ewayDetails || {}),
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value || route.fromPincode
+  }, supplier);
   return normalizePurchaseEwayDetails({
     transType,
     transMode,
@@ -2683,7 +2695,7 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
     vehicleType: "R",
     distanceKm: num(form.elements.ewayDistanceKmEntry.value) || route.savedDistance || calculateEwayDistance(route.fromPincode, route.toPincode),
     destinationPreset: form.elements.ewayDestinationPreset.value,
-    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    dispatchFromAddress,
     shipToAddress: form.elements.ewayShipToAddress.value,
     transporterName: form.elements.ewayTransporterName.value,
     transporterId: form.elements.ewayTransporterId.value,
@@ -2888,6 +2900,14 @@ function currentPurchaseReviewSource(lines = collectLines()) {
   const form = $("#entryForm");
   const profile = profileById(form?.elements?.profileId?.value || activeProfileId());
   const party = partyById(form?.elements?.partyId?.value) || {};
+  const purchaseEwayDetails = normalizePurchaseEwayDetails({
+    ...(entryDraftMeta.ewayDetails || {}),
+    fromPincode: form?.elements?.ewaySupplierPincodeEntry?.value || entryDraftMeta.ewayDetails?.fromPincode || "",
+    destinationPreset: form?.elements?.ewayDestinationPreset?.value || entryDraftMeta.ewayDetails?.destinationPreset || "",
+    dispatchFromAddress: form?.elements?.ewayDispatchFromAddress?.value || entryDraftMeta.ewayDetails?.dispatchFromAddress || "",
+    shipToAddress: form?.elements?.ewayShipToAddress?.value || entryDraftMeta.ewayDetails?.shipToAddress || ""
+  });
+  purchaseEwayDetails.dispatchFromAddress = purchaseSupplierAddressForEway(purchaseEwayDetails, party);
   return {
     id: editingEntryId || "",
     profileId: profile.id,
@@ -2897,13 +2917,7 @@ function currentPurchaseReviewSource(lines = collectLines()) {
     lines,
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
-    ewayDetails: normalizePurchaseEwayDetails({
-      ...(entryDraftMeta.ewayDetails || {}),
-      fromPincode: form?.elements?.ewaySupplierPincodeEntry?.value || entryDraftMeta.ewayDetails?.fromPincode || "",
-      destinationPreset: form?.elements?.ewayDestinationPreset?.value || entryDraftMeta.ewayDetails?.destinationPreset || "",
-      dispatchFromAddress: form?.elements?.ewayDispatchFromAddress?.value || entryDraftMeta.ewayDetails?.dispatchFromAddress || "",
-      shipToAddress: form?.elements?.ewayShipToAddress?.value || entryDraftMeta.ewayDetails?.shipToAddress || ""
-    }),
+    ewayDetails: purchaseEwayDetails,
     roundOff: num(entryDraftMeta.roundOff),
     sellerGstin: normalizeGstin(party.gstin || entryDraftMeta.sellerGstin),
     buyerGstin: normalizeGstin(profile.gstin || entryDraftMeta.buyerGstin),
@@ -5182,7 +5196,7 @@ function buildEwayBill(entry) {
     fromAddr1: fromParts.addr1,
     fromAddr2: fromParts.addr2,
     fromPlace: fromParts.place,
-    fromPincode: fromParts.pincode || Number(fromPincode) || 0,
+    fromPincode: Number(fromPincode) || fromParts.pincode || 0,
     fromStateCode: fromStateCode || 0,
     actualFromStateCode: fromParts.actualStateCode || fromStateCode || 0,
     toGstin,
@@ -5190,7 +5204,7 @@ function buildEwayBill(entry) {
     toAddr1: toParts.addr1,
     toAddr2: toParts.addr2,
     toPlace: toParts.place,
-    toPincode: toParts.pincode || Number(toPincode) || 0,
+    toPincode: Number(toPincode) || toParts.pincode || 0,
     toStateCode: toStateCode || 0,
     actualToStateCode: toParts.actualStateCode || toStateCode || 0,
     totalValue: round2(entry.taxable),
@@ -6760,6 +6774,17 @@ function addressWithPincode(address = "", pincode = "") {
   if (!pin) return cleaned;
   if (extractPincode(cleaned)) return cleaned;
   return [cleaned, pin].filter(Boolean).join(", ");
+}
+
+function addressWithUpdatedPincode(address = "", pincode = "") {
+  const pin = normalizePincode(pincode);
+  const cleaned = String(address || "").trim().replace(/\s*,\s*/g, ", ");
+  if (!pin) return cleaned;
+  if (!cleaned) return pin;
+  const matches = [...cleaned.matchAll(/\b\d{6}\b/g)];
+  if (!matches.length) return [cleaned, pin].join(", ");
+  const last = matches[matches.length - 1];
+  return `${cleaned.slice(0, last.index)}${pin}${cleaned.slice(last.index + last[0].length)}`;
 }
 
 async function fileToBase64(file) {
