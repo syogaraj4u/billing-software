@@ -515,8 +515,8 @@ function normalizeState(value) {
   [...value.sales, ...value.purchases].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
-  value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties));
-  value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties));
+  value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties, value.items));
+  value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties, value.items));
   return value;
 }
 
@@ -760,7 +760,7 @@ function initialsAlias(value) {
   return initials.length >= 3 ? initials : "";
 }
 
-function normalizeEntryForState(entry, kind, parties = []) {
+function normalizeEntryForState(entry, kind, parties = [], items = []) {
   entry.lines = Array.isArray(entry.lines) ? entry.lines : [];
   const calculated = basicTotals(entry.lines);
   entry.taxable = num(entry.taxable) || calculated.taxable;
@@ -775,6 +775,10 @@ function normalizeEntryForState(entry, kind, parties = []) {
   entry.reviewStatus = entry.reviewStatus || (entry.reviewMessages.length ? "Needs Review" : "Ready");
   entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
   entry.rateIncludesGst = Boolean(entry.rateIncludesGst);
+  entry.lines.forEach(line => {
+    const item = items.find(row => row.id === line.itemId);
+    if (!String(line.itemName || "").trim() && item?.name) line.itemName = item.name;
+  });
   if (kind === "sale") normalizeSaleAddressSnapshots(entry, parties);
   if (kind === "purchase") {
     entry.source = entry.source || "manual";
@@ -1246,6 +1250,28 @@ function partyName(id) {
 
 function itemName(id) {
   return state.items.find(row => row.id === id)?.name || "Unknown Item";
+}
+
+function itemNameByLine(line = {}, item = null, serialNo = 0) {
+  const sourceItem = item || state.items.find(row => row.id === line.itemId) || {};
+  const storedName = String(line.itemName || line.name || line.productName || line.productDesc || "").trim();
+  const matchedItem = sourceItem.name ? sourceItem : itemByLineRate(line);
+  const fallbackName = lineHsn(line, matchedItem) === DEFAULT_SALE_HSN ? "Mobile Phone" : `Item ${serialNo || ""}`.trim();
+  return sourceItem.name || storedName || matchedItem.name || fallbackName;
+}
+
+function itemByLineRate(line = {}) {
+  const hsn = lineHsn(line);
+  const rate = num(line.rate);
+  if (!hsn || !rate) return {};
+  const candidates = state.items.filter(item => {
+    if (normalizeLineHsn(item.hsn) !== hsn) return false;
+    const purchaseRate = num(item.purchaseRate);
+    const saleRate = num(item.saleRate);
+    return amountsClose(purchaseRate, rate, Math.max(1, rate * 0.02))
+      || amountsClose(saleRate, rate, Math.max(1, rate * 0.02));
+  });
+  return candidates.length === 1 ? candidates[0] : {};
 }
 
 async function init() {
@@ -2177,9 +2203,13 @@ function partyOptions(kind, selected = "") {
   return choices.map(party => `<option value="${party.id}" ${party.id === selected ? "selected" : ""}>${escapeHtml(party.name)}</option>`).join("");
 }
 
-function itemOptions(selected = "") {
+function itemOptions(selected = "", fallbackName = "") {
   if (!state.items.length) return `<option value="">Add item first</option>`;
-  return state.items.map(item => `<option value="${item.id}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
+  const hasSelected = state.items.some(item => item.id === selected);
+  const fallbackOption = selected && !hasSelected
+    ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(fallbackName || "Saved Item")}</option>`
+    : "";
+  return `${fallbackOption}${state.items.map(item => `<option value="${item.id}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}`;
 }
 
 function openEntry(kind, id = null, draft = null) {
@@ -2942,6 +2972,7 @@ function blankLine(kind) {
   const item = state.items[0];
   return {
     itemId: item?.id || "",
+    itemName: item?.name || "",
     qty: 1,
     rate: kind === "sale" ? num(item?.saleRate) : num(item?.purchaseRate),
     gstRate: num(item?.gstRate),
@@ -3005,7 +3036,7 @@ function addLineRow(line = blankLine(entryMode)) {
   row.dataset.grossRate = num(line.grossRate) ? String(num(line.grossRate)) : "";
   row.dataset.taxableRate = num(line.rate) ? String(num(line.rate)) : "";
   row.innerHTML = `
-    <label>Item<select class="line-item">${itemOptions(line.itemId)}</select></label>
+    <label>Item<select class="line-item">${itemOptions(line.itemId, line.itemName || line.name)}</select></label>
     <label class="line-hsn-field">HSN/SAC<input class="line-hsn" inputmode="numeric" maxlength="8" value="${escapeHtml(lineInputHsn(line))}" placeholder="85171300"></label>
     <label>Qty<input class="line-qty" type="number" min="0" step="0.01" value="${num(line.qty)}"></label>
     <label>Rate<input class="line-rate" type="number" min="0" step="0.01" value="${lineInputRate(line)}"></label>
@@ -3042,15 +3073,21 @@ function addLineRow(line = blankLine(entryMode)) {
 
 function collectLines(options = {}) {
   const { normalizeRates = true } = options;
-  const lines = $$(".line-row").map(row => ({
-    itemId: row.querySelector(".line-item").value,
-    hsn: normalizeLineHsn(row.querySelector(".line-hsn")?.value || ""),
-    qty: num(row.querySelector(".line-qty").value),
-    rate: num(row.querySelector(".line-rate").value),
-    grossRate: purchaseGrossRateFromRow(row),
-    gstRate: num(row.querySelector(".line-gst").value),
-    imeiNumbers: normalizeImeiNumbers(row.querySelector(".line-imei")?.value || "")
-  })).filter(line => line.itemId && line.qty > 0);
+  const lines = $$(".line-row").map(row => {
+    const itemId = row.querySelector(".line-item").value;
+    const item = state.items.find(candidate => candidate.id === itemId) || {};
+    const selectedName = row.querySelector(".line-item").selectedOptions?.[0]?.textContent?.trim() || "";
+    return {
+      itemId,
+      itemName: item.name || selectedName,
+      hsn: normalizeLineHsn(row.querySelector(".line-hsn")?.value || ""),
+      qty: num(row.querySelector(".line-qty").value),
+      rate: num(row.querySelector(".line-rate").value),
+      grossRate: purchaseGrossRateFromRow(row),
+      gstRate: num(row.querySelector(".line-gst").value),
+      imeiNumbers: normalizeImeiNumbers(row.querySelector(".line-imei")?.value || "")
+    };
+  }).filter(line => line.itemId && line.qty > 0);
   return normalizeRates ? lines.map(normalizeLineRateForEntry) : lines;
 }
 
@@ -5119,7 +5156,7 @@ function ewayItem(line, serialNo, taxMode) {
   const taxable = lineTaxableAmount(line);
   const gstRate = num(line.gstRate);
   const imeis = imeiNumbersFromText(line.imeiNumbers);
-  const name = item.name || itemName(line.itemId);
+  const name = itemNameByLine(line, item, serialNo);
   return {
     itemNo: serialNo,
     productName: name,
@@ -6162,6 +6199,7 @@ function buildChatSaleDraft(parsed, sourceMessage) {
     const item = ensureChatItem(line);
     return {
       itemId: item.id,
+      itemName: item.name || line.name || "",
       qty: num(line.qty) || 1,
       rate: num(line.rate),
       gstRate: num(line.gstRate)
@@ -7016,6 +7054,7 @@ function buildPurchaseDraft(parsed) {
     const item = ensureImportedItem(line);
     return {
       itemId: item.id,
+      itemName: item.name || line.name || "",
       qty: num(line.qty) || 1,
       rate: num(line.rate),
       grossRate: num(line.grossRate),
