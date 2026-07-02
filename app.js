@@ -2878,14 +2878,20 @@ function purchaseReviewCard(title, main, detail, extra) {
 
 function purchaseRoundOffForSource(source = {}, calculated = {}) {
   const explicitRoundOff = num(source?.roundOff);
-  if (Math.abs(explicitRoundOff) >= 0.01) return round2(explicitRoundOff);
+  const extractedAdjustment = purchaseExtractedRoundOffForSource(source, calculated);
+  if (Math.abs(explicitRoundOff) >= 0.01) return round2(explicitRoundOff + extractedAdjustment);
+  if (Math.abs(extractedAdjustment) >= 0.01) return extractedAdjustment;
+  const roundedAdjustment = round2(Math.round(num(calculated.total)) - num(calculated.total));
+  return Math.abs(roundedAdjustment) >= 0.01 ? roundedAdjustment : 0;
+}
+
+function purchaseExtractedRoundOffForSource(source = {}, calculated = {}) {
   const extractedTotal = num(source?.extractedTaxes?.total);
   if (extractedTotal) {
     const adjustment = round2(extractedTotal - num(calculated.total));
     return Math.abs(adjustment) <= 1 && Math.abs(adjustment) >= 0.01 ? adjustment : 0;
   }
-  const roundedAdjustment = round2(Math.round(num(calculated.total)) - num(calculated.total));
-  return Math.abs(roundedAdjustment) >= 0.01 ? roundedAdjustment : 0;
+  return 0;
 }
 
 function purchaseTotalWithRoundOff(calculated = {}, roundOff = 0) {

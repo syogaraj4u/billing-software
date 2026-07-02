@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v120";
+const CACHE_NAME = "billing-software-v121";
 const APP_ASSETS = [
   "./",
   "./index.html",
