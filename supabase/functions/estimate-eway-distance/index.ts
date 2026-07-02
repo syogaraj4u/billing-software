@@ -15,6 +15,11 @@ const distanceSchema = {
   }
 };
 
+const specialDistanceKm: Record<string, number> = {
+  "631001-517501": 80,
+  "517501-631001": 80
+};
+
 Deno.serve(async request => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -37,6 +42,10 @@ Deno.serve(async request => {
 
     if (fromPincode && toPincode && String(fromPincode) === String(toPincode)) {
       return json({ distanceKm: 2, confidence: "high", reason: "Same pincode default" });
+    }
+    const specialDistance = fixedRouteDistance(fromPincode, toPincode);
+    if (specialDistance) {
+      return json({ distanceKm: specialDistance, confidence: "high", reason: "Configured route distance" });
     }
 
     const response = await callOpenAI(apiKey, model, {
@@ -89,6 +98,12 @@ Deno.serve(async request => {
     return json({ error: publicOpenAIError(error) }, 500);
   }
 });
+
+function fixedRouteDistance(fromPincode: unknown, toPincode: unknown) {
+  const fromPin = String(fromPincode || "").replace(/\D/g, "");
+  const toPin = String(toPincode || "").replace(/\D/g, "");
+  return specialDistanceKm[`${fromPin}-${toPin}`] || 0;
+}
 
 async function callOpenAI(apiKey: string, model: string, body: Record<string, unknown>) {
   const response = await fetch("https://api.openai.com/v1/responses", {

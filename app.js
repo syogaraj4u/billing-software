@@ -59,7 +59,9 @@ const EWAY_SPECIAL_DISTANCE_KM = {
   "625516-600021": 545,
   "600021-625516": 545,
   "532222-600021": 981,
-  "600021-532222": 981
+  "600021-532222": 981,
+  "631001-517501": 80,
+  "517501-631001": 80
 };
 
 const EWAY_PINCODE_COORDS = {
@@ -2351,6 +2353,13 @@ function updatePurchaseEwayPanel() {
 function applyEwayDistanceSuggestion(route, form) {
   const distanceInput = form.elements.ewayDistanceKmEntry;
   const routeKey = ewayDistanceEstimateRouteKey(route);
+  const fixedRouteDistance = fixedEwayRouteDistance(route.fromPincode, route.toPincode);
+  if (fixedRouteDistance && num(distanceInput.value) !== fixedRouteDistance) {
+    clearTimeout(ewayDistanceEstimateTimer);
+    distanceInput.value = fixedRouteDistance;
+    distanceInput.dataset.autoRouteKey = routeKey;
+    return;
+  }
   if (num(distanceInput.value) && distanceInput.dataset.autoRouteKey && distanceInput.dataset.autoRouteKey !== routeKey) {
     distanceInput.value = "";
     distanceInput.dataset.autoRouteKey = "";
@@ -2391,12 +2400,18 @@ function calculateEwayDistance(fromPincode, toPincode) {
   const toPin = Number(String(toPincode || "").replace(/\D/g, ""));
   if (!fromPin || !toPin) return 0;
   if (fromPin === toPin) return 2;
-  const special = EWAY_SPECIAL_DISTANCE_KM[`${fromPin}-${toPin}`];
+  const special = fixedEwayRouteDistance(fromPin, toPin);
   if (special) return special;
   const coordA = EWAY_PINCODE_COORDS[fromPin];
   const coordB = EWAY_PINCODE_COORDS[toPin];
   if (coordA && coordB) return Math.round(haversineKm(coordA, coordB) * 1.18);
   return estimateDistanceFromPinCodes(fromPin, toPin);
+}
+
+function fixedEwayRouteDistance(fromPincode, toPincode) {
+  const fromPin = Number(String(fromPincode || "").replace(/\D/g, ""));
+  const toPin = Number(String(toPincode || "").replace(/\D/g, ""));
+  return EWAY_SPECIAL_DISTANCE_KM[`${fromPin}-${toPin}`] || 0;
 }
 
 function haversineKm(a, b) {
@@ -5044,7 +5059,7 @@ function buildEwayBill(entry) {
   const toPincode = route.toPincode || extractPincode(profile.address);
   const fromParts = ewayAddressParts(route.fromAddress || supplier.address || supplier.place, null, supplier.place, fromStateCode);
   const toParts = ewayAddressParts(route.toAddress || profile.address, route.destinationPresetData, profile.state, toStateCode);
-  const distanceKm = ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey) || calculateEwayDistance(fromPincode, toPincode);
+  const distanceKm = fixedEwayRouteDistance(fromPincode, toPincode) || ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey) || calculateEwayDistance(fromPincode, toPincode);
   const otherValue = ewayEntryOtherValue(entry);
   const bill = {
     userGstin: toGstin,
