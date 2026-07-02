@@ -1310,7 +1310,7 @@ function bindEvents() {
   $$("[data-view-link]").forEach(button => button.addEventListener("click", () => showView(button.dataset.viewLink)));
   $$("[data-close-dialog]").forEach(button => button.addEventListener("click", () => closeDialog(button.dataset.closeDialog)));
   $("#dashboardSaleEntryBtn").addEventListener("click", () => openEntry("sale"));
-  $("#dashboardPurchaseEntryBtn").addEventListener("click", () => openEntry("purchase"));
+  $("#dashboardPurchaseEntryBtn").addEventListener("click", openPurchaseInvoiceUpload);
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
   $("#salesMonthFilter").addEventListener("change", event => {
     entryMonthFilters.sale = event.target.value;
@@ -1395,6 +1395,13 @@ function bindEvents() {
     renderReport();
   }));
   window.addEventListener("popstate", closeChatBillOnBack);
+}
+
+function openPurchaseInvoiceUpload() {
+  showView("purchases");
+  const input = $("#purchaseInvoiceInput");
+  if (!input) return toast("Upload invoice option is not available");
+  input.click();
 }
 
 function showView(view) {
