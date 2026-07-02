@@ -1605,7 +1605,7 @@ function renderCloudUi() {
   $("#cloudSignedIn").hidden = !configured || !signedIn;
   $("#cloudUserEmail").textContent = email;
   $("#cloudWorkspaceSelect").innerHTML = cloudWorkspaces.map(workspace => `
-    <option value="${workspace.id}" ${workspace.id === cloudWorkspace?.id ? "selected" : ""}>${escapeHtml(workspace.name)}</option>
+    <option value="${workspace.id}" ${workspace.id === cloudWorkspace?.id ? "selected" : ""}>${escapeHtml(cloudWorkspaceOptionLabel(workspace))}</option>
   `).join("");
   $("#cloudWorkspaceName").value = cloudWorkspace?.name || "";
   $("#cloudMemberEmails").value = (cloudWorkspace?.member_emails || []).join("\n");
@@ -1738,8 +1738,50 @@ async function loadCloudWorkspaces() {
     return;
   }
   const savedId = localStorage.getItem(CLOUD_SELECTED_WORKSPACE_KEY);
-  const workspace = cloudWorkspaces.find(row => row.id === savedId) || cloudWorkspaces[0];
+  const savedWorkspace = cloudWorkspaces.find(row => row.id === savedId);
+  const workspace = preferredCloudWorkspace(cloudWorkspaces, savedWorkspace);
   applyCloudWorkspace(workspace, "Cloud data loaded");
+}
+
+function preferredCloudWorkspace(workspaces = [], savedWorkspace = null) {
+  const bestWorkspace = bestCloudWorkspace(workspaces);
+  if (!savedWorkspace) return bestWorkspace || workspaces[0];
+  const savedCounts = cloudWorkspaceCounts(savedWorkspace);
+  const bestCounts = cloudWorkspaceCounts(bestWorkspace);
+  const savedHasEntries = savedCounts.sales > 0 || savedCounts.purchases > 0;
+  const bestHasEntries = bestCounts.sales > 0 || bestCounts.purchases > 0;
+  return !savedHasEntries && bestHasEntries ? bestWorkspace : savedWorkspace;
+}
+
+function bestCloudWorkspace(workspaces = []) {
+  return [...workspaces].sort((a, b) => {
+    const scoreDiff = cloudWorkspaceScore(b) - cloudWorkspaceScore(a);
+    if (scoreDiff) return scoreDiff;
+    return String(b?.updated_at || "").localeCompare(String(a?.updated_at || ""));
+  })[0] || null;
+}
+
+function cloudWorkspaceScore(workspace = {}) {
+  const counts = cloudWorkspaceCounts(workspace);
+  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.parties * 10) + counts.items;
+}
+
+function cloudWorkspaceCounts(workspace = {}) {
+  const data = workspace?.data || {};
+  return {
+    sales: Array.isArray(data.sales) ? data.sales.length : 0,
+    purchases: Array.isArray(data.purchases) ? data.purchases.length : 0,
+    parties: Array.isArray(data.parties) ? data.parties.length : 0,
+    items: Array.isArray(data.items) ? data.items.length : 0
+  };
+}
+
+function cloudWorkspaceOptionLabel(workspace = {}) {
+  const counts = cloudWorkspaceCounts(workspace);
+  const detail = counts.purchases || counts.sales
+    ? ` - ${counts.purchases} purchases, ${counts.sales} sales`
+    : " - empty";
+  return `${workspace.name || "Workspace"}${detail}`;
 }
 
 async function createCloudWorkspace(name) {
@@ -1771,7 +1813,7 @@ function applyCloudWorkspace(workspace, message) {
   state = merged.state;
   saveState({ skipCloud: true, skipLocalBackup: true });
   renderAll();
-  if (merged.changed) scheduleCloudSave();
+  if (merged.changed) syncCloudNow(false);
   if (message) toast(merged.changed ? `${message}. Local saved entries kept.` : message);
 }
 
@@ -1820,7 +1862,7 @@ function scheduleCloudSave() {
 async function syncCloudNow(showToast) {
   if (!cloudClient || !cloudSession || !cloudWorkspace) {
     if (showToast) toast("Sign in to sync cloud data");
-    return;
+    return false;
   }
   clearTimeout(cloudSyncTimer);
   const { data, error } = await cloudClient
@@ -1835,12 +1877,13 @@ async function syncCloudNow(showToast) {
   if (error) {
     if (showToast) toast(error.message);
     else toast("Cloud sync failed");
-    return;
+    return false;
   }
   cloudWorkspace = data;
   cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
   renderCloudUi();
   if (showToast) toast("Cloud synced");
+  return true;
 }
 
 function renderDashboard() {
@@ -1889,12 +1932,29 @@ function renderEntries(kind) {
   `;
   }).join("");
   const emptyColspan = kind === "sale" ? 9 : 10;
-  const emptyLabel = kind === "sale"
-    ? `No sales entries for ${monthLabel(selectedEntryMonth(kind))}`
-    : `No purchase entries for ${monthLabel(selectedEntryMonth(kind))}`;
+  const emptyLabel = emptyEntriesLabel(kind, allEntries.length);
   const filterNote = entryMonthFilterNote(kind, entries.length, allEntries.length, emptyColspan);
   $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
   if (kind === "purchase") bindPurchaseSelectors();
+}
+
+function emptyEntriesLabel(kind, activeCount = activeEntries(kind).length) {
+  const label = kind === "sale" ? "sales entries" : "purchase entries";
+  const selectedMonthLabel = monthLabel(selectedEntryMonth(kind));
+  const totalAcrossCompanies = entryList(kind).length;
+  if (!activeCount && totalAcrossCompanies > 0) {
+    return `No ${label} under ${profileName(activeProfileId())}. ${totalAcrossCompanies} ${label} are saved under other GST companies. Select the correct GST company.`;
+  }
+  if (kind === "purchase" && !totalAcrossCompanies && cloudWorkspaces.length > 1) {
+    const bestWorkspace = bestCloudWorkspace(cloudWorkspaces);
+    const bestCounts = cloudWorkspaceCounts(bestWorkspace);
+    if (bestWorkspace?.id && bestWorkspace.id !== cloudWorkspace?.id && bestCounts.purchases > 0) {
+      return `No purchases in ${cloudWorkspace?.name || "this workspace"}. ${bestWorkspace.name || "another workspace"} has ${bestCounts.purchases} purchases. Open Cloud and select that workspace.`;
+    }
+  }
+  return kind === "sale"
+    ? `No sales entries for ${selectedMonthLabel}`
+    : `No purchase entries for ${selectedMonthLabel}`;
 }
 
 function entryMonthFilterNote(kind, visibleCount, totalCount, colspan) {
@@ -3168,7 +3228,7 @@ function duplicatePurchaseInvoiceMessage(duplicate) {
   return `Duplicate purchase invoice warning: ${supplierName} invoice ${invoiceNo} already exists on ${date} under ${profileLabel}.`;
 }
 
-function saveEntry(event) {
+async function saveEntry(event) {
   event.preventDefault();
   const form = $("#entryForm");
   const existingEntry = editingEntryId ? entryList(entryMode).find(row => row.id === editingEntryId) : null;
@@ -3270,8 +3330,13 @@ function saveEntry(event) {
   saveState();
   $("#entryDialog").close();
   renderAll();
-  toast(entryMode === "sale" ? "Sale saved" : "Purchase saved");
-  if (entryMode === "purchase") processQueuedPurchaseInvoiceUpload();
+  if (entryMode === "purchase") {
+    const synced = await syncCloudNow(false);
+    toast(synced ? "Purchase saved and synced" : "Purchase saved locally. Cloud sync failed");
+    processQueuedPurchaseInvoiceUpload();
+  } else {
+    toast("Sale saved");
+  }
 }
 
 function deleteEntry(kind, id) {
