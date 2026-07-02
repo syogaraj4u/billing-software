@@ -401,6 +401,7 @@ let cloudWorkspaces = [];
 let cloudWorkspace = null;
 let cloudLoading = false;
 let cloudSyncTimer = null;
+let cloudWorkspaceAutoSwitchPending = "";
 let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
@@ -1763,11 +1764,9 @@ async function loadCloudWorkspaces() {
 function preferredCloudWorkspace(workspaces = [], savedWorkspace = null) {
   const bestWorkspace = bestCloudWorkspace(workspaces);
   if (!savedWorkspace) return bestWorkspace || workspaces[0];
-  const savedCounts = cloudWorkspaceCounts(savedWorkspace);
-  const bestCounts = cloudWorkspaceCounts(bestWorkspace);
-  const savedHasEntries = savedCounts.sales > 0 || savedCounts.purchases > 0;
-  const bestHasEntries = bestCounts.sales > 0 || bestCounts.purchases > 0;
-  return !savedHasEntries && bestHasEntries ? bestWorkspace : savedWorkspace;
+  const savedScore = cloudWorkspaceScore(savedWorkspace);
+  const bestScore = cloudWorkspaceScore(bestWorkspace);
+  return bestWorkspace && bestScore > savedScore ? bestWorkspace : savedWorkspace;
 }
 
 function bestCloudWorkspace(workspaces = []) {
@@ -1799,6 +1798,26 @@ function cloudWorkspaceOptionLabel(workspace = {}) {
     ? ` - ${counts.purchases} purchases, ${counts.sales} sales`
     : " - empty";
   return `${workspace.name || "Workspace"}${detail}`;
+}
+
+function bestPurchaseWorkspace() {
+  const bestWorkspace = bestCloudWorkspace(cloudWorkspaces);
+  const currentCounts = cloudWorkspaceCounts(cloudWorkspace);
+  const bestCounts = cloudWorkspaceCounts(bestWorkspace);
+  if (!bestWorkspace?.id || bestWorkspace.id === cloudWorkspace?.id) return null;
+  return bestCounts.purchases > currentCounts.purchases && bestCounts.purchases > 0 ? bestWorkspace : null;
+}
+
+function maybeSwitchToPurchaseWorkspace() {
+  if (!cloudSession || !cloudWorkspace || !cloudWorkspaces.length || entryList("purchase").length) return false;
+  const workspace = bestPurchaseWorkspace();
+  if (!workspace || cloudWorkspaceAutoSwitchPending === workspace.id) return false;
+  cloudWorkspaceAutoSwitchPending = workspace.id;
+  setTimeout(() => {
+    cloudWorkspaceAutoSwitchPending = "";
+    if (cloudWorkspace?.id !== workspace.id) applyCloudWorkspace(workspace, "Purchase workspace loaded");
+  }, 0);
+  return true;
 }
 
 async function createCloudWorkspace(name) {
@@ -1911,6 +1930,11 @@ function renderEntries(kind) {
   renderEntryMonthFilter(kind);
   const entries = monthFilteredEntries(kind);
   const allEntries = activeEntries(kind);
+  const emptyColspan = kind === "sale" ? 9 : 10;
+  if (kind === "purchase" && maybeSwitchToPurchaseWorkspace()) {
+    $("#purchaseRows").innerHTML = emptyRow(emptyColspan, "Loading saved purchases from the correct workspace...");
+    return;
+  }
   if (kind === "purchase") {
     const visibleIds = new Set(entries.map(entry => entry.id));
     selectedPurchaseIds = new Set([...selectedPurchaseIds].filter(id => visibleIds.has(id)));
@@ -1948,7 +1972,6 @@ function renderEntries(kind) {
     </tr>
   `;
   }).join("");
-  const emptyColspan = kind === "sale" ? 9 : 10;
   const emptyLabel = emptyEntriesLabel(kind, allEntries.length);
   const filterNote = entryMonthFilterNote(kind, entries.length, allEntries.length, emptyColspan);
   $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
@@ -1966,7 +1989,11 @@ function emptyEntriesLabel(kind, activeCount = activeEntries(kind).length) {
     const bestWorkspace = bestCloudWorkspace(cloudWorkspaces);
     const bestCounts = cloudWorkspaceCounts(bestWorkspace);
     if (bestWorkspace?.id && bestWorkspace.id !== cloudWorkspace?.id && bestCounts.purchases > 0) {
-      return `No purchases in ${cloudWorkspace?.name || "this workspace"}. ${bestWorkspace.name || "another workspace"} has ${bestCounts.purchases} purchases. Open Cloud and select that workspace.`;
+      const currentName = cloudWorkspace?.name || "this workspace";
+      const bestName = bestWorkspace.name && bestWorkspace.name !== currentName
+        ? bestWorkspace.name
+        : `another ${currentName} workspace`;
+      return `No purchases in ${currentName}. ${bestName} has ${bestCounts.purchases} purchases. Loading that workspace...`;
     }
   }
   return kind === "sale"
