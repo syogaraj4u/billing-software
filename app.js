@@ -3009,7 +3009,7 @@ function lineInputRate(line = {}) {
 
 function lineInputHsn(line = {}) {
   const item = state.items.find(row => row.id === line.itemId) || {};
-  return String(line.hsn || item.hsn || "").trim();
+  return String(line.hsn || item.hsn || DEFAULT_SALE_HSN).trim();
 }
 
 function normalizeLineRateForEntry(line = {}) {
@@ -3049,7 +3049,7 @@ function addLineRow(line = blankLine(entryMode)) {
     const item = state.items.find(candidate => candidate.id === event.target.value);
     row.dataset.grossRate = "";
     row.dataset.taxableRate = "";
-    row.querySelector(".line-hsn").value = String(item?.hsn || "");
+    row.querySelector(".line-hsn").value = String(item?.hsn || DEFAULT_SALE_HSN);
     row.querySelector(".line-rate").value = entryMode === "sale" ? num(item?.saleRate) : num(item?.purchaseRate);
     row.querySelector(".line-gst").value = num(item?.gstRate);
     updateEntryTotals();
@@ -3080,7 +3080,7 @@ function collectLines(options = {}) {
     return {
       itemId,
       itemName: item.name || selectedName,
-      hsn: normalizeLineHsn(row.querySelector(".line-hsn")?.value || ""),
+      hsn: normalizeLineHsn(row.querySelector(".line-hsn")?.value || DEFAULT_SALE_HSN),
       qty: num(row.querySelector(".line-qty").value),
       rate: num(row.querySelector(".line-rate").value),
       grossRate: purchaseGrossRateFromRow(row),
@@ -3097,12 +3097,12 @@ function normalizeLineHsn(value) {
 
 function lineHsn(line = {}, item = null) {
   const sourceItem = item || state.items.find(row => row.id === line.itemId) || {};
-  return normalizeLineHsn(line.hsn || sourceItem.hsn || "");
+  return normalizeLineHsn(line.hsn || sourceItem.hsn || DEFAULT_SALE_HSN);
 }
 
 function applyLineHsnToItems(lines = []) {
   lines.forEach(line => {
-    const hsn = normalizeLineHsn(line.hsn);
+    const hsn = lineHsn(line);
     if (!hsn) return;
     const item = state.items.find(row => row.id === line.itemId);
     if (item && normalizeLineHsn(item.hsn) !== hsn) item.hsn = hsn;
@@ -6257,7 +6257,7 @@ function ensureChatItem(line) {
   const item = {
     id: uid(),
     name: line.name || "Smart Bill Item",
-    hsn: line.hsn || "",
+    hsn: line.hsn || DEFAULT_SALE_HSN,
     gstRate: num(line.gstRate) || 18,
     saleRate: num(line.rate),
     purchaseRate: 0,
@@ -6679,7 +6679,7 @@ function buildManualReviewPurchase(file, message) {
     reviewMessages: [message],
     lines: [{
       name: "Imported Purchase",
-      hsn: "",
+      hsn: DEFAULT_SALE_HSN,
       qty: 1,
       rate: 0,
       gstRate: 18
@@ -6760,7 +6760,7 @@ function parsePurchaseInvoiceText(text, fileName) {
     reviewMessages,
     lines: parsedLines.length ? parsedLines : [{
       name: "Imported Purchase",
-      hsn: "",
+      hsn: DEFAULT_SALE_HSN,
       qty: 1,
       rate: fallbackTaxable,
       gstRate: inferGstRate(fallbackTaxable, amounts.gst)
@@ -7124,12 +7124,14 @@ function appendPartyAlias(party, alias) {
 }
 
 function ensureImportedItem(line) {
-  const existing = state.items.find(item => item.name.toLowerCase() === line.name.toLowerCase() && item.hsn === line.hsn);
+  const hsn = normalizeLineHsn(line.hsn || DEFAULT_SALE_HSN);
+  const name = String(line.name || "Imported Purchase").trim() || "Imported Purchase";
+  const existing = state.items.find(item => item.name.toLowerCase() === name.toLowerCase() && normalizeLineHsn(item.hsn) === hsn);
   if (existing) return existing;
   const item = {
     id: uid(),
-    name: line.name || "Imported Purchase",
-    hsn: line.hsn || "",
+    name,
+    hsn,
     gstRate: num(line.gstRate),
     saleRate: num(line.rate),
     purchaseRate: num(line.rate),
