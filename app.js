@@ -404,7 +404,7 @@ let cloudSyncTimer = null;
 let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
-let entryMonthFilters = { sale: currentMonthKey(), purchase: currentMonthKey() };
+let entryMonthFilters = {};
 let purchaseUploadQueue = [];
 let purchaseUploadBusy = false;
 let entryDraftMeta = {};
@@ -976,8 +976,17 @@ function activeEntries(kind) {
   return entryList(kind).filter(entry => entry.profileId === activeProfileId());
 }
 
+function defaultEntryMonth(kind, profileId = activeProfileId()) {
+  const months = entryList(kind)
+    .filter(entry => entry.profileId === profileId)
+    .map(entryMonthKey)
+    .filter(Boolean)
+    .sort((a, b) => b.localeCompare(a));
+  return months[0] || currentMonthKey();
+}
+
 function selectedEntryMonth(kind) {
-  return entryMonthFilters[kind] || currentMonthKey();
+  return entryMonthFilters[kind] || defaultEntryMonth(kind);
 }
 
 function monthFilteredEntries(kind) {
@@ -1432,6 +1441,10 @@ function selectCompany(profileId) {
   if (!profile) return;
   const shouldSlide = companySelectionOpen && canSlideCompanyPages();
   state.settings.activeProfileId = profileId;
+  entryMonthFilters = {
+    sale: defaultEntryMonth("sale", profileId),
+    purchase: defaultEntryMonth("purchase", profileId)
+  };
   selectedPurchaseIds.clear();
   saveState();
   if (shouldSlide) {
