@@ -4232,13 +4232,13 @@ function purchaseOrderTaxSummary(entry) {
   </table>`;
 }
 
-function purchaseOrderTermsMarkup(entry) {
-  const customTerms = String(entry.notes || "")
+function purchaseOrderTermsList(entry) {
+  const customTerms = String(entry?.notes || "")
     .split(/\r?\n/)
     .filter(line => /^term\s*\d*\s*[:=-]/i.test(line))
     .map(line => line.replace(/^term\s*\d*\s*[:=-]\s*/i, "").trim())
     .filter(Boolean);
-  const terms = customTerms.length ? customTerms : [
+  return customTerms.length ? customTerms : [
     "Following documents required during Dispatch of goods: GST Invoice, IMEI List, Eway bill, L.R Copy / Docket Copy, and corresponding PO Acceptance with Sign & Stamp.",
     "We will accept only clean, sealed, and non damage stock.",
     "Penalty per pcs will be charged if supplier fails to fulfill this deal for any reason whatsoever.",
@@ -4246,6 +4246,10 @@ function purchaseOrderTermsMarkup(entry) {
     "The supplier must follow all compliances under GST law at all time.",
     "By accepting this PO the supplier declares that all terms and conditions mentioned in the PO will be strictly adhered to."
   ];
+}
+
+function purchaseOrderTermsMarkup(entry) {
+  const terms = purchaseOrderTermsList(entry);
   return `<ol>${terms.map(term => `<li>${escapeHtml(term)}</li>`).join("")}</ol>`;
 }
 
@@ -4671,6 +4675,10 @@ class InvoiceVectorPdf {
 }
 
 function renderInvoiceVectorPdf(pdf, context) {
+  if (context?.documentKind === "po") {
+    renderPurchaseOrderVectorPdf(pdf, context);
+    return;
+  }
   const details = invoicePdfDetails(context);
   const layout = invoicePdfLayout(pdf);
   let y = renderInvoicePdfPageHeader(pdf, details, layout, false, true);
@@ -4678,6 +4686,292 @@ function renderInvoiceVectorPdf(pdf, context) {
   y = ensureInvoicePdfSpace(pdf, details, layout, y, 94, false);
   y = renderInvoicePdfTotals(pdf, details, layout, y);
   renderInvoicePdfFooters(pdf, layout);
+}
+
+function renderPurchaseOrderVectorPdf(pdf, context) {
+  const details = invoicePdfDetails(context);
+  const poDetails = purchaseOrderTemplateDetails(details.entry, details.party, details.settings);
+  details.poDetails = poDetails;
+  const layout = invoicePdfLayout(pdf);
+  let y = renderPurchaseOrderPdfHeader(pdf, details, layout, false);
+  y = renderPurchaseOrderPdfItems(pdf, details, layout, y);
+  y = renderPurchaseOrderPdfTotalsAndTerms(pdf, details, layout, y);
+  renderPurchaseOrderPdfFooters(pdf, layout);
+}
+
+function renderPurchaseOrderPdfHeader(pdf, details, layout, continued = false) {
+  const { margin, contentWidth, pageWidth } = layout;
+  const po = details.poDetails;
+  pdf.setTextColor(10, 10, 10);
+  pdf.setDrawColor(10, 10, 10);
+  pdf.setLineWidth(0.25);
+  let y = margin;
+  pdf.rect(margin, y, contentWidth, continued ? 26 : 112);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(continued ? 11 : 9);
+  pdf.text(`GSTIN : ${pdfClean(details.settings.gstin || "-")}`, margin + 3, y + 6);
+  pdf.setFontSize(continued ? 13 : 11);
+  pdf.text("Purchase Order", pageWidth / 2, y + 8, { align: "center" });
+  pdf.setFontSize(continued ? 11 : 15);
+  pdf.text(pdfClean(po.companyName || details.sellerName), pageWidth / 2, y + (continued ? 16 : 18), { align: "center" });
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(continued ? 7 : 8);
+  if (continued) {
+    pdf.text(`PO No.: ${pdfClean(details.entry.number || "-")}  |  Date: ${pdfClean(formatInvoiceDate(details.entry.date) || "-")}`, pageWidth / 2, y + 23, { align: "center" });
+    return y + 31;
+  }
+  pdf.text(pdfWrap(pdf, po.companyAddress || "-", 94, 2), pageWidth / 2, y + 24, { align: "center" });
+  pdf.text(`PAN : ${pdfClean(po.companyPan || "-")}`, pageWidth / 2, y + 34, { align: "center" });
+  pdf.text(`email : ${pdfClean(details.settings.email || "-")}`, pageWidth / 2, y + 39, { align: "center" });
+  y += 45;
+  const boxWidth = contentWidth / 2;
+  pdf.line(margin, y, margin + contentWidth, y);
+  pdf.line(margin + boxWidth, y, margin + boxWidth, margin + 112);
+  drawPurchaseOrderPdfPartyBox(pdf, details, margin + 2, y + 3, boxWidth - 4, 38);
+  drawPurchaseOrderPdfOrderBox(pdf, details, margin + boxWidth + 2, y + 3, boxWidth - 4, 38);
+  return margin + 116;
+}
+
+function drawPurchaseOrderPdfPartyBox(pdf, details, x, y, w, h) {
+  const po = details.poDetails;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(9);
+  pdf.text("Party Details :", x, y + 4);
+  pdf.setFontSize(8);
+  pdf.text(pdfWrap(pdf, details.party.name || "-", w - 2, 2), x, y + 10);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(6.8);
+  pdf.text(pdfWrap(pdf, po.supplierAddress || "-", w - 2, 3), x, y + 18);
+  const rows = [
+    ["Party PAN", po.supplierPan],
+    ["Party E-Mail ID", details.party.email],
+    ["Party Mobile No", details.party.phone],
+    ["Party State", po.supplierState],
+    ["GSTIN / UIN", details.party.gstin]
+  ];
+  drawPurchaseOrderPdfFieldRows(pdf, rows, x, y + 31, w);
+}
+
+function drawPurchaseOrderPdfOrderBox(pdf, details, x, y, w, h) {
+  const po = details.poDetails;
+  const rows = [
+    ["Order No.", details.entry.number],
+    ["Dated", formatInvoiceDate(details.entry.date)],
+    ["Terms of Payment", po.paymentTerms],
+    ["Delivery Terms", po.deliveryTerms],
+    ["Pickup Date", po.pickupDate],
+    ["Delivery Date", po.deliveryDate],
+    ["Dispatch from City", po.dispatchCity],
+    ["Destination City", po.destinationCity],
+    ["Bank", po.bankName],
+    ["Account No.", po.accountNumber],
+    ["IFSC Code", po.ifsc]
+  ];
+  drawPurchaseOrderPdfFieldRows(pdf, rows, x, y + 2, w);
+}
+
+function drawPurchaseOrderPdfFieldRows(pdf, rows, x, y, w) {
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(6.5);
+  rows.forEach((row, index) => {
+    const rowY = y + index * 4.2;
+    pdf.text(pdfClean(row[0]), x, rowY);
+    pdf.text(":", x + 28, rowY);
+    pdf.setFont("helvetica", "bold");
+    pdf.text(pdfWrap(pdf, row[1] || "", w - 34, 1), x + 32, rowY);
+    pdf.setFont("helvetica", "normal");
+  });
+}
+
+function purchaseOrderPdfColumns(layout) {
+  const widths = [10, 62, 22, 22, 16, 12, 22, 24];
+  let x = layout.margin;
+  return [
+    ["sn", "S.N.", "right"],
+    ["desc", "Description of Goods", "left"],
+    ["origin", "Country of Origin", "left"],
+    ["hsn", "HSN Code", "left"],
+    ["qty", "Qty.", "right"],
+    ["unit", "Unit", "center"],
+    ["price", "Price\n(Tax Inc.)", "right"],
+    ["amount", "Amount (Rs.)\n(Tax Inc.)", "right"]
+  ].map((column, index) => {
+    const result = { key: column[0], label: column[1], align: column[2], x, w: widths[index] };
+    x += widths[index];
+    return result;
+  });
+}
+
+function renderPurchaseOrderPdfItemHeader(pdf, layout, y) {
+  const columns = purchaseOrderPdfColumns(layout);
+  const h = 11;
+  pdf.setFillColor(242, 242, 242);
+  pdf.setDrawColor(10, 10, 10);
+  pdf.rect(layout.margin, y, layout.contentWidth, h, "FD");
+  columns.slice(1).forEach(col => pdf.line(col.x, y, col.x, y + h));
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(6.4);
+  columns.forEach(col => {
+    const tx = col.align === "right" ? col.x + col.w - 1.2 : col.align === "center" ? col.x + col.w / 2 : col.x + 1.2;
+    pdf.text(col.label.split("\n"), tx, y + 4.3, { align: col.align });
+  });
+  return y + h;
+}
+
+function renderPurchaseOrderPdfItems(pdf, details, layout, startY) {
+  let y = renderPurchaseOrderPdfItemHeader(pdf, layout, startY);
+  details.entry.lines.forEach((line, index) => {
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    const row = purchaseOrderPdfLineRow(line, item, index);
+    const descLines = pdfWrap(pdf, row.desc, 58, 8);
+    const rowHeight = Math.max(9, descLines.length * 3.4 + 5);
+    y = ensurePurchaseOrderPdfSpace(pdf, details, layout, y, rowHeight, true);
+    drawPurchaseOrderPdfRow(pdf, layout, y, rowHeight, { ...row, descLines });
+    y += rowHeight;
+  });
+  return y;
+}
+
+function purchaseOrderPdfLineRow(line, item, index) {
+  const imeis = imeiNumbersFromText(line.imeiNumbers);
+  return {
+    sn: `${index + 1}.`,
+    desc: [
+      item.name || itemName(line.itemId),
+      imeis.length ? `IMEI: ${[...new Set(imeis)].join(", ")}` : ""
+    ].filter(Boolean).join("\n"),
+    origin: "",
+    hsn: lineHsn(line, item),
+    qty: formatPoQty(line.qty),
+    unit: "Pcs.",
+    price: formatInvoiceMoney(lineGrossRate(line)),
+    amount: formatInvoiceMoney(lineGrossAmount(line))
+  };
+}
+
+function drawPurchaseOrderPdfRow(pdf, layout, y, h, row) {
+  const columns = purchaseOrderPdfColumns(layout);
+  pdf.setDrawColor(10, 10, 10);
+  pdf.rect(layout.margin, y, layout.contentWidth, h);
+  columns.slice(1).forEach(col => pdf.line(col.x, y, col.x, y + h));
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(6.7);
+  columns.forEach(col => {
+    const tx = col.align === "right" ? col.x + col.w - 1.2 : col.align === "center" ? col.x + col.w / 2 : col.x + 1.2;
+    const value = col.key === "desc" ? row.descLines : row[col.key];
+    pdf.text(Array.isArray(value) ? value : pdfClean(value || ""), tx, y + 4.8, { align: col.align });
+  });
+}
+
+function renderPurchaseOrderPdfTotalsAndTerms(pdf, details, layout, startY) {
+  let y = ensurePurchaseOrderPdfSpace(pdf, details, layout, startY, 11, false);
+  pdf.setFillColor(242, 242, 242);
+  pdf.setDrawColor(10, 10, 10);
+  pdf.rect(layout.margin, y, layout.contentWidth, 9, "FD");
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7);
+  pdf.text("Grand Total", layout.margin + layout.contentWidth - 78, y + 5.8);
+  pdf.text(formatPoQty(details.totalQty), layout.margin + layout.contentWidth - 45, y + 5.8, { align: "right" });
+  pdf.text("Pcs.", layout.margin + layout.contentWidth - 32, y + 5.8, { align: "center" });
+  pdf.text(pdfMoney(details.payableTotal), layout.margin + layout.contentWidth - 2, y + 5.8, { align: "right" });
+  y += 13;
+  y = renderPurchaseOrderPdfTaxSummary(pdf, details, layout, y);
+  y = ensurePurchaseOrderPdfSpace(pdf, details, layout, y, 14, false);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7);
+  pdf.text("Amount (in words)", layout.margin, y);
+  pdf.setFont("helvetica", "bold");
+  y += drawInvoicePdfWrapped(pdf, amountInWords(details.payableTotal), layout.margin, y + 4, layout.contentWidth, 3.8) + 3;
+  y = renderPurchaseOrderPdfTerms(pdf, details, layout, y);
+  y = ensurePurchaseOrderPdfSpace(pdf, details, layout, y, 28, false);
+  pdf.setDrawColor(10, 10, 10);
+  pdf.rect(layout.margin + layout.contentWidth * 0.58, y, layout.contentWidth * 0.42, 24);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7);
+  pdf.text(`FOR ${pdfClean(details.poDetails.companyName || details.sellerName)}`, layout.margin + layout.contentWidth - 3, y + 5, { align: "right" });
+  pdf.setFont("helvetica", "normal");
+  pdf.text("Authorised Signatory", layout.margin + layout.contentWidth - 3, y + 21, { align: "right" });
+  return y + 26;
+}
+
+function renderPurchaseOrderPdfTerms(pdf, details, layout, startY) {
+  let y = ensurePurchaseOrderPdfSpace(pdf, details, layout, startY, 12, false);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(7.5);
+  pdf.text("TERMS AND CONDITIONS:", layout.margin, y + 4);
+  y += 8;
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(6.8);
+  purchaseOrderTermsList(details.entry).forEach((term, index) => {
+    const lines = pdfWrap(pdf, `${index + 1}. ${term}`, layout.contentWidth - 3, 12);
+    const h = Math.max(4, lines.length * 3.6);
+    y = ensurePurchaseOrderPdfSpace(pdf, details, layout, y, h + 1, false);
+    pdf.text(lines, layout.margin + 2, y);
+    y += h + 1;
+  });
+  return y + 2;
+}
+
+function renderPurchaseOrderPdfTaxSummary(pdf, details, layout, startY) {
+  const rowHeight = 7;
+  const headerHeight = 8;
+  const tableHeight = headerHeight + (details.taxGroups.length + 1) * rowHeight;
+  let y = ensurePurchaseOrderPdfSpace(pdf, details, layout, startY, tableHeight + 4, false);
+  const columns = details.isIgst
+    ? [
+        { label: "HSN/SAC", w: 38, align: "left" },
+        { label: "Taxable Value", w: 38, align: "right" },
+        { label: "IGST Rate", w: 30, align: "right" },
+        { label: "IGST Amount", w: 38, align: "right" },
+        { label: "Total Tax", w: 46, align: "right" }
+      ]
+    : [
+        { label: "HSN/SAC", w: 32, align: "left" },
+        { label: "Taxable Value", w: 32, align: "right" },
+        { label: "CGST Rate", w: 22, align: "right" },
+        { label: "CGST Amt", w: 28, align: "right" },
+        { label: "SGST Rate", w: 22, align: "right" },
+        { label: "SGST Amt", w: 28, align: "right" },
+        { label: "Total Tax", w: 26, align: "right" }
+      ];
+  drawInvoicePdfMiniTableHeader(pdf, layout.margin, y, columns, headerHeight);
+  y += headerHeight;
+  details.taxGroups.forEach(group => {
+    const row = details.isIgst
+      ? [group.hsn, formatInvoiceMoney(group.taxable), `${group.rate}%`, formatInvoiceMoney(group.tax), formatInvoiceMoney(group.tax)]
+      : [group.hsn, formatInvoiceMoney(group.taxable), `${group.rate / 2}%`, formatInvoiceMoney(group.tax / 2), `${group.rate / 2}%`, formatInvoiceMoney(group.tax / 2), formatInvoiceMoney(group.tax)];
+    drawInvoicePdfMiniTableRow(pdf, layout.margin, y, columns, row, rowHeight, false);
+    y += rowHeight;
+  });
+  const totalRow = details.isIgst
+    ? ["Total", formatInvoiceMoney(details.entry.taxable), "", formatInvoiceMoney(details.entry.igst), formatInvoiceMoney(details.entry.igst)]
+    : ["Total", formatInvoiceMoney(details.entry.taxable), "", formatInvoiceMoney(details.entry.cgst), "", formatInvoiceMoney(details.entry.sgst), formatInvoiceMoney(details.entry.gst)];
+  drawInvoicePdfMiniTableRow(pdf, layout.margin, y, columns, totalRow, rowHeight, true);
+  return y + rowHeight + 3;
+}
+
+function ensurePurchaseOrderPdfSpace(pdf, details, layout, y, requiredHeight, includeTableHeader) {
+  if (y + requiredHeight <= layout.bottom) return y;
+  return addPurchaseOrderPdfContinuationPage(pdf, details, layout, includeTableHeader);
+}
+
+function addPurchaseOrderPdfContinuationPage(pdf, details, layout, includeTableHeader = true) {
+  pdf.addPage();
+  const y = renderPurchaseOrderPdfHeader(pdf, details, layout, true);
+  return includeTableHeader ? renderPurchaseOrderPdfItemHeader(pdf, layout, y) : y;
+}
+
+function renderPurchaseOrderPdfFooters(pdf, layout) {
+  const totalPages = pdf.getNumberOfPages();
+  for (let pageNo = 1; pageNo <= totalPages; pageNo += 1) {
+    pdf.setPage(pageNo);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(6.5);
+    pdf.setTextColor(88, 88, 88);
+    pdf.text("Purchase Order", layout.pageWidth / 2, layout.pageHeight - 6, { align: "center" });
+    pdf.text(`Page ${pageNo} of ${totalPages}`, layout.pageWidth - layout.margin, layout.pageHeight - 6, { align: "right" });
+  }
+  pdf.setTextColor(20, 34, 35);
 }
 
 function invoicePdfDetails({ entry, party, settings, documentKind = "invoice" }) {
