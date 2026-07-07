@@ -4026,109 +4026,223 @@ function showInvoice(id, kind) {
 }
 
 function showPurchaseOrder(entry, supplier, settings) {
-  const buyer = normalizeAddressSnapshot({
-    name: settings.businessName || settings.label || "",
-    gstin: settings.gstin || "",
-    address: settings.address || "",
-    place: settings.state || stateNameFromGstin(settings.gstin) || ""
-  });
-  const supplierSnapshot = normalizeAddressSnapshot(partyAddressSnapshot(supplier));
+  const details = purchaseOrderTemplateDetails(entry, supplier, settings);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   const payableTotal = invoicePayableTotal(entry);
   currentInvoiceFileName = purchaseOrderPdfFileName(entry, supplier);
   currentInvoiceShareContext = { entry, party: supplier, settings, documentKind: "po" };
   $("#invoicePrintArea").innerHTML = `
     <div class="invoice-preview-frame">
-      <div class="invoice-sheet modern-invoice">
-      <div class="modern-invoice-head">
-        <div class="invoice-brand-block">
-          ${firmLogoMarkup(settings, "invoice-firm-logo")}
-          <div class="invoice-title-block">
-            <span class="invoice-kicker">Purchase Order</span>
+      <div class="invoice-sheet po-template">
+        <header class="po-template-head">
+          <div class="po-gstin-line">GSTIN&nbsp;&nbsp;:&nbsp;&nbsp;${escapeHtml(settings.gstin || "-")}</div>
+          <div class="po-logo-box">${firmLogoMarkup(settings, "po-firm-logo")}</div>
+          <div class="po-company-block">
             <h2>Purchase Order</h2>
-            <p>${escapeHtml(settings.businessName || settings.label || state.selectedOrg?.name || "Business")}</p>
+            <h1>${escapeHtml(details.companyName)}</h1>
+            <p>${escapeHtml(details.companyAddress)}</p>
+            <p>PAN : ${escapeHtml(details.companyPan || "-")}</p>
+            <p><em>email : ${escapeHtml(settings.email || "-")}</em></p>
           </div>
+        </header>
+        <section class="po-info-grid">
+          <div class="po-party-box">
+            <h3>Party Details :</h3>
+            <strong>${escapeHtml(supplier.name || "-")}</strong>
+            <p>${escapeHtml(details.supplierAddress)}</p>
+            ${poDetailLine("Party PAN", details.supplierPan)}
+            ${poDetailLine("Party E-Mail ID", supplier.email)}
+            ${poDetailLine("Party Mobile No", supplier.phone)}
+            ${poDetailLine("Party AadhaarNo", "")}
+            ${poDetailLine("Party State", details.supplierState)}
+            ${poDetailLine("GSTIN / UIN", supplier.gstin)}
+          </div>
+          <div class="po-order-box">
+            ${poOrderLine("Order No.", entry.number)}
+            ${poOrderLine("Dated", formatInvoiceDate(entry.date))}
+            ${poOrderLine("Terms of Payment", details.paymentTerms)}
+            ${poOrderLine("Delivery Terms", details.deliveryTerms)}
+            ${poOrderLine("Pickup Date", details.pickupDate)}
+            ${poOrderLine("Delivery Date", details.deliveryDate)}
+            ${poOrderLine("Dipatch from City", details.dispatchCity)}
+            ${poOrderLine("Destination City", details.destinationCity)}
+            <div class="po-bank-box">
+              <strong>BANK DETAILS : ${escapeHtml(details.bankName)}</strong>
+              <strong>Account No. : ${escapeHtml(details.accountNumber)}</strong>
+              <strong>IFSC CODE : ${escapeHtml(details.ifsc)}</strong>
+            </div>
+          </div>
+        </section>
+        <table class="po-items-table">
+          <thead>
+            <tr>
+              <th>S.N.</th>
+              <th>Description of Goods</th>
+              <th>Country of Origin</th>
+              <th>HSN Code</th>
+              <th>Qty.</th>
+              <th>Unit</th>
+              <th>Price<br>(Tax Inc.)</th>
+              <th>Amount (Rs.)<br>(Tax Inc.)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entry.lines.map((line, index) => {
+              const item = state.items.find(row => row.id === line.itemId) || {};
+              return `<tr>
+                <td class="num">${index + 1}.</td>
+                <td><strong>${escapeHtml(item.name || itemName(line.itemId))}</strong>${invoiceImeiMarkup(line.imeiNumbers)}</td>
+                <td></td>
+                <td>${escapeHtml(lineHsn(line, item))}</td>
+                <td class="num">${formatPoQty(line.qty)}</td>
+                <td>Pcs.</td>
+                <td class="num">${formatInvoiceMoney(lineGrossRate(line))}</td>
+                <td class="num">${formatInvoiceMoney(lineGrossAmount(line))}</td>
+              </tr>`;
+            }).join("")}
+            <tr class="po-filler-row"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="po-grand-total">
+          <span>Grand Total</span>
+          <strong>${formatPoQty(totalQty)}</strong>
+          <strong>Pcs.</strong>
+          <strong>Rs.</strong>
+          <strong>${formatInvoiceMoney(payableTotal)}</strong>
         </div>
-        <div class="modern-header-metrics">
-          ${invoiceMetaCell("PO No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
+        <section class="po-bottom-grid">
+          <div>
+            ${purchaseOrderTaxSummary(entry)}
+            <p class="po-amount-words">${escapeHtml(amountInWords(payableTotal))}</p>
+            <div class="po-terms">
+              <h3>TERMS AND CONDITIONS:</h3>
+              ${purchaseOrderTermsMarkup(entry)}
+            </div>
+          </div>
+          <div class="po-signature">
+            <strong>FOR ${escapeHtml(details.companyName)}</strong>
+            <span>Authorised Signatory</span>
+          </div>
+        </section>
         </div>
-      </div>
-      <div class="invoice-seller-strip">
-        ${invoicePartyBlock("Buyer GST", buyer)}
-      </div>
-      <div class="modern-party-grid">
-        ${invoicePartyBlock("Supplier", supplierSnapshot)}
-        ${invoicePartyBlock("Ship To", buyer)}
-      </div>
-      <table class="invoice-items-table">
-        <thead>
-          <tr>
-            <th class="sl-col">Sl<br>No.</th>
-            <th>Description of Goods</th>
-            <th>HSN/SAC</th>
-            <th class="num">Quantity</th>
-            <th class="num">Rate</th>
-            <th class="num">Taxable</th>
-            <th class="num">GST %</th>
-            <th class="num">GST Amt</th>
-            <th class="num">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${entry.lines.map((line, index) => {
-            const item = state.items.find(row => row.id === line.itemId) || {};
-            const taxable = lineTaxableAmount(line);
-            const gstAmount = lineGstAmount(line);
-            const lineTotal = lineGrossAmount(line);
-            return `<tr class="invoice-item-row">
-              <td class="num">${index + 1}</td>
-              <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}${invoiceImeiMarkup(line.imeiNumbers)}</td>
-              <td>${escapeHtml(item.hsn || "")}</td>
-              <td class="num strong">${formatQty(line.qty)}</td>
-              <td class="num">${formatInvoiceMoney(line.rate)}</td>
-              <td class="num strong">${formatInvoiceMoney(taxable)}</td>
-              <td class="num">${num(line.gstRate)}%</td>
-              <td class="num">${formatInvoiceMoney(gstAmount)}</td>
-              <td class="num strong">${formatInvoiceMoney(lineTotal)}</td>
-            </tr>`;
-          }).join("")}
-          <tr class="invoice-total-row">
-            <td></td>
-            <td class="num">Total</td>
-            <td></td>
-            <td class="num strong">${formatQty(totalQty)}</td>
-            <td></td>
-            <td class="num strong">${formatInvoiceMoney(entry.taxable)}</td>
-            <td></td>
-            <td class="num strong">${formatInvoiceMoney(entry.gst)}</td>
-            <td class="num grand-total">Rs. ${formatInvoiceMoney(payableTotal)}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="amount-words-row">
-        <span>Amount (in words)</span>
-        <em>Status: ${escapeHtml(entry.status || "Draft")}</em>
-        <strong>${escapeHtml(amountInWords(payableTotal))}</strong>
-      </div>
-      ${invoiceTaxSummary(entry)}
-      ${entry.notes ? `<div class="tax-words-row"><span>Notes :</span><strong>${escapeHtml(entry.notes)}</strong></div>` : ""}
-      <div class="invoice-footer-grid">
-        <div>
-          <span>Terms</span>
-          <p>This purchase order is a request to supply the goods listed above. Stock and purchase accounts will update only after purchase entry is saved.</p>
-        </div>
-        <div class="signature-box">
-          <strong>for ${escapeHtml(settings.businessName || settings.label)}</strong>
-          <span>Authorised Signatory</span>
-        </div>
-      </div>
-      <p class="computer-note">This is a Computer Generated Purchase Order</p>
-      </div>
     </div>
   `;
   $("#invoiceDialog").showModal();
   $("#invoicePrintArea").scrollTo({ top: 0, left: 0 });
   requestAnimationFrame(fitInvoicePreview);
+}
+
+function purchaseOrderTemplateDetails(entry, supplier, settings) {
+  const bank = settings.bankDetails || {};
+  const supplierAddress = supplier.address || supplier.place || "";
+  const supplierState = stateNameFromGstin(supplier.gstin) || supplier.place || "";
+  const companyState = settings.state || stateNameFromGstin(settings.gstin) || "";
+  const parsedNotes = purchaseOrderParsedNotes(entry.notes || "");
+  return {
+    companyName: settings.businessName || settings.label || "Business",
+    companyAddress: settings.address || companyState || "-",
+    companyPan: panFromGstin(settings.gstin),
+    supplierAddress: supplierAddress || "-",
+    supplierPan: panFromGstin(supplier.gstin),
+    supplierState: supplierState ? `${supplierState}${stateCodeFromGstin(supplier.gstin) ? ` (${stateCodeFromGstin(supplier.gstin)})` : ""}` : "",
+    paymentTerms: parsedNotes.paymentTerms || "Full Advance",
+    deliveryTerms: parsedNotes.deliveryTerms || "As agreed",
+    pickupDate: parsedNotes.pickupDate || formatDateDots(entry.date),
+    deliveryDate: parsedNotes.deliveryDate || "",
+    dispatchCity: parsedNotes.dispatchCity || supplier.place || supplierState || "",
+    destinationCity: parsedNotes.destinationCity || companyState || "",
+    bankName: bank.bankName || "-",
+    accountNumber: bank.accountNumber || "-",
+    ifsc: bank.ifsc || "-"
+  };
+}
+
+function purchaseOrderParsedNotes(notes) {
+  const values = {};
+  const labels = ["payment terms", "delivery terms", "pickup date", "delivery date", "dispatch city", "destination city"];
+  const source = String(notes || "").replace(/\s+/g, " ").trim();
+  labels.forEach((label, index) => {
+    const nextLabels = labels.slice(index + 1).map(escapeRegExp).join("|");
+    const pattern = nextLabels
+      ? new RegExp(`${escapeRegExp(label)}\\s*[:=-]\\s*(.*?)(?=\\s+(?:${nextLabels})\\s*[:=-]|$)`, "i")
+      : new RegExp(`${escapeRegExp(label)}\\s*[:=-]\\s*(.*)$`, "i");
+    const match = source.match(pattern);
+    if (!match) return;
+    const key = label.replace(/\s+([a-z])/g, (_, char) => char.toUpperCase());
+    values[key] = match[1].trim();
+  });
+  return values;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function poDetailLine(label, value) {
+  return `<div class="po-detail-line"><span>${escapeHtml(label)}</span><b>:</b><strong>${escapeHtml(value || "")}</strong></div>`;
+}
+
+function poOrderLine(label, value) {
+  return `<div class="po-order-line"><span>${escapeHtml(label)}</span><b>:</b><strong>${escapeHtml(value || "")}</strong></div>`;
+}
+
+function panFromGstin(gstin) {
+  const normalized = normalizeGstin(gstin);
+  return normalized.length >= 12 ? normalized.slice(2, 12) : "";
+}
+
+function formatDateDots(dateValue) {
+  if (!dateValue) return "";
+  const [year, month, day] = String(dateValue).split("-");
+  return year && month && day ? `${day}.${month}.${year}` : dateValue;
+}
+
+function lineGrossRate(line) {
+  return num(line.qty) ? round2(lineGrossAmount(line) / num(line.qty)) : lineGrossAmount(line);
+}
+
+function formatPoQty(value) {
+  return Number(num(value)).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function purchaseOrderTaxSummary(entry) {
+  const groups = invoiceTaxGroups(entry);
+  const isIgst = num(entry.igst) > 0;
+  return `<table class="po-tax-summary">
+    <thead>
+      <tr>
+        <th>HSN/SAC</th>
+        <th>Tax Rate</th>
+        <th>Taxable Amt.</th>
+        <th>${isIgst ? "IGST Amt." : "CGST Amt."}</th>
+        ${isIgst ? "" : "<th>SGST Amt.</th>"}
+        <th>Total Tax</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${groups.map(group => isIgst
+        ? `<tr><td>${escapeHtml(group.hsn)}</td><td>${group.rate}%</td><td class="num">${formatInvoiceMoney(group.taxable)}</td><td class="num">${formatInvoiceMoney(group.tax)}</td><td class="num">${formatInvoiceMoney(group.tax)}</td></tr>`
+        : `<tr><td>${escapeHtml(group.hsn)}</td><td>${group.rate}%</td><td class="num">${formatInvoiceMoney(group.taxable)}</td><td class="num">${formatInvoiceMoney(group.tax / 2)}</td><td class="num">${formatInvoiceMoney(group.tax / 2)}</td><td class="num">${formatInvoiceMoney(group.tax)}</td></tr>`
+      ).join("")}
+    </tbody>
+  </table>`;
+}
+
+function purchaseOrderTermsMarkup(entry) {
+  const customTerms = String(entry.notes || "")
+    .split(/\r?\n/)
+    .filter(line => /^term\s*\d*\s*[:=-]/i.test(line))
+    .map(line => line.replace(/^term\s*\d*\s*[:=-]\s*/i, "").trim())
+    .filter(Boolean);
+  const terms = customTerms.length ? customTerms : [
+    "Following documents required during Dispatch of goods: GST Invoice, IMEI List, Eway bill, L.R Copy / Docket Copy, and corresponding PO Acceptance with Sign & Stamp.",
+    "We will accept only clean, sealed, and non damage stock.",
+    "Penalty per pcs will be charged if supplier fails to fulfill this deal for any reason whatsoever.",
+    "Supplier to ensure timely filing of GSTR1 on or before 11th day of every month.",
+    "The supplier must follow all compliances under GST law at all time.",
+    "By accepting this PO the supplier declares that all terms and conditions mentioned in the PO will be strictly adhered to."
+  ];
+  return `<ol>${terms.map(term => `<li>${escapeHtml(term)}</li>`).join("")}</ol>`;
 }
 
 function closeInvoiceDialog() {
@@ -4156,7 +4270,7 @@ function fitInvoicePreview() {
   const dialog = $("#invoiceDialog");
   const printArea = $("#invoicePrintArea");
   const frame = printArea?.querySelector(".invoice-preview-frame");
-  const sheet = printArea?.querySelector(".modern-invoice");
+  const sheet = printArea?.querySelector(".modern-invoice, .po-template");
   if (!dialog?.open || !printArea || !frame || !sheet || document.body.classList.contains("invoice-print-mode") || document.body.classList.contains("invoice-pdf-capture")) return;
   clearInvoicePreviewFit();
   if (!window.matchMedia("(max-width: 820px)").matches) return;
