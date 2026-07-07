@@ -2339,8 +2339,8 @@ function openEntry(kind, id = null, draft = null) {
     : "<option>Paid</option><option>Unpaid</option><option>Partial</option>";
   form.elements.status.value = source?.status || (isPo ? "Draft" : "Paid");
   $("#entryStatusLabel").hidden = !isPo;
-  $("#entryNotesLabel").hidden = isSale;
-  form.elements.notes.value = isSale ? "" : (source?.notes || "");
+  $("#entryNotesLabel")?.setAttribute("hidden", "");
+  if (form.elements.notes) form.elements.notes.value = isSale ? "" : (source?.notes || "");
   $("#entryPartyLabelText").textContent = isSale ? "Buyer" : "Supplier";
   $("#entryAddBuyerBtn").hidden = !isSale;
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
@@ -3518,7 +3518,7 @@ async function saveEntry(event) {
     profileId: form.elements.profileId.value,
     partyId: form.elements.partyId.value,
     status: form.elements.status.value,
-    notes: entryMode === "sale" ? "" : form.elements.notes.value.trim(),
+    notes: entryMode === "sale" ? "" : (form.elements.notes?.value || "").trim(),
     lines,
     ...entryTotals,
     attachments: clone(entryDraftMeta.attachments || []),

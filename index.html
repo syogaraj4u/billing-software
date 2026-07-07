@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260702-import-item-name-cleanup">
+  <link rel="stylesheet" href="styles.css?v=20260707-remove-po-notes">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -311,7 +311,7 @@
               <button class="secondary-btn" id="entryAddBuyerBtn" type="button"><i data-lucide="user-plus"></i><span>New Buyer</span></button>
             </div>
             <label id="entryStatusLabel">Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
-            <label class="span-2" id="entryNotesLabel">Notes<input name="notes"></label>
+            <input name="notes" type="hidden">
           </div>
         </section>
         <section class="sales-address-panel" id="salesAddressPanel" hidden>
@@ -522,6 +522,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260707-po-template"></script>
+  <script src="app.js?v=20260707-remove-po-notes"></script>
 </body>
 </html>
