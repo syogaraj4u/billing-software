@@ -76,6 +76,7 @@
         <button class="nav-tab active" data-view="dashboard"><i data-lucide="layout-dashboard"></i><span>Dashboard</span></button>
         <button class="nav-tab" data-view="sales"><i data-lucide="receipt-text"></i><span>Sales</span></button>
         <button class="nav-tab" data-view="purchases"><i data-lucide="shopping-cart"></i><span>Purchases</span></button>
+        <button class="nav-tab" data-view="purchaseOrders"><i data-lucide="clipboard-list"></i><span>PO</span></button>
         <button class="nav-tab" data-view="items"><i data-lucide="boxes"></i><span>Items</span></button>
         <button class="nav-tab" data-view="parties"><i data-lucide="users"></i><span>Parties</span></button>
         <button class="nav-tab" data-view="reports"><i data-lucide="bar-chart-3"></i><span>Reports</span></button>
@@ -112,6 +113,10 @@
           <button class="dashboard-action-card" id="dashboardPurchaseEntryBtn" type="button">
             <i data-lucide="file-up"></i>
             <span>Upload Invoice</span>
+          </button>
+          <button class="dashboard-action-card" id="dashboardPoBtn" type="button">
+            <i data-lucide="clipboard-list"></i>
+            <span>Purchase Order</span>
           </button>
         </div>
       </section>
@@ -155,6 +160,25 @@
           <table>
             <thead><tr><th><input id="selectAllPurchases" type="checkbox" aria-label="Select all purchases"></th><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>E-Way</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
             <tbody id="purchaseRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="purchaseOrdersView">
+        <div class="section-head">
+          <div>
+            <h3>Purchase Orders</h3>
+            <p>Create supplier POs without changing stock until purchase entry is made.</p>
+          </div>
+          <div class="section-actions">
+            <label class="month-filter">Month<select id="poMonthFilter" aria-label="PO month"></select></label>
+            <button class="primary-btn" id="newPoBtn"><i data-lucide="plus"></i><span>New PO</span></button>
+          </div>
+        </div>
+        <div class="table-wrap panel">
+          <table>
+            <thead><tr><th>Date</th><th>PO No.</th><th>GST</th><th>Supplier</th><th>Status</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
+            <tbody id="poRows"></tbody>
           </table>
         </div>
       </section>
@@ -254,6 +278,7 @@
           <label>Currency Symbol<input name="currency" maxlength="4"></label>
           <label>Next Sales No.<input name="nextSaleNo" type="number" min="1"></label>
           <label>Next Purchase No.<input name="nextPurchaseNo" type="number" min="1"></label>
+          <label>Next PO No.<input name="nextPoNo" type="number" min="1"></label>
           <label class="span-2">Monthly Report Email IDs<textarea name="reportEmails" rows="3" placeholder="accounts@example.com&#10;owner@example.com"></textarea></label>
           <label>Default Vehicle No.<input name="ewayVehicleNo" placeholder="AP00AA0000"></label>
           <label>Default Transport Distance KM<input name="ewayDistanceKm" type="number" min="0" step="1"></label>
@@ -497,6 +522,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260702-import-item-name-cleanup"></script>
+  <script src="app.js?v=20260707-po-generation"></script>
 </body>
 </html>

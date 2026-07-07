@@ -1,12 +1,13 @@
 # Billing Software
 
-Browser-based cloud billing software for purchase entry, sales entry, 8 GST profiles, inventory, invoice printing, reports, purchase invoice upload, e-way JSON export, ChatGPT-assisted drafts, monthly email reports, and Supabase-backed multi-user sync.
+Browser-based cloud billing software for purchase entry, sales entry, purchase order generation, 8 GST profiles, inventory, invoice printing, reports, purchase invoice upload, e-way JSON export, ChatGPT-assisted drafts, monthly email reports, and Supabase-backed multi-user sync.
 
 ## Features
 
 - Sales entry
 - Chat sale bill draft from simple customer/item text
 - Purchase entry
+- Purchase order generation without changing stock
 - 8 GST business profiles
 - Item master
 - Party master

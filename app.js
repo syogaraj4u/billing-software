@@ -131,7 +131,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "KKBK0007919"
     },
     nextSaleNo: 4,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-2",
@@ -151,7 +152,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0007572"
     },
     nextSaleNo: 2,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-3",
@@ -171,7 +173,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0006309"
     },
     nextSaleNo: 1,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-4",
@@ -191,7 +194,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0006309"
     },
     nextSaleNo: 5,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-5",
@@ -211,7 +215,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0007209"
     },
     nextSaleNo: 8,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-6",
@@ -231,7 +236,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0007572"
     },
     nextSaleNo: 3,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-7",
@@ -251,7 +257,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0007937"
     },
     nextSaleNo: 7,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   },
   {
     id: "gst-8",
@@ -271,7 +278,8 @@ const OFFICIAL_GST_PROFILES = [
       ifsc: "ICIC0003771"
     },
     nextSaleNo: 6,
-    nextPurchaseNo: 1
+    nextPurchaseNo: 1,
+    nextPoNo: 1
   }
 ];
 
@@ -392,7 +400,8 @@ const defaultState = {
     { id: uid(), name: "Default Supplier", type: "Supplier", gstin: "", phone: "", place: "Local", address: "" }
   ],
   sales: [],
-  purchases: []
+  purchases: [],
+  purchaseOrders: []
 };
 
 let state = loadState();
@@ -473,7 +482,8 @@ function normalizeState(value) {
       address: value.settings.address || "",
       state: value.settings.state || profiles[0].state,
       nextSaleNo: num(value.settings.nextSaleNo) || 1,
-      nextPurchaseNo: num(value.settings.nextPurchaseNo) || 1
+      nextPurchaseNo: num(value.settings.nextPurchaseNo) || 1,
+      nextPoNo: num(value.settings.nextPoNo) || 1
     };
   }
   if (value.settings.gstProfilesLoadedVersion !== GST_PROFILE_VERSION) {
@@ -481,7 +491,8 @@ function normalizeState(value) {
       profiles[index] = {
         ...official,
         nextSaleNo: num(profiles[index]?.nextSaleNo) || official.nextSaleNo,
-        nextPurchaseNo: num(profiles[index]?.nextPurchaseNo) || official.nextPurchaseNo
+        nextPurchaseNo: num(profiles[index]?.nextPurchaseNo) || official.nextPurchaseNo,
+        nextPoNo: num(profiles[index]?.nextPoNo) || official.nextPoNo
       };
     });
   }
@@ -512,11 +523,13 @@ function normalizeState(value) {
   mergeTallyBuyerMaster(value);
   value.sales = Array.isArray(value.sales) ? value.sales : [];
   value.purchases = Array.isArray(value.purchases) ? value.purchases : [];
-  [...value.sales, ...value.purchases].forEach(entry => {
+  value.purchaseOrders = Array.isArray(value.purchaseOrders) ? value.purchaseOrders : [];
+  [...value.sales, ...value.purchases, ...value.purchaseOrders].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
   value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties, value.items));
   value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties, value.items));
+  value.purchaseOrders.forEach(entry => normalizeEntryForState(entry, "po", value.parties, value.items));
   return value;
 }
 
@@ -553,6 +566,7 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
     changed = mergeByIdentity(merged.items, local.items, itemMergeKey) || changed;
     changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey) || changed;
+    changed = mergeByIdentity(merged.purchaseOrders, local.purchaseOrders, entryMergeKey) || changed;
     mergeProfileCounters(merged.settings.profiles, local.settings.profiles);
   });
   return { state: normalizeState(merged), changed };
@@ -600,6 +614,7 @@ function mergeProfileCounters(targetProfiles = [], sourceProfiles = []) {
     if (!target) return;
     target.nextSaleNo = Math.max(num(target.nextSaleNo), num(source.nextSaleNo));
     target.nextPurchaseNo = Math.max(num(target.nextPurchaseNo), num(source.nextPurchaseNo));
+    target.nextPoNo = Math.max(num(target.nextPoNo), num(source.nextPoNo));
   });
 }
 
@@ -998,7 +1013,9 @@ function toast(message) {
 }
 
 function entryList(kind) {
-  return kind === "sale" ? state.sales : state.purchases;
+  if (kind === "sale") return state.sales;
+  if (kind === "purchase") return state.purchases;
+  return state.purchaseOrders;
 }
 
 function activeEntries(kind) {
@@ -1021,7 +1038,7 @@ function isMobileDeviceView() {
 }
 
 function mobilePurchaseUsesSpecificMonth(kind) {
-  return kind === "purchase" && isMobileDeviceView();
+  return (kind === "purchase" || kind === "po") && isMobileDeviceView();
 }
 
 function selectedEntryMonth(kind) {
@@ -1053,7 +1070,7 @@ function entryMonthOptions(kind) {
 }
 
 function renderEntryMonthFilter(kind) {
-  const select = kind === "sale" ? $("#salesMonthFilter") : $("#purchaseMonthFilter");
+  const select = kind === "sale" ? $("#salesMonthFilter") : kind === "purchase" ? $("#purchaseMonthFilter") : $("#poMonthFilter");
   if (!select) return;
   const selected = selectedEntryMonth(kind);
   select.innerHTML = entryMonthOptions(kind)
@@ -1071,12 +1088,14 @@ function activeAccountingEntries(kind) {
 }
 
 function entryPrefix(kind) {
-  return kind === "sale" ? "SALE" : "PUR";
+  if (kind === "sale") return "SALE";
+  if (kind === "purchase") return "PUR";
+  return "PO";
 }
 
 function nextEntryNumber(kind, profileId = state.settings.activeProfileId) {
   if (kind === "sale") return nextSaleInvoiceNumber(profileId);
-  const key = kind === "sale" ? "nextSaleNo" : "nextPurchaseNo";
+  const key = kind === "purchase" ? "nextPurchaseNo" : "nextPoNo";
   const profile = profileById(profileId);
   return `${entryPrefix(kind)}-${String(profile[key] || 1).padStart(4, "0")}`;
 }
@@ -1216,8 +1235,9 @@ function taxModeFromGstins(sellerGstin, buyerGstin) {
 }
 
 function calculateEntryTotals(lines, profile, party, kind) {
-  const sellerGstin = kind === "purchase" ? party?.gstin : profile?.gstin;
-  const buyerGstin = kind === "purchase" ? profile?.gstin : party?.gstin;
+  const isInward = kind === "purchase" || kind === "po";
+  const sellerGstin = isInward ? party?.gstin : profile?.gstin;
+  const buyerGstin = isInward ? profile?.gstin : party?.gstin;
   const { mode, review } = taxModeFromGstins(sellerGstin, buyerGstin);
   const calculated = lines.reduce((acc, line) => {
     const taxable = lineTaxableAmount(line);
@@ -1327,6 +1347,7 @@ function bindEvents() {
   $$("[data-close-dialog]").forEach(button => button.addEventListener("click", () => closeDialog(button.dataset.closeDialog)));
   $("#dashboardSaleEntryBtn").addEventListener("click", () => openEntry("sale"));
   $("#dashboardPurchaseEntryBtn").addEventListener("click", openPurchaseInvoiceUpload);
+  bindIf("#dashboardPoBtn", "click", () => openEntry("po"));
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
   $("#salesMonthFilter").addEventListener("change", event => {
     entryMonthFilters.sale = event.target.value;
@@ -1339,6 +1360,11 @@ function bindEvents() {
     entryMonthFilters.purchase = event.target.value;
     selectedPurchaseIds.clear();
     renderEntries("purchase");
+  });
+  bindIf("#newPoBtn", "click", () => openEntry("po"));
+  bindIf("#poMonthFilter", "change", event => {
+    entryMonthFilters.po = event.target.value;
+    renderEntries("po");
   });
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
@@ -1429,6 +1455,7 @@ function showView(view) {
     dashboard: "Dashboard",
     sales: "Sales",
     purchases: "Purchases",
+    purchaseOrders: "Purchase Orders",
     items: "Items",
     parties: "Party Master",
     reports: "Reports",
@@ -1444,6 +1471,7 @@ function renderAll() {
   renderDashboard();
   renderEntries("sale");
   renderEntries("purchase");
+  renderEntries("po");
   renderItems();
   renderParties();
   renderSettings();
@@ -1518,7 +1546,8 @@ function selectCompany(profileId) {
   state.settings.activeProfileId = profileId;
   entryMonthFilters = {
     sale: defaultEntryMonth("sale", profileId),
-    purchase: defaultEntryMonth("purchase", profileId)
+    purchase: defaultEntryMonth("purchase", profileId),
+    po: defaultEntryMonth("po", profileId)
   };
   selectedPurchaseIds.clear();
   saveState();
@@ -1851,7 +1880,7 @@ function bestCloudWorkspace(workspaces = []) {
 
 function cloudWorkspaceScore(workspace = {}) {
   const counts = cloudWorkspaceCounts(workspace);
-  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.parties * 10) + counts.items;
+  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.purchaseOrders * 50) + (counts.parties * 10) + counts.items;
 }
 
 function cloudWorkspaceCounts(workspace = {}) {
@@ -1859,6 +1888,7 @@ function cloudWorkspaceCounts(workspace = {}) {
   return {
     sales: Array.isArray(data.sales) ? data.sales.length : 0,
     purchases: Array.isArray(data.purchases) ? data.purchases.length : 0,
+    purchaseOrders: Array.isArray(data.purchaseOrders) ? data.purchaseOrders.length : 0,
     parties: Array.isArray(data.parties) ? data.parties.length : 0,
     items: Array.isArray(data.items) ? data.items.length : 0
   };
@@ -2019,7 +2049,7 @@ function renderEntries(kind) {
   renderEntryMonthFilter(kind);
   const entries = monthFilteredEntries(kind);
   const allEntries = activeEntries(kind);
-  const emptyColspan = kind === "sale" ? 9 : 10;
+  const emptyColspan = kind === "purchase" ? 10 : 9;
   if (kind === "purchase" && maybeSwitchToPurchaseWorkspace()) {
     $("#purchaseRows").innerHTML = emptyRow(emptyColspan, "Loading saved purchases from the correct workspace...");
     return;
@@ -2052,6 +2082,7 @@ function renderEntries(kind) {
       <td>
         <div class="row-actions">
           ${kind === "sale" ? `<button class="mini-btn" title="Invoice" onclick="showInvoice('${entry.id}', '${kind}')"><i data-lucide="file-text"></i></button>` : ""}
+          ${kind === "po" ? `<button class="mini-btn" title="Purchase Order" onclick="showInvoice('${entry.id}', '${kind}')"><i data-lucide="file-text"></i></button>` : ""}
           ${cancelled ? "" : `<button class="mini-btn" title="Edit" onclick="openEntry('${kind}', '${entry.id}')"><i data-lucide="pencil"></i></button>`}
           ${kind === "sale"
             ? (cancelled ? "" : `<button class="mini-btn danger-btn" title="Cancel Bill" onclick="cancelEntry('${kind}', '${entry.id}')"><i data-lucide="ban"></i></button>`)
@@ -2063,12 +2094,13 @@ function renderEntries(kind) {
   }).join("");
   const emptyLabel = emptyEntriesLabel(kind, allEntries.length);
   const filterNote = entryMonthFilterNote(kind, entries.length, allEntries.length, emptyColspan);
-  $(kind === "sale" ? "#salesRows" : "#purchaseRows").innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
+  const target = kind === "sale" ? "#salesRows" : kind === "purchase" ? "#purchaseRows" : "#poRows";
+  $(target).innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
   if (kind === "purchase") bindPurchaseSelectors();
 }
 
 function emptyEntriesLabel(kind, activeCount = activeEntries(kind).length) {
-  const label = kind === "sale" ? "sales entries" : "purchase entries";
+  const label = kind === "sale" ? "sales entries" : kind === "purchase" ? "purchase entries" : "purchase orders";
   const selectedMonthLabel = monthLabel(selectedEntryMonth(kind));
   const totalAcrossCompanies = entryList(kind).length;
   if (!activeCount && totalAcrossCompanies > 0) {
@@ -2087,12 +2119,14 @@ function emptyEntriesLabel(kind, activeCount = activeEntries(kind).length) {
   }
   return kind === "sale"
     ? `No sales entries for ${selectedMonthLabel}`
-    : `No purchase entries for ${selectedMonthLabel}`;
+    : kind === "purchase"
+      ? `No purchase entries for ${selectedMonthLabel}`
+      : `No purchase orders for ${selectedMonthLabel}`;
 }
 
 function entryMonthFilterNote(kind, visibleCount, totalCount, colspan) {
   if (selectedEntryMonth(kind) === ALL_MONTHS_KEY || totalCount <= visibleCount) return "";
-  const label = kind === "sale" ? "sales" : "purchases";
+  const label = kind === "sale" ? "sales" : kind === "purchase" ? "purchases" : "purchase orders";
   return `<tr class="filter-note-row"><td colspan="${colspan}">Showing ${visibleCount} of ${totalCount} ${label}. Select All months or another month to view older entries.</td></tr>`;
 }
 
@@ -2213,7 +2247,7 @@ function renderSettings() {
   syncSaleNumberingForProfiles(state.settings.profiles, state.sales);
   form.elements.profileId.innerHTML = profileOptions(form.elements.profileId.value || state.settings.activeProfileId);
   const profile = profileById(form.elements.profileId.value);
-  ["businessName", "legalName", "gstin", "phone", "email", "address", "state", "nextSaleNo", "nextPurchaseNo"].forEach(key => {
+  ["businessName", "legalName", "gstin", "phone", "email", "address", "state", "nextSaleNo", "nextPurchaseNo", "nextPoNo"].forEach(key => {
     form.elements[key].value = profile?.[key] ?? "";
   });
   form.elements.nextSaleNo.readOnly = Boolean(saleNumberRule(profile?.id));
@@ -2255,6 +2289,9 @@ function openEntry(kind, id = null, draft = null) {
   editingEntryId = id;
   const entry = id ? entryList(kind).find(row => row.id === id) : null;
   const source = entry || draft;
+  const isSale = kind === "sale";
+  const isPurchase = kind === "purchase";
+  const isPo = kind === "po";
   entryDraftMeta = {
     attachments: clone(source?.attachments || []),
     reviewStatus: source?.reviewStatus || "Ready",
@@ -2271,24 +2308,25 @@ function openEntry(kind, id = null, draft = null) {
   };
   const form = $("#entryForm");
   form.reset();
-  $("#entryKindLabel").textContent = kind === "sale" ? "Sales Bill" : "Purchase Entry";
+  $("#entryKindLabel").textContent = isSale ? "Sales Bill" : isPo ? "Purchase Order" : "Purchase Entry";
   $("#entryDialogTitle").textContent = id
-    ? (kind === "purchase" ? "Edit Purchase" : "Edit Entry")
-    : (kind === "sale" ? "New Sales Invoice" : "Purchase Review");
-  $("#entryDialog").classList.toggle("sale-entry-dialog", kind === "sale");
-  $("#entryDialog").classList.toggle("purchase-entry-dialog", kind === "purchase");
-  $("#entryMetaLabel").textContent = kind === "sale" ? "Invoice Details" : "Editable Details";
-  $("#entryMetaTitle").textContent = kind === "sale" ? "Check the basic details" : "Correct supplier, buyer GST, invoice number and date";
-  $("#entryProfileLabelText").textContent = kind === "sale" ? "Business GST" : "Buyer GST";
-  $("#lineEditorTitle").textContent = kind === "sale" ? "Items" : "Items from invoice";
-  $("#lineEditorHint").textContent = kind === "sale" ? "" : "Edit item, quantity, rate, GST or IMEI before saving.";
-  $("#saveEntryBtn span").textContent = kind === "sale" ? "Save Entry" : "Save Purchase";
+    ? (isPo ? "Edit Purchase Order" : isPurchase ? "Edit Purchase" : "Edit Entry")
+    : (isPo ? "New Purchase Order" : isSale ? "New Sales Invoice" : "Purchase Review");
+  $("#entryDialog").classList.toggle("sale-entry-dialog", isSale);
+  $("#entryDialog").classList.toggle("purchase-entry-dialog", isPurchase);
+  $("#entryDialog").classList.toggle("po-entry-dialog", isPo);
+  $("#entryMetaLabel").textContent = isSale ? "Invoice Details" : isPo ? "PO Details" : "Editable Details";
+  $("#entryMetaTitle").textContent = isSale ? "Check the basic details" : isPo ? "Select supplier and required items" : "Correct supplier, buyer GST, invoice number and date";
+  $("#entryProfileLabelText").textContent = isSale ? "Business GST" : "Buyer GST";
+  $("#lineEditorTitle").textContent = isSale ? "Items" : isPo ? "Items for PO" : "Items from invoice";
+  $("#lineEditorHint").textContent = isSale ? "" : isPo ? "Items in this PO do not change stock until purchase entry is made." : "Edit item, quantity, rate, GST or IMEI before saving.";
+  $("#saveEntryBtn span").textContent = isSale ? "Save Entry" : isPo ? "Save PO" : "Save Purchase";
   form.elements.date.value = source?.date || today();
   form.elements.date.oninput = updateEntryTotals;
-  form.elements.number.value = kind === "sale"
+  form.elements.number.value = isSale
     ? saleInvoiceNumberForDialog(source, source?.profileId || state.settings.activeProfileId)
     : (source?.number || nextEntryNumber(kind, source?.profileId || state.settings.activeProfileId));
-  form.elements.number.readOnly = kind === "sale";
+  form.elements.number.readOnly = isSale;
   form.elements.number.oninput = updateEntryTotals;
   form.elements.profileId.innerHTML = profileOptions(source?.profileId || state.settings.activeProfileId);
   form.elements.profileId.disabled = true;
@@ -2296,12 +2334,15 @@ function openEntry(kind, id = null, draft = null) {
     if (!editingEntryId) form.elements.number.value = nextEntryNumber(kind, form.elements.profileId.value);
     updateEntryTotals();
   };
-  form.elements.status.value = source?.status || "Paid";
-  $("#entryStatusLabel").hidden = true;
-  $("#entryNotesLabel").hidden = true;
-  form.elements.notes.value = kind === "sale" ? "" : (source?.notes || "");
-  $("#entryPartyLabelText").textContent = kind === "sale" ? "Buyer" : "Supplier";
-  $("#entryAddBuyerBtn").hidden = kind !== "sale";
+  form.elements.status.innerHTML = isPo
+    ? "<option>Draft</option><option>Sent</option><option>Closed</option><option>Cancelled</option>"
+    : "<option>Paid</option><option>Unpaid</option><option>Partial</option>";
+  form.elements.status.value = source?.status || (isPo ? "Draft" : "Paid");
+  $("#entryStatusLabel").hidden = !isPo;
+  $("#entryNotesLabel").hidden = isSale;
+  form.elements.notes.value = isSale ? "" : (source?.notes || "");
+  $("#entryPartyLabelText").textContent = isSale ? "Buyer" : "Supplier";
+  $("#entryAddBuyerBtn").hidden = !isSale;
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
   form.elements.partyId.onchange = () => {
     updateSalesAddressPanel();
@@ -3484,8 +3525,8 @@ async function saveEntry(event) {
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
     rateIncludesGst: entryMode === "sale" ? salesRatesIncludeGst() : false,
-    sellerGstin: normalizeGstin(entryMode === "purchase" ? (party?.gstin || entryDraftMeta.sellerGstin) : profile?.gstin),
-    buyerGstin: normalizeGstin(entryMode === "purchase" ? profile?.gstin : (party?.gstin || entryDraftMeta.buyerGstin)),
+    sellerGstin: normalizeGstin(entryMode !== "sale" ? (party?.gstin || entryDraftMeta.sellerGstin) : profile?.gstin),
+    buyerGstin: normalizeGstin(entryMode !== "sale" ? profile?.gstin : (party?.gstin || entryDraftMeta.buyerGstin)),
     billToSnapshot: saleAddress?.billToSnapshot || null,
     shipToSnapshot: saleAddress?.shipToSnapshot || null,
     shipToSameAsBillTo: saleAddress?.shipToSameAsBillTo ?? true,
@@ -3520,8 +3561,10 @@ async function saveEntry(event) {
   const savedProfile = profileById(entry.profileId);
   if (entryMode === "sale") {
     savedProfile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
-  } else if (index < 0) {
+  } else if (entryMode === "purchase" && index < 0) {
     savedProfile.nextPurchaseNo = num(savedProfile.nextPurchaseNo) + 1;
+  } else if (entryMode === "po" && index < 0) {
+    savedProfile.nextPoNo = num(savedProfile.nextPoNo) + 1;
   }
   entryMonthFilters[entryMode] = entryMonthKey(entry);
   saveState();
@@ -3531,6 +3574,9 @@ async function saveEntry(event) {
     const synced = await syncCloudNow(false);
     toast(synced ? "Purchase saved and synced" : "Purchase saved locally. Cloud sync failed");
     processQueuedPurchaseInvoiceUpload();
+  } else if (entryMode === "po") {
+    const synced = await syncCloudNow(false);
+    toast(synced ? "PO saved and synced" : "PO saved locally. Cloud sync failed");
   } else {
     toast("Sale saved");
   }
@@ -3542,9 +3588,9 @@ function deleteEntry(kind, id) {
     return;
   }
   if (!confirm("Delete this entry?")) return;
-  const key = kind === "sale" ? "sales" : "purchases";
+  const key = kind === "purchase" ? "purchases" : "purchaseOrders";
   state[key] = state[key].filter(row => row.id !== id);
-  selectedPurchaseIds.delete(id);
+  if (kind === "purchase") selectedPurchaseIds.delete(id);
   saveState();
   renderAll();
   toast("Entry deleted");
@@ -3849,6 +3895,7 @@ function saveSettings(event) {
     ? nextSaleSequence(profile.id, state.sales)
     : Math.max(1, num(form.elements.nextSaleNo.value));
   profile.nextPurchaseNo = Math.max(1, num(form.elements.nextPurchaseNo.value));
+  profile.nextPoNo = Math.max(1, num(form.elements.nextPoNo.value));
   state.settings.currency = form.elements.currency.value.trim() || "Rs.";
   state.settings.reportEmails = form.elements.reportEmails.value.trim();
   state.settings.ewayDefaults = {
@@ -3864,8 +3911,13 @@ function saveSettings(event) {
 
 function showInvoice(id, kind) {
   const entry = entryList(kind).find(row => row.id === id);
+  if (!entry) return toast(kind === "po" ? "Purchase order not found" : "Invoice not found");
   const party = state.parties.find(row => row.id === entry.partyId) || {};
   const settings = profileById(entry.profileId);
+  if (kind === "po") {
+    showPurchaseOrder(entry, party, settings);
+    return;
+  }
   const billTo = normalizeAddressSnapshot(entry.billToSnapshot || partyAddressSnapshot(party));
   const shipTo = normalizeAddressSnapshot(entry.shipToSnapshot || billTo);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
@@ -3973,6 +4025,112 @@ function showInvoice(id, kind) {
   requestAnimationFrame(fitInvoicePreview);
 }
 
+function showPurchaseOrder(entry, supplier, settings) {
+  const buyer = normalizeAddressSnapshot({
+    name: settings.businessName || settings.label || "",
+    gstin: settings.gstin || "",
+    address: settings.address || "",
+    place: settings.state || stateNameFromGstin(settings.gstin) || ""
+  });
+  const supplierSnapshot = normalizeAddressSnapshot(partyAddressSnapshot(supplier));
+  const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
+  const payableTotal = invoicePayableTotal(entry);
+  currentInvoiceFileName = purchaseOrderPdfFileName(entry, supplier);
+  currentInvoiceShareContext = { entry, party: supplier, settings, documentKind: "po" };
+  $("#invoicePrintArea").innerHTML = `
+    <div class="invoice-preview-frame">
+      <div class="invoice-sheet modern-invoice">
+      <div class="modern-invoice-head">
+        <div class="invoice-brand-block">
+          ${firmLogoMarkup(settings, "invoice-firm-logo")}
+          <div class="invoice-title-block">
+            <span class="invoice-kicker">Purchase Order</span>
+            <h2>Purchase Order</h2>
+            <p>${escapeHtml(settings.businessName || settings.label || state.selectedOrg?.name || "Business")}</p>
+          </div>
+        </div>
+        <div class="modern-header-metrics">
+          ${invoiceMetaCell("PO No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
+        </div>
+      </div>
+      <div class="invoice-seller-strip">
+        ${invoicePartyBlock("Buyer GST", buyer)}
+      </div>
+      <div class="modern-party-grid">
+        ${invoicePartyBlock("Supplier", supplierSnapshot)}
+        ${invoicePartyBlock("Ship To", buyer)}
+      </div>
+      <table class="invoice-items-table">
+        <thead>
+          <tr>
+            <th class="sl-col">Sl<br>No.</th>
+            <th>Description of Goods</th>
+            <th>HSN/SAC</th>
+            <th class="num">Quantity</th>
+            <th class="num">Rate</th>
+            <th class="num">Taxable</th>
+            <th class="num">GST %</th>
+            <th class="num">GST Amt</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${entry.lines.map((line, index) => {
+            const item = state.items.find(row => row.id === line.itemId) || {};
+            const taxable = lineTaxableAmount(line);
+            const gstAmount = lineGstAmount(line);
+            const lineTotal = lineGrossAmount(line);
+            return `<tr class="invoice-item-row">
+              <td class="num">${index + 1}</td>
+              <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}${invoiceImeiMarkup(line.imeiNumbers)}</td>
+              <td>${escapeHtml(item.hsn || "")}</td>
+              <td class="num strong">${formatQty(line.qty)}</td>
+              <td class="num">${formatInvoiceMoney(line.rate)}</td>
+              <td class="num strong">${formatInvoiceMoney(taxable)}</td>
+              <td class="num">${num(line.gstRate)}%</td>
+              <td class="num">${formatInvoiceMoney(gstAmount)}</td>
+              <td class="num strong">${formatInvoiceMoney(lineTotal)}</td>
+            </tr>`;
+          }).join("")}
+          <tr class="invoice-total-row">
+            <td></td>
+            <td class="num">Total</td>
+            <td></td>
+            <td class="num strong">${formatQty(totalQty)}</td>
+            <td></td>
+            <td class="num strong">${formatInvoiceMoney(entry.taxable)}</td>
+            <td></td>
+            <td class="num strong">${formatInvoiceMoney(entry.gst)}</td>
+            <td class="num grand-total">Rs. ${formatInvoiceMoney(payableTotal)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="amount-words-row">
+        <span>Amount (in words)</span>
+        <em>Status: ${escapeHtml(entry.status || "Draft")}</em>
+        <strong>${escapeHtml(amountInWords(payableTotal))}</strong>
+      </div>
+      ${invoiceTaxSummary(entry)}
+      ${entry.notes ? `<div class="tax-words-row"><span>Notes :</span><strong>${escapeHtml(entry.notes)}</strong></div>` : ""}
+      <div class="invoice-footer-grid">
+        <div>
+          <span>Terms</span>
+          <p>This purchase order is a request to supply the goods listed above. Stock and purchase accounts will update only after purchase entry is saved.</p>
+        </div>
+        <div class="signature-box">
+          <strong>for ${escapeHtml(settings.businessName || settings.label)}</strong>
+          <span>Authorised Signatory</span>
+        </div>
+      </div>
+      <p class="computer-note">This is a Computer Generated Purchase Order</p>
+      </div>
+    </div>
+  `;
+  $("#invoiceDialog").showModal();
+  $("#invoicePrintArea").scrollTo({ top: 0, left: 0 });
+  requestAnimationFrame(fitInvoicePreview);
+}
+
 function closeInvoiceDialog() {
   $("#invoiceDialog").close();
   clearInvoicePreviewFit();
@@ -4026,7 +4184,7 @@ async function downloadInvoicePdf() {
     setInvoicePdfBusy(true);
     const blob = await buildInvoicePdfBlob();
     downloadBlob(blob, currentInvoiceFileName);
-    toast("Invoice PDF downloaded");
+    toast("PDF downloaded");
   } catch (error) {
     console.error(error);
     toast("Could not create PDF. Try Print instead.");
@@ -4041,8 +4199,8 @@ async function shareInvoicePdf() {
     const blob = await buildInvoicePdfBlob();
     const file = new File([blob], currentInvoiceFileName, { type: "application/pdf" });
     if (canTryNativeInvoiceFileShare(file)) {
-      await shareNativeInvoiceFile(file, "Invoice PDF");
-      toast("Invoice shared");
+      await shareNativeInvoiceFile(file, currentInvoiceShareContext?.documentKind === "po" ? "Purchase Order PDF" : "Invoice PDF");
+      toast("PDF shared");
       return;
     }
     downloadBlob(blob, currentInvoiceFileName);
@@ -4059,7 +4217,7 @@ async function shareInvoicePdf() {
 
 async function shareInvoiceToWhatsApp() {
   if (!currentInvoiceShareContext?.entry) {
-    toast("Open an invoice before sharing");
+    toast("Open a document before sharing");
     return;
   }
   const message = invoiceWhatsAppMessage(currentInvoiceShareContext);
@@ -4071,7 +4229,7 @@ async function shareInvoiceToWhatsApp() {
     if (canTryNativeInvoiceFileShare(file)) {
       toast("Choose WhatsApp to send the PDF attachment");
       await shareNativeInvoiceFile(file, message);
-      toast("Invoice PDF shared");
+      toast("PDF shared");
       return;
     }
     downloadBlob(blob, currentInvoiceFileName);
@@ -4108,8 +4266,18 @@ async function shareNativeInvoiceFile(file, text) {
 
 function invoiceWhatsAppMessage({ entry, party, settings }) {
   const sellerName = settings.businessName || settings.label || "Nirvana Solutions";
-  const buyerName = party.name || "Customer";
+  const isPo = currentInvoiceShareContext?.documentKind === "po";
+  const buyerName = party.name || (isPo ? "Supplier" : "Customer");
   const amount = `${state.settings.currency || "Rs."} ${formatInvoiceMoney(invoicePayableTotal(entry))}`;
+  if (isPo) {
+    return [
+      `Dear ${buyerName},`,
+      `Please find Purchase Order ${entry.number || ""} dated ${formatInvoiceDate(entry.date)} from ${sellerName}.`,
+      `PO amount: ${amount}.`,
+      "Please find the purchase order PDF attached.",
+      "Thank you."
+    ].join("\n");
+  }
   return [
     `Dear ${buyerName},`,
     `Please find Tax Invoice ${entry.number || ""} dated ${formatInvoiceDate(entry.date)} from ${sellerName}.`,
@@ -4142,7 +4310,7 @@ function whatsappPhoneNumber(phone) {
 }
 
 async function buildInvoicePdfBlob() {
-  if (!currentInvoiceShareContext?.entry) throw new Error("Invoice is not open");
+  if (!currentInvoiceShareContext?.entry) throw new Error("Document is not open");
   const pdf = createInvoicePdfDocument();
   renderInvoiceVectorPdf(pdf, currentInvoiceShareContext);
   return pdf.output("blob");
@@ -4394,14 +4562,31 @@ function renderInvoiceVectorPdf(pdf, context) {
   renderInvoicePdfFooters(pdf, layout);
 }
 
-function invoicePdfDetails({ entry, party, settings }) {
-  const billTo = normalizeAddressSnapshot(entry.billToSnapshot || partyAddressSnapshot(party));
-  const shipTo = normalizeAddressSnapshot(entry.shipToSnapshot || billTo);
+function invoicePdfDetails({ entry, party, settings, documentKind = "invoice" }) {
+  const isPo = documentKind === "po";
+  const buyerProfile = normalizeAddressSnapshot({
+    name: settings.businessName || settings.label || "",
+    gstin: settings.gstin || "",
+    address: settings.address || "",
+    place: settings.state || stateNameFromGstin(settings.gstin) || ""
+  });
+  const billTo = isPo ? normalizeAddressSnapshot(partyAddressSnapshot(party)) : normalizeAddressSnapshot(entry.billToSnapshot || partyAddressSnapshot(party));
+  const shipTo = isPo ? buyerProfile : normalizeAddressSnapshot(entry.shipToSnapshot || billTo);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   return {
     entry,
     party,
     settings,
+    documentKind,
+    documentTitle: isPo ? "PURCHASE ORDER" : "TAX INVOICE",
+    numberLabel: isPo ? "PO No." : "Invoice No.",
+    firstPartyLabel: isPo ? "Supplier" : "Buyer (Bill to)",
+    secondPartyLabel: isPo ? "Ship To" : "Consignee (Ship to)",
+    amountWordsLabel: isPo ? "Amount (in words)" : "Amount Chargeable (in words)",
+    finalTaxWordsLabel: isPo ? "Tax Amount (in words):" : "Tax Amount (in words):",
+    declarationText: isPo
+      ? "This purchase order is a request to supply the goods listed. Stock and purchase accounts will update only after purchase entry is saved."
+      : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.",
     sellerName: settings.businessName || settings.label || "Business",
     sellerAddress: settings.address || "",
     sellerState: settings.state || stateNameFromGstin(settings.gstin) || "",
@@ -4455,7 +4640,7 @@ function renderInvoicePdfPageHeader(pdf, details, layout, continued, includeTabl
   pdf.setFontSize(15);
   pdf.text(pdfClean(details.sellerName), margin + 3, y + 7);
   pdf.setFontSize(13);
-  pdf.text("TAX INVOICE", pageWidth - margin - 3, y + 7, { align: "right" });
+  pdf.text(details.documentTitle, pageWidth - margin - 3, y + 7, { align: "right" });
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7.5);
   const addressLines = pdfWrap(pdf, details.sellerAddress, 95, 2);
@@ -4474,8 +4659,8 @@ function renderInvoicePdfPageHeader(pdf, details, layout, continued, includeTabl
   if (!continued) {
     const boxWidth = (contentWidth - 4) / 2;
     const boxHeight = 34;
-    drawInvoicePdfPartyBox(pdf, "Buyer (Bill to)", details.billTo, margin, y, boxWidth, boxHeight);
-    drawInvoicePdfPartyBox(pdf, "Consignee (Ship to)", details.shipTo, margin + boxWidth + 4, y, boxWidth, boxHeight);
+    drawInvoicePdfPartyBox(pdf, details.firstPartyLabel, details.billTo, margin, y, boxWidth, boxHeight);
+    drawInvoicePdfPartyBox(pdf, details.secondPartyLabel, details.shipTo, margin + boxWidth + 4, y, boxWidth, boxHeight);
     y += boxHeight + 5;
   }
   return includeTableHeader ? renderInvoicePdfItemHeader(pdf, layout, y) : y;
@@ -4488,7 +4673,7 @@ function drawInvoicePdfMeta(pdf, details, x, y, w) {
   pdf.line(x + w / 2, y, x + w / 2, y + 18);
   pdf.setFontSize(6.5);
   pdf.setFont("helvetica", "normal");
-  pdf.text("Invoice No.", x + 2, y + 4);
+  pdf.text(details.numberLabel, x + 2, y + 4);
   pdf.text("Dated", x + w / 2 + 2, y + 4);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(8);
@@ -4651,7 +4836,7 @@ function renderInvoicePdfTotals(pdf, details, layout, startY) {
   let y = startY + 4;
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7);
-  pdf.text("Amount Chargeable (in words)", layout.margin, y);
+  pdf.text(details.amountWordsLabel, layout.margin, y);
   pdf.setFont("helvetica", "bold");
   y += drawInvoicePdfWrapped(pdf, amountInWords(details.payableTotal), layout.margin, y + 4, layout.contentWidth - 34, 3.8);
   pdf.setFont("helvetica", "normal");
@@ -4745,17 +4930,23 @@ function renderInvoicePdfBankAndSignature(pdf, details, layout, startY) {
   pdf.rect(rightX, y, rightWidth, 40);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(7.5);
-  pdf.text("Bank Details", layout.margin + 2, y + 5);
+  pdf.text(details.documentKind === "po" ? "Terms" : "Bank Details", layout.margin + 2, y + 5);
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7);
-  const bankLines = [
-    `Bank: ${bank.bankName || "-"}`,
-    `Account Name: ${bank.accountName || details.sellerName}`,
-    `Branch: ${bank.branch || "-"}`,
-    `A/c No.: ${bank.accountNumber || "-"}`,
-    `IFSC: ${bank.ifsc || "-"}`
-  ];
-  pdf.text(bankLines.map(pdfClean), layout.margin + 2, y + 10);
+  const leftLines = details.documentKind === "po"
+    ? [
+        "Supply as per the items and rates mentioned above.",
+        "This PO does not update inventory until converted to purchase entry.",
+        details.entry.notes ? `Notes: ${details.entry.notes}` : ""
+      ].filter(Boolean)
+    : [
+        `Bank: ${bank.bankName || "-"}`,
+        `Account Name: ${bank.accountName || details.sellerName}`,
+        `Branch: ${bank.branch || "-"}`,
+        `A/c No.: ${bank.accountNumber || "-"}`,
+        `IFSC: ${bank.ifsc || "-"}`
+      ];
+  pdf.text(leftLines.map(pdfClean), layout.margin + 2, y + 10);
   pdf.setFont("helvetica", "bold");
   pdf.text(`for ${pdfClean(details.sellerName)}`, rightX + rightWidth - 2, y + 6, { align: "right" });
   pdf.setFont("helvetica", "normal");
@@ -4765,7 +4956,7 @@ function renderInvoicePdfBankAndSignature(pdf, details, layout, startY) {
   pdf.setFontSize(7);
   pdf.text("Declaration", layout.margin, y);
   pdf.setFont("helvetica", "normal");
-  y += drawInvoicePdfWrapped(pdf, "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", layout.margin, y + 4, layout.contentWidth, 3.6);
+  y += drawInvoicePdfWrapped(pdf, details.declarationText, layout.margin, y + 4, layout.contentWidth, 3.6);
   return y + 2;
 }
 
@@ -4839,6 +5030,10 @@ function setInvoicePdfBusy(isBusy) {
 
 function invoicePdfFileName(entry, party) {
   return `${safeFileName(entry.number || "invoice")}-${safeFileName(party.name || "customer")}.pdf`;
+}
+
+function purchaseOrderPdfFileName(entry, supplier) {
+  return `${safeFileName(entry.number || "purchase-order")}-${safeFileName(supplier.name || "supplier")}.pdf`;
 }
 
 function safeFileName(value) {
