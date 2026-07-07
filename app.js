@@ -3120,8 +3120,12 @@ function salesRatesIncludeGst() {
   return entryMode === "sale" && Boolean($("#entryForm")?.elements?.rateIncludesGst?.checked);
 }
 
+function entryRatesIncludeGst() {
+  return entryMode === "po" || salesRatesIncludeGst();
+}
+
 function lineInputRate(line = {}) {
-  if (entryMode === "sale" && salesRatesIncludeGst() && num(line.grossRate)) return num(line.grossRate);
+  if ((entryMode === "sale" || entryMode === "po") && entryRatesIncludeGst() && num(line.grossRate)) return num(line.grossRate);
   return num(line.rate);
 }
 
@@ -3132,7 +3136,7 @@ function lineInputHsn(line = {}) {
 
 function normalizeLineRateForEntry(line = {}) {
   const rawRate = num(line.rate);
-  if (entryMode === "sale" && salesRatesIncludeGst()) {
+  if (entryRatesIncludeGst()) {
     return {
       ...line,
       grossRate: rawRate,
@@ -3237,7 +3241,7 @@ function purchaseGrossRateFromRow(row) {
 }
 
 function updateEntryTotals() {
-  const includeGst = salesRatesIncludeGst();
+  const includeGst = entryRatesIncludeGst();
   $$(".line-row").forEach(row => {
     const qty = num(row.querySelector(".line-qty").value);
     const rawRate = num(row.querySelector(".line-rate").value);
@@ -3524,7 +3528,7 @@ async function saveEntry(event) {
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
-    rateIncludesGst: entryMode === "sale" ? salesRatesIncludeGst() : false,
+    rateIncludesGst: entryMode === "purchase" ? false : entryRatesIncludeGst(),
     sellerGstin: normalizeGstin(entryMode !== "sale" ? (party?.gstin || entryDraftMeta.sellerGstin) : profile?.gstin),
     buyerGstin: normalizeGstin(entryMode !== "sale" ? profile?.gstin : (party?.gstin || entryDraftMeta.buyerGstin)),
     billToSnapshot: saleAddress?.billToSnapshot || null,
@@ -4840,7 +4844,7 @@ function renderInvoicePdfItems(pdf, details, layout, startY) {
   let y = startY;
   details.entry.lines.forEach((line, index) => {
     const item = state.items.find(row => row.id === line.itemId) || {};
-    const row = invoicePdfLineRow(line, item, index);
+    const row = invoicePdfLineRow(line, item, index, details.documentKind);
     y = renderInvoicePdfLineRow(pdf, row, details, layout, y);
   });
   if (Math.abs(details.roundOff) >= 0.01) {
@@ -4853,7 +4857,7 @@ function renderInvoicePdfItems(pdf, details, layout, startY) {
   return y + 9;
 }
 
-function invoicePdfLineRow(line, item, index) {
+function invoicePdfLineRow(line, item, index, documentKind = "invoice") {
   const imeis = imeiNumbersFromText(line.imeiNumbers);
   const description = [
     item.name || itemName(line.itemId),
@@ -4864,7 +4868,7 @@ function invoicePdfLineRow(line, item, index) {
     description,
     hsn: item.hsn || "",
     qty: formatQty(line.qty),
-    rate: formatInvoiceMoney(line.rate),
+    rate: formatInvoiceMoney(documentKind === "po" ? lineGrossRate(line) : line.rate),
     taxable: formatInvoiceMoney(lineTaxableAmount(line)),
     gstRate: `${num(line.gstRate)}%`,
     gst: formatInvoiceMoney(lineGstAmount(line)),
