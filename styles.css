@@ -1850,33 +1850,24 @@ textarea { resize: vertical; }
 .po-filler-row td {
   height: 120px;
   border-top: 0;
-  border-bottom: 1px solid #0a0a0a;
+  border-bottom: 0;
 }
 
-.po-grand-total {
-  display: grid;
-  grid-template-columns: 1fr 110px 70px 80px 128px;
-  align-items: center;
-  min-height: 34px;
-  border-bottom: 1px solid #0a0a0a;
+.po-grand-total-row td {
+  height: 34px;
   font-size: 14px;
   font-weight: 800;
+  vertical-align: middle;
 }
 
-.po-grand-total span {
-  grid-column: 1 / 2;
-  justify-self: end;
+.po-grand-total-row td:first-child {
+  text-align: right;
   padding-right: 22px;
 }
 
-.po-grand-total strong {
-  height: 100%;
-  display: grid;
-  place-items: center;
-}
-
-.po-grand-total strong:last-child {
-  border-left: 1px solid #0a0a0a;
+.po-grand-total-row td:nth-child(3),
+.po-grand-total-row td:nth-child(4) {
+  text-align: center;
 }
 
 .po-bottom-grid {
@@ -3410,7 +3401,7 @@ body.invoice-pdf-capture .invoice-preview-frame {
   body.invoice-print-mode .po-tax-summary tr,
   body.invoice-print-mode .po-template-head,
   body.invoice-print-mode .po-info-grid,
-  body.invoice-print-mode .po-grand-total,
+  body.invoice-print-mode .po-grand-total-row,
   body.invoice-print-mode .po-bottom-grid,
   body.invoice-print-mode .modern-invoice-head,
   body.invoice-print-mode .modern-party-grid,

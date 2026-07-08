@@ -4106,14 +4106,16 @@ function showPurchaseOrder(entry, supplier, settings) {
             }).join("")}
             <tr class="po-filler-row"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
           </tbody>
+          <tfoot>
+            <tr class="po-grand-total-row">
+              <td colspan="4" class="num">Grand Total</td>
+              <td class="num">${formatPoQty(totalQty)}</td>
+              <td>Pcs.</td>
+              <td class="num">Rs.</td>
+              <td class="num">${formatInvoiceMoney(payableTotal)}</td>
+            </tr>
+          </tfoot>
         </table>
-        <div class="po-grand-total">
-          <span>Grand Total</span>
-          <strong>${formatPoQty(totalQty)}</strong>
-          <strong>Pcs.</strong>
-          <strong>Rs.</strong>
-          <strong>${formatInvoiceMoney(payableTotal)}</strong>
-        </div>
         <section class="po-bottom-grid">
           <div>
             ${purchaseOrderTaxSummary(entry)}
