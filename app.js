@@ -2020,14 +2020,31 @@ async function syncCloudNow(showToast) {
     return false;
   }
   clearTimeout(cloudSyncTimer);
+  const selectColumns = "id,name,owner_id,member_emails,data,updated_at,created_at";
+  const { data: latestWorkspace, error: readError } = await cloudClient
+    .from(CLOUD_WORKSPACE_TABLE)
+    .select(selectColumns)
+    .eq("id", cloudWorkspace.id)
+    .single();
+  if (readError) {
+    if (showToast) toast(readError.message);
+    else toast("Cloud sync failed");
+    return false;
+  }
+  const latestChangedElsewhere = String(latestWorkspace?.updated_at || "") !== String(cloudWorkspace?.updated_at || "");
+  let uploadState = normalizeState(clone(state));
+  if (latestChangedElsewhere) {
+    const merged = mergeCloudStateWithLocalCandidates(latestWorkspace.data || defaultState, [uploadState]);
+    uploadState = merged.state;
+  }
   const { data, error } = await cloudClient
     .from(CLOUD_WORKSPACE_TABLE)
     .update({
-      data: clone(state),
+      data: clone(uploadState),
       updated_at: new Date().toISOString()
     })
     .eq("id", cloudWorkspace.id)
-    .select("id,name,owner_id,member_emails,data,updated_at,created_at")
+    .select(selectColumns)
     .single();
   if (error) {
     if (showToast) toast(error.message);
@@ -2036,7 +2053,13 @@ async function syncCloudNow(showToast) {
   }
   cloudWorkspace = data;
   cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
-  renderCloudUi();
+  if (latestChangedElsewhere) {
+    state = normalizeState(clone(data.data || uploadState));
+    saveState({ skipCloud: true, skipLocalBackup: true });
+    renderAll();
+  } else {
+    renderCloudUi();
+  }
   if (showToast) toast("Cloud synced");
   return true;
 }
