@@ -2749,26 +2749,26 @@ textarea { resize: vertical; }
   }
   .nav-tabs {
     display: grid;
-    grid-template-columns: repeat(7, minmax(44px, 1fr));
-    gap: 4px;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 3px;
     overflow: visible;
   }
   .nav-tab {
     min-width: 0;
-    min-height: 54px;
+    min-height: 52px;
     grid-template-columns: 1fr;
     justify-items: center;
     align-content: center;
     gap: 3px;
-    padding: 5px 2px;
+    padding: 5px 1px;
     color: var(--muted);
-    font-size: 10px;
+    font-size: 9px;
     line-height: 1.1;
     text-align: center;
   }
   .nav-tab svg {
-    width: 19px;
-    height: 19px;
+    width: 18px;
+    height: 18px;
   }
   .nav-tab:hover,
   .nav-tab.active {
@@ -3197,6 +3197,168 @@ textarea { resize: vertical; }
   #itemRows td:last-child::before,
   #partyRows td:last-child::before {
     content: "";
+  }
+  #salesView > .table-wrap.panel,
+  #purchasesView > .table-wrap.panel {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  #salesView .table-wrap tbody,
+  #purchasesView .table-wrap tbody {
+    gap: 9px;
+    padding: 0;
+  }
+  #salesRows tr,
+  #purchaseRows tr {
+    position: relative;
+    gap: 6px;
+    padding: 12px;
+    border-color: #dfe6e7;
+    border-radius: 10px;
+    box-shadow: 0 8px 20px rgba(28, 37, 38, 0.06);
+  }
+  #salesRows td,
+  #purchaseRows td {
+    min-width: 0;
+    display: block;
+    padding: 0;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  #salesRows td::before,
+  #purchaseRows td::before {
+    display: none;
+  }
+  #salesRows .badge,
+  #purchaseRows .badge {
+    min-height: 22px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  #salesRows .sync-status-badge,
+  #purchaseRows .sync-status-badge {
+    margin-left: 5px;
+    min-height: 18px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+  #salesRows .row-actions,
+  #purchaseRows .row-actions {
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 2px;
+  }
+  #salesRows .mini-btn,
+  #purchaseRows .mini-btn {
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+  }
+  #salesRows tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "party status"
+      "number date"
+      "profile profile"
+      "total total"
+      "taxable gst"
+      "actions actions";
+  }
+  #salesRows td:nth-child(1) { grid-area: date; justify-self: end; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #salesRows td:nth-child(2) {
+    grid-area: number;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    overflow-wrap: normal;
+    word-break: keep-all;
+  }
+  #salesRows td:nth-child(3) { grid-area: profile; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #salesRows td:nth-child(4) { grid-area: party; font-size: 15px; font-weight: 800; color: var(--ink); }
+  #salesRows td:nth-child(5) { grid-area: status; justify-self: end; }
+  #salesRows td:nth-child(6) { grid-area: taxable; }
+  #salesRows td:nth-child(7) { grid-area: gst; }
+  #salesRows td:nth-child(8) { grid-area: total; }
+  #salesRows td:nth-child(9) { grid-area: actions; align-self: end; }
+  #purchaseRows tr {
+    grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas:
+      "select party party eway"
+      "select number date date"
+      "profile profile profile profile"
+      "total total total total"
+      "taxable taxable gst actions";
+  }
+  #purchaseRows td:nth-child(1) { grid-area: select; align-self: start; padding-top: 2px; }
+  #purchaseRows td:nth-child(2) { grid-area: date; justify-self: end; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #purchaseRows td:nth-child(3) {
+    grid-area: number;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    overflow-wrap: normal;
+    word-break: keep-all;
+  }
+  #purchaseRows td:nth-child(4) { grid-area: profile; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #purchaseRows td:nth-child(5) { grid-area: party; font-size: 15px; font-weight: 800; color: var(--ink); }
+  #purchaseRows td:nth-child(6) { grid-area: eway; justify-self: end; }
+  #purchaseRows td:nth-child(7) { grid-area: taxable; }
+  #purchaseRows td:nth-child(8) { grid-area: gst; }
+  #purchaseRows td:nth-child(9) { grid-area: total; }
+  #purchaseRows td:nth-child(10) { grid-area: actions; }
+  #salesRows td:nth-child(6),
+  #salesRows td:nth-child(7),
+  #salesRows td:nth-child(8),
+  #purchaseRows td:nth-child(7),
+  #purchaseRows td:nth-child(8),
+  #purchaseRows td:nth-child(9) {
+    display: grid;
+    gap: 2px;
+    padding-top: 8px;
+    border-top: 1px solid #edf1f2;
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #salesRows td:nth-child(6)::before,
+  #salesRows td:nth-child(7)::before,
+  #salesRows td:nth-child(8)::before,
+  #purchaseRows td:nth-child(7)::before,
+  #purchaseRows td:nth-child(8)::before,
+  #purchaseRows td:nth-child(9)::before {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0;
+  }
+  #salesView #salesRows td:nth-child(6)::before,
+  #purchasesView #purchaseRows td:nth-child(7)::before { content: "Taxable"; }
+  #salesView #salesRows td:nth-child(7)::before,
+  #purchasesView #purchaseRows td:nth-child(8)::before { content: "GST"; }
+  #salesView #salesRows td:nth-child(8)::before,
+  #purchasesView #purchaseRows td:nth-child(9)::before { content: "Total"; }
+  #salesRows td:nth-child(8),
+  #purchaseRows td:nth-child(9) {
+    color: var(--primary-dark);
+    font-size: 17px;
+    font-weight: 850;
+  }
+  #purchaseRows .purchase-select {
+    width: 24px;
+    min-height: 24px;
   }
   .span-2 { grid-column: span 1; }
   .line-row { grid-template-columns: 1fr; }
