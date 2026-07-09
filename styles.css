@@ -849,6 +849,17 @@ textarea { resize: vertical; }
   min-width: 0;
 }
 
+.entry-party-search {
+  min-height: 40px;
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
 .entry-party-field .secondary-btn {
   min-height: 38px;
   white-space: nowrap;

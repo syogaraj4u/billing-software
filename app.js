@@ -1403,6 +1403,8 @@ function bindEvents() {
   $("#newPartyBtn").addEventListener("click", () => openParty(null, { type: "Customer", title: "New Party", saveLabel: "Save Party" }));
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryAddBuyerBtn").addEventListener("click", openBuyerFromEntry);
+  bindIf("#entryPartySearch", "input", handleEntryPartySearchInput);
+  bindIf("#entryPartySearch", "keydown", handleEntryPartySearchKeydown);
   $("#entryForm").addEventListener("submit", saveEntry);
   $("#entryForm").elements.shipToSame.addEventListener("change", updateSalesAddressPanel);
   $("#entryForm").elements.shipToAddressId.addEventListener("change", updateSalesAddressPanel);
@@ -2711,15 +2713,127 @@ function emptyRow(colspan, label) {
   return `<tr><td colspan="${colspan}" class="empty-row">${label}</td></tr>`;
 }
 
-function partyOptions(kind, selected = "") {
+function entryPartyTypes(kind) {
   const wanted = kind === "sale" ? ["Customer", "Both"] : ["Supplier", "Both"];
-  const choices = state.parties
-    .filter(party => wanted.includes(party.type))
+  return wanted;
+}
+
+function entryPartyChoices(kind) {
+  return state.parties
+    .filter(party => entryPartyTypes(kind).includes(party.type))
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+}
+
+function entryPartyOptionLabel(party = {}) {
+  return [party.name, normalizeGstin(party.gstin)]
+    .filter(Boolean)
+    .join(" - ");
+}
+
+function entryPartySearchText(party = {}) {
+  return normalizeForAlias([
+    party.name,
+    party.gstin,
+    party.place,
+    party.address,
+    partyAliasList(party).join(" ")
+  ].filter(Boolean).join(" "));
+}
+
+function partyMatchesEntrySearch(party, query) {
+  const normalizedQuery = normalizeForAlias(query);
+  if (!normalizedQuery) return true;
+  const searchText = entryPartySearchText(party);
+  return normalizedQuery.split(" ").every(part => searchText.includes(part));
+}
+
+function filteredEntryPartyChoices(kind, query = "") {
+  return entryPartyChoices(kind).filter(party => partyMatchesEntrySearch(party, query));
+}
+
+function partyOptions(kind, selected = "", query = "") {
+  const choices = entryPartyChoices(kind);
+  const filteredChoices = filteredEntryPartyChoices(kind, query);
+  const label = kind === "sale" ? "buyer" : "supplier";
+  const showSelectBuyer = kind === "sale" && !normalizeForAlias(query);
   if (!choices.length) {
     return `<option value="">${kind === "sale" ? "Add buyer first" : "Add supplier first"}</option>`;
   }
-  return choices.map(party => `<option value="${party.id}" ${party.id === selected ? "selected" : ""}>${escapeHtml(party.name)}</option>`).join("");
+  if (!filteredChoices.length) {
+    return `<option value="">No ${label} found</option>`;
+  }
+  const placeholder = showSelectBuyer ? `<option value="" ${selected ? "" : "selected"}>Select buyer</option>` : "";
+  const options = filteredChoices
+    .map(party => `<option value="${party.id}" ${party.id === selected ? "selected" : ""}>${escapeHtml(entryPartyOptionLabel(party))}</option>`)
+    .join("");
+  return `${placeholder}${options}`;
+}
+
+function setupEntryPartySearch(kind, selectedId = "") {
+  const search = $("#entryPartySearch");
+  const hint = $("#entryPartySearchHint");
+  if (!search) return;
+  const isSale = kind === "sale";
+  search.hidden = !isSale;
+  if (hint) {
+    hint.hidden = true;
+    hint.textContent = "";
+  }
+  if (!isSale) {
+    search.value = "";
+    return;
+  }
+  const selectedParty = partyById(selectedId);
+  search.value = selectedParty ? entryPartyOptionLabel(selectedParty) : "";
+}
+
+function updateEntryPartySearchHint(matchCount, query) {
+  const hint = $("#entryPartySearchHint");
+  if (!hint) return;
+  if (!normalizeForAlias(query)) {
+    hint.hidden = true;
+    hint.textContent = "";
+    return;
+  }
+  hint.hidden = false;
+  hint.textContent = matchCount
+    ? `${matchCount} buyer${matchCount === 1 ? "" : "s"} found`
+    : "No buyer found. Add it as a new buyer.";
+}
+
+function syncEntryPartySearchValue() {
+  if (entryMode !== "sale") return;
+  const search = $("#entryPartySearch");
+  const hint = $("#entryPartySearchHint");
+  const form = $("#entryForm");
+  if (!search || !form) return;
+  const party = partyById(form.elements.partyId.value);
+  search.value = party ? entryPartyOptionLabel(party) : "";
+  if (hint) {
+    hint.hidden = true;
+    hint.textContent = "";
+  }
+}
+
+function handleEntryPartySearchInput(event) {
+  if (entryMode !== "sale") return;
+  const form = $("#entryForm");
+  const query = event.target.value;
+  const matches = filteredEntryPartyChoices("sale", query);
+  const selectedId = normalizeForAlias(query) ? matches[0]?.id || "" : "";
+  form.elements.partyId.innerHTML = partyOptions("sale", selectedId, query);
+  form.elements.partyId.value = selectedId;
+  updateEntryPartySearchHint(matches.length, query);
+  updateSalesAddressPanel();
+  updateEntryTotals();
+}
+
+function handleEntryPartySearchKeydown(event) {
+  if (event.key !== "Enter" || entryMode !== "sale") return;
+  event.preventDefault();
+  syncEntryPartySearchValue();
+  updateSalesAddressPanel();
+  updateEntryTotals();
 }
 
 function itemOptions(selected = "", fallbackName = "") {
@@ -2791,7 +2905,10 @@ function openEntry(kind, id = null, draft = null) {
   $("#entryPartyLabelText").textContent = isSale ? "Buyer" : "Supplier";
   $("#entryAddBuyerBtn").hidden = !isSale;
   form.elements.partyId.innerHTML = partyOptions(kind, source?.partyId);
+  form.elements.partyId.value = source?.partyId || (isSale ? "" : form.elements.partyId.value);
+  setupEntryPartySearch(kind, form.elements.partyId.value);
   form.elements.partyId.onchange = () => {
+    syncEntryPartySearchValue();
     updateSalesAddressPanel();
     updatePurchaseEwayPanel();
     updateEntryTotals();
@@ -4320,6 +4437,7 @@ function selectSavedPartyInOpenEntry(party) {
   const form = $("#entryForm");
   form.elements.partyId.innerHTML = partyOptions("sale", party.id);
   form.elements.partyId.value = party.id;
+  setupEntryPartySearch("sale", party.id);
   setupSalesAddressPanel("sale", null);
   updateEntryTotals();
 }

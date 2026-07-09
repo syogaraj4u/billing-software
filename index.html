@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260709-mobile-compact-cards">
+  <link rel="stylesheet" href="styles.css?v=20260709-buyer-search">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -307,7 +307,7 @@
             <label>Date<input name="date" type="date" required></label>
             <label>Number<input name="number" required></label>
             <div class="entry-party-field">
-              <label><span id="entryPartyLabelText">Party</span><select name="partyId" required></select></label>
+              <label><span id="entryPartyLabelText">Party</span><input id="entryPartySearch" class="entry-party-search" type="search" placeholder="Search buyer name, GSTIN or short name" autocomplete="off" hidden><select name="partyId" required></select><small id="entryPartySearchHint" class="field-hint" hidden></small></label>
               <button class="secondary-btn" id="entryAddBuyerBtn" type="button"><i data-lucide="user-plus"></i><span>New Buyer</span></button>
             </div>
             <label id="entryStatusLabel">Status<select name="status"><option>Paid</option><option>Unpaid</option><option>Partial</option></select></label>
@@ -522,6 +522,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260709-normalized-sync"></script>
+  <script src="app.js?v=20260709-buyer-search"></script>
 </body>
 </html>
