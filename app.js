@@ -2,8 +2,24 @@ const STORAGE_KEY = "billingSoftware.v1";
 const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
+const CLOUD_ROW_TABLES = {
+  parties: "billing_parties",
+  items: "billing_items",
+  sales: "billing_sales",
+  purchases: "billing_purchases",
+  purchaseOrders: "billing_purchase_orders",
+  saleItems: "billing_sale_items",
+  purchaseItems: "billing_purchase_items",
+  purchaseOrderItems: "billing_purchase_order_items",
+  auditLogs: "billing_audit_logs",
+  backups: "billing_cloud_backups"
+};
 const CLOUD_SELECTED_WORKSPACE_KEY = "billingSoftware.cloudWorkspaceId";
 const PURCHASE_ATTACHMENT_BUCKET = "purchase-invoices";
+const SYNC_STATUS_LOCAL = "Saved locally";
+const SYNC_STATUS_SYNCING = "Syncing";
+const SYNC_STATUS_SYNCED = "Synced";
+const SYNC_STATUS_FAILED = "Sync failed";
 const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
 const DEFAULT_SALE_GST_RATE = 18;
@@ -519,6 +535,7 @@ function normalizeState(value) {
     value.settings.activeProfileId = profiles[0].id;
   }
   value.items = (Array.isArray(value.items) ? value.items : []).filter(item => !isDefaultSampleProduct(item));
+  value.items.forEach(item => normalizeCloudEntityMeta(item));
   value.parties = Array.isArray(value.parties) ? value.parties.map(normalizePartyForState) : [];
   mergeTallyBuyerMaster(value);
   value.sales = Array.isArray(value.sales) ? value.sales : [];
@@ -630,7 +647,7 @@ function isDefaultSampleProduct(item = {}) {
 }
 
 function normalizePartyForState(party) {
-  return {
+  const normalized = {
     id: party.id || uid(),
     name: party.name || "",
     type: party.type || "Customer",
@@ -642,6 +659,8 @@ function normalizePartyForState(party) {
     aliases: party.aliases || "",
     shippingAddresses: normalizeShippingAddresses(party.shippingAddresses || party.shipToAddresses || [])
   };
+  normalizeCloudEntityMeta(normalized, party);
+  return normalized;
 }
 
 function normalizeShippingAddresses(addresses = []) {
@@ -776,6 +795,7 @@ function initialsAlias(value) {
 }
 
 function normalizeEntryForState(entry, kind, parties = [], items = []) {
+  normalizeCloudEntityMeta(entry);
   entry.lines = Array.isArray(entry.lines) ? entry.lines : [];
   const calculated = basicTotals(entry.lines);
   entry.taxable = num(entry.taxable) || calculated.taxable;
@@ -800,6 +820,16 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
     entry.ewayDetails = normalizePurchaseEwayDetails(entry.ewayDetails || {});
     if (entry.roundOff) entry.total = round2(entry.taxable + entry.gst + entry.roundOff);
   }
+}
+
+function normalizeCloudEntityMeta(target, source = target) {
+  if (!target) return target;
+  target.syncStatus = source.syncStatus || SYNC_STATUS_SYNCED;
+  target.createdAt = source.createdAt || source.created_at || "";
+  target.updatedAt = source.updatedAt || source.updated_at || "";
+  target.createdBy = source.createdBy || source.created_by || "";
+  target.lastSyncedAt = source.lastSyncedAt || source.last_synced_at || "";
+  return target;
 }
 
 function normalizeSaleAddressSnapshots(entry, parties = []) {
@@ -1851,7 +1881,7 @@ async function loadCloudWorkspaces() {
     toast("Cloud table is not ready. Run the database setup.");
     return;
   }
-  cloudWorkspaces = data || [];
+  cloudWorkspaces = await Promise.all((data || []).map(enrichCloudWorkspaceWithRows));
   if (!cloudWorkspaces.length) {
     await createCloudWorkspace("Main Business");
     return;
@@ -1972,6 +2002,96 @@ function applyCloudWorkspace(workspace, message) {
   if (message) toast(merged.changed ? `${message}. Local saved entries kept.` : message);
 }
 
+async function enrichCloudWorkspaceWithRows(workspace = {}) {
+  const rowState = await readNormalizedCloudState(workspace.id);
+  if (!rowState) return workspace;
+  const merged = mergeCloudStateWithLocalCandidates(workspace.data || defaultState, [rowState]);
+  return { ...workspace, data: merged.state };
+}
+
+async function readNormalizedCloudState(workspaceId) {
+  if (!cloudClient || !workspaceId) return null;
+  const [parties, items, sales, purchases, purchaseOrders] = await Promise.all([
+    readCloudTableRows(CLOUD_ROW_TABLES.parties, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.items, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.sales, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.purchases, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.purchaseOrders, workspaceId)
+  ]);
+  if ([parties, items, sales, purchases, purchaseOrders].some(result => result === null)) return null;
+  const hasRows = [parties, items, sales, purchases, purchaseOrders].some(rows => rows.length);
+  if (!hasRows) return null;
+  return normalizeState({
+    ...clone(defaultState),
+    parties: parties.map(row => cloudRowData(row, {
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      gstin: row.gstin,
+      phone: row.phone,
+      email: row.email,
+      place: row.place
+    })),
+    items: items.map(row => cloudRowData(row, {
+      id: row.id,
+      name: row.name,
+      hsn: row.hsn,
+      gstRate: row.gst_rate,
+      saleRate: row.sale_rate,
+      purchaseRate: row.purchase_rate
+    })),
+    sales: sales.map(row => cloudRowData(row, cloudEntryFallback(row, "sale"))),
+    purchases: purchases.map(row => cloudRowData(row, cloudEntryFallback(row, "purchase"))),
+    purchaseOrders: purchaseOrders.map(row => cloudRowData(row, cloudEntryFallback(row, "po")))
+  });
+}
+
+async function readCloudTableRows(table, workspaceId) {
+  const { data, error } = await cloudClient
+    .from(table)
+    .select("*")
+    .eq("workspace_id", workspaceId);
+  if (!error) return data || [];
+  if (isMissingCloudTableError(error)) return null;
+  console.warn("Cloud row table read failed", table, error);
+  return [];
+}
+
+function isMissingCloudTableError(error = {}) {
+  return error.code === "42P01" || /does not exist|schema cache|Could not find the table/i.test(error.message || "");
+}
+
+function cloudRowData(row = {}, fallback = {}) {
+  return normalizeCloudEntityMeta({ ...fallback, ...(row.data || {}) }, {
+    syncStatus: row.sync_status || SYNC_STATUS_SYNCED,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by,
+    lastSyncedAt: row.last_synced_at
+  });
+}
+
+function cloudEntryFallback(row = {}, kind = "purchase") {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    partyId: row.party_id,
+    number: kind === "po" ? row.po_number : row.invoice_number,
+    date: kind === "po" ? row.po_date : row.invoice_date,
+    status: row.status,
+    taxable: row.taxable,
+    cgst: row.cgst,
+    sgst: row.sgst,
+    igst: row.igst,
+    gst: row.gst,
+    total: row.total,
+    sellerGstin: row.seller_gstin,
+    buyerGstin: row.buyer_gstin,
+    reviewStatus: row.review_status,
+    cancelled: row.cancelled
+  };
+}
+
 function parseMemberEmails(value) {
   return [...new Set(value
     .split(/[\n,;]/)
@@ -2031,17 +2151,31 @@ async function syncCloudNow(showToast) {
     else toast("Cloud sync failed");
     return false;
   }
-  const latestChangedElsewhere = String(latestWorkspace?.updated_at || "") !== String(cloudWorkspace?.updated_at || "");
+  const normalizedCloudState = await readNormalizedCloudState(cloudWorkspace.id);
+  const latestMerge = mergeCloudStateWithLocalCandidates(latestWorkspace.data || defaultState, [normalizedCloudState]);
+  const latestCloudState = latestMerge.state;
+  const latestChangedElsewhere = latestMerge.changed || String(latestWorkspace?.updated_at || "") !== String(cloudWorkspace?.updated_at || "");
+  const previousState = normalizeState(clone(latestCloudState));
   let uploadState = normalizeState(clone(state));
   if (latestChangedElsewhere) {
-    const merged = mergeCloudStateWithLocalCandidates(latestWorkspace.data || defaultState, [uploadState]);
+    const merged = mergeCloudStateWithLocalCandidates(latestCloudState, [uploadState]);
     uploadState = merged.state;
+  }
+  const syncedAt = new Date().toISOString();
+  uploadState = markStateSyncStatus(uploadState, SYNC_STATUS_SYNCED, syncedAt);
+  try {
+    await syncNormalizedCloudTables(uploadState, previousState, syncedAt);
+  } catch (syncError) {
+    console.warn("Normalized cloud sync failed", syncError);
+    if (showToast) toast(normalizedSyncErrorMessage(syncError));
+    else toast("Cloud row sync failed");
+    return false;
   }
   const { data, error } = await cloudClient
     .from(CLOUD_WORKSPACE_TABLE)
     .update({
       data: clone(uploadState),
-      updated_at: new Date().toISOString()
+      updated_at: syncedAt
     })
     .eq("id", cloudWorkspace.id)
     .select(selectColumns)
@@ -2053,15 +2187,305 @@ async function syncCloudNow(showToast) {
   }
   cloudWorkspace = data;
   cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
-  if (latestChangedElsewhere) {
-    state = normalizeState(clone(data.data || uploadState));
-    saveState({ skipCloud: true, skipLocalBackup: true });
-    renderAll();
-  } else {
-    renderCloudUi();
-  }
+  state = normalizeState(clone(data.data || uploadState));
+  saveState({ skipCloud: true, skipLocalBackup: true });
+  renderAll();
   if (showToast) toast("Cloud synced");
   return true;
+}
+
+function normalizedSyncErrorMessage(error = {}) {
+  if (isMissingCloudTableError(error)) return "Cloud row tables are not ready. Run the latest database setup.";
+  return error.message || "Cloud row sync failed";
+}
+
+async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
+  const workspaceId = cloudWorkspace?.id;
+  if (!cloudClient || !workspaceId) return;
+  const userId = currentCloudUserId();
+  await Promise.all([
+    syncCloudEntityTable(CLOUD_ROW_TABLES.parties, "id", nextState.parties, previousState.parties, row => cloudPartyRow(workspaceId, row, syncedAt, userId)),
+    syncCloudEntityTable(CLOUD_ROW_TABLES.items, "id", nextState.items, previousState.items, row => cloudItemRow(workspaceId, row, syncedAt, userId)),
+    syncCloudEntityTable(CLOUD_ROW_TABLES.sales, "id", nextState.sales, previousState.sales, row => cloudEntryRow(workspaceId, row, "sale", syncedAt, userId)),
+    syncCloudEntityTable(CLOUD_ROW_TABLES.purchases, "id", nextState.purchases, previousState.purchases, row => cloudEntryRow(workspaceId, row, "purchase", syncedAt, userId)),
+    syncCloudEntityTable(CLOUD_ROW_TABLES.purchaseOrders, "id", nextState.purchaseOrders, previousState.purchaseOrders, row => cloudEntryRow(workspaceId, row, "po", syncedAt, userId))
+  ]);
+  await Promise.all([
+    replaceCloudLineRows(CLOUD_ROW_TABLES.saleItems, nextState.sales.flatMap(entry => cloudLineRows(workspaceId, entry, "sale", syncedAt, userId))),
+    replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseItems, nextState.purchases.flatMap(entry => cloudLineRows(workspaceId, entry, "purchase", syncedAt, userId))),
+    replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseOrderItems, nextState.purchaseOrders.flatMap(entry => cloudLineRows(workspaceId, entry, "po", syncedAt, userId)))
+  ]);
+  await insertCloudAuditRows(buildCloudAuditRows(previousState, nextState, syncedAt, userId));
+  await saveDailyCloudBackup(nextState, syncedAt, userId);
+}
+
+async function syncCloudEntityTable(table, idColumn, currentRows = [], previousRows = [], mapRow) {
+  const workspaceId = cloudWorkspace.id;
+  const currentIds = new Set(currentRows.map(row => row.id).filter(Boolean));
+  const removedIds = previousRows.map(row => row.id).filter(id => id && !currentIds.has(id));
+  const mappedRows = currentRows.map(mapRow);
+  if (mappedRows.length) {
+    const { error } = await cloudClient.from(table).upsert(mappedRows);
+    if (error) throw error;
+  }
+  if (removedIds.length) {
+    const { error } = await cloudClient
+      .from(table)
+      .delete()
+      .eq("workspace_id", workspaceId)
+      .in(idColumn, removedIds);
+    if (error) throw error;
+  }
+}
+
+async function replaceCloudLineRows(table, rows = []) {
+  const { error: deleteError } = await cloudClient
+    .from(table)
+    .delete()
+    .eq("workspace_id", cloudWorkspace.id);
+  if (deleteError) throw deleteError;
+  if (!rows.length) return;
+  const { error } = await cloudClient.from(table).insert(rows);
+  if (error) throw error;
+}
+
+function cloudPartyRow(workspaceId, party, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    id: party.id,
+    name: party.name || "",
+    type: party.type || "",
+    gstin: normalizeGstin(party.gstin),
+    phone: party.phone || "",
+    email: party.email || "",
+    place: party.place || "",
+    data: clone(party),
+    ...cloudSyncColumns(party, syncedAt, userId)
+  };
+}
+
+function cloudItemRow(workspaceId, item, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    id: item.id,
+    name: item.name || "",
+    hsn: item.hsn || "",
+    gst_rate: num(item.gstRate),
+    sale_rate: num(item.saleRate),
+    purchase_rate: num(item.purchaseRate),
+    data: clone(item),
+    ...cloudSyncColumns(item, syncedAt, userId)
+  };
+}
+
+function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
+  const base = {
+    workspace_id: workspaceId,
+    id: entry.id,
+    profile_id: entry.profileId || "",
+    party_id: entry.partyId || "",
+    status: entry.status || "",
+    taxable: round2(entry.taxable),
+    cgst: round2(entry.cgst),
+    sgst: round2(entry.sgst),
+    igst: round2(entry.igst),
+    gst: round2(entry.gst),
+    total: round2(entry.total),
+    data: clone(entry),
+    ...cloudSyncColumns(entry, syncedAt, userId)
+  };
+  if (kind === "po") {
+    return {
+      ...base,
+      po_number: entry.number || "",
+      po_date: cloudDate(entry.date)
+    };
+  }
+  if (kind === "purchase") {
+    return {
+      ...base,
+      invoice_number: entry.number || "",
+      invoice_date: cloudDate(entry.date),
+      seller_gstin: normalizeGstin(entry.sellerGstin),
+      buyer_gstin: normalizeGstin(entry.buyerGstin),
+      review_status: entry.reviewStatus || ""
+    };
+  }
+  return {
+    ...base,
+    invoice_number: entry.number || "",
+    invoice_date: cloudDate(entry.date),
+    cancelled: isCancelledEntry(entry)
+  };
+}
+
+function cloudLineRows(workspaceId, entry, kind, syncedAt, userId) {
+  const parentColumn = kind === "sale" ? "sale_id" : kind === "purchase" ? "purchase_id" : "purchase_order_id";
+  return (entry.lines || []).map((line, index) => {
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    const base = {
+      workspace_id: workspaceId,
+      [parentColumn]: entry.id,
+      line_index: index,
+      item_id: line.itemId || "",
+      item_name: line.itemName || item.name || itemNameByLine(line, item, index + 1),
+      hsn: lineHsn(line, item),
+      qty: num(line.qty),
+      rate: num(line.rate),
+      gst_rate: num(line.gstRate),
+      taxable: lineTaxableAmount(line),
+      gst: lineGstAmount(line),
+      total: lineGrossAmount(line),
+      data: clone(line),
+      sync_status: SYNC_STATUS_SYNCED,
+      created_at: syncedAt,
+      updated_at: syncedAt,
+      created_by: userId,
+      last_synced_at: syncedAt
+    };
+    if (kind !== "sale") base.gross_rate = lineGrossRate(line);
+    return base;
+  });
+}
+
+function cloudSyncColumns(entity = {}, syncedAt, userId) {
+  return {
+    sync_status: SYNC_STATUS_SYNCED,
+    created_at: cloudTimestamp(entity.createdAt) || syncedAt,
+    updated_at: cloudTimestamp(entity.updatedAt) || syncedAt,
+    created_by: entity.createdBy || userId,
+    last_synced_at: syncedAt
+  };
+}
+
+function cloudDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? value : null;
+}
+
+function cloudTimestamp(value) {
+  const date = new Date(value || "");
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function markStateSyncStatus(sourceState, status, syncedAt = "") {
+  const nextState = normalizeState(clone(sourceState || defaultState));
+  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.purchases, ...nextState.purchaseOrders]
+    .forEach(entity => markEntitySyncStatus(entity, status, syncedAt));
+  return nextState;
+}
+
+function markEntitySyncStatus(entity, status, syncedAt = "") {
+  if (!entity) return entity;
+  entity.syncStatus = status;
+  if (status === SYNC_STATUS_SYNCED && syncedAt) entity.lastSyncedAt = syncedAt;
+  return entity;
+}
+
+function currentCloudUserId() {
+  return cloudSession?.user?.id || null;
+}
+
+function cloudReadyForSync() {
+  return Boolean(cloudClient && cloudSession && cloudWorkspace);
+}
+
+function buildCloudAuditRows(previousState, nextState, syncedAt, userId) {
+  const groups = [
+    ["party", previousState.parties, nextState.parties],
+    ["item", previousState.items, nextState.items],
+    ["sale", previousState.sales, nextState.sales],
+    ["purchase", previousState.purchases, nextState.purchases],
+    ["purchase_order", previousState.purchaseOrders, nextState.purchaseOrders]
+  ];
+  return groups.flatMap(([entityType, beforeRows, afterRows]) => buildCloudAuditRowsForGroup(entityType, beforeRows, afterRows, syncedAt, userId));
+}
+
+function buildCloudAuditRowsForGroup(entityType, beforeRows = [], afterRows = [], syncedAt, userId) {
+  const beforeById = new Map(beforeRows.map(row => [row.id, row]));
+  const afterById = new Map(afterRows.map(row => [row.id, row]));
+  const ids = new Set([...beforeById.keys(), ...afterById.keys()].filter(Boolean));
+  return [...ids].flatMap(id => {
+    const before = beforeById.get(id);
+    const after = afterById.get(id);
+    if (!before && after) return [cloudAuditRow(entityType, id, "created", null, after, syncedAt, userId)];
+    if (before && !after) return [cloudAuditRow(entityType, id, "deleted", before, null, syncedAt, userId)];
+    if (cloudAuditComparable(before) !== cloudAuditComparable(after)) {
+      return [cloudAuditRow(entityType, id, "updated", before, after, syncedAt, userId)];
+    }
+    return [];
+  });
+}
+
+function cloudAuditRow(entityType, entityId, action, before, after, syncedAt, userId) {
+  return {
+    workspace_id: cloudWorkspace.id,
+    entity_type: entityType,
+    entity_id: entityId,
+    action,
+    before_data: before ? clone(before) : null,
+    after_data: after ? clone(after) : null,
+    source: "web-app",
+    created_by: userId,
+    created_at: syncedAt
+  };
+}
+
+function cloudAuditComparable(entity = {}) {
+  const copy = clone(entity || {});
+  delete copy.syncStatus;
+  delete copy.lastSyncedAt;
+  delete copy.updatedAt;
+  return JSON.stringify(copy);
+}
+
+async function insertCloudAuditRows(rows = []) {
+  if (!rows.length) return;
+  const { error } = await cloudClient.from(CLOUD_ROW_TABLES.auditLogs).insert(rows);
+  if (error) throw error;
+}
+
+async function saveDailyCloudBackup(nextState, syncedAt, userId) {
+  const { error } = await cloudClient
+    .from(CLOUD_ROW_TABLES.backups)
+    .upsert({
+      workspace_id: cloudWorkspace.id,
+      backup_date: today(),
+      data: clone(nextState),
+      created_by: userId,
+      created_at: syncedAt
+    }, { onConflict: "workspace_id,backup_date" });
+  if (error) throw error;
+}
+
+function newLocalSyncStatus() {
+  return cloudClient && cloudSession && cloudWorkspace ? SYNC_STATUS_SYNCING : SYNC_STATUS_LOCAL;
+}
+
+function entityWithLocalMeta(entity, existingEntity = null) {
+  const now = new Date().toISOString();
+  return {
+    ...entity,
+    syncStatus: newLocalSyncStatus(),
+    createdAt: existingEntity?.createdAt || now,
+    updatedAt: now,
+    createdBy: existingEntity?.createdBy || currentCloudUserId() || "",
+    lastSyncedAt: existingEntity?.lastSyncedAt || ""
+  };
+}
+
+function markEntrySyncFailed(kind, id) {
+  const entry = entryList(kind).find(row => row.id === id);
+  if (!entry) return;
+  markEntitySyncStatus(entry, SYNC_STATUS_FAILED);
+  saveState({ skipCloud: true });
+  renderEntries(kind);
+}
+
+function syncStatusBadge(entity = {}) {
+  const status = entity.syncStatus || SYNC_STATUS_SYNCED;
+  if (status === SYNC_STATUS_SYNCED) return "";
+  const className = status === SYNC_STATUS_FAILED ? "danger" : status === SYNC_STATUS_SYNCING ? "warn" : "";
+  return `<span class="sync-status-badge ${className}">${escapeHtml(status)}</span>`;
 }
 
 function renderDashboard() {
@@ -2095,7 +2519,7 @@ function renderEntries(kind) {
     <tr class="${cancelled ? "cancelled-row" : ""}">
       ${purchaseSelect}
       <td>${entry.date}</td>
-      <td>${escapeHtml(entry.number)}</td>
+      <td>${escapeHtml(entry.number)}${syncStatusBadge(entry)}</td>
       <td>${escapeHtml(profileName(entry.profileId))}</td>
       <td>${escapeHtml(partyName(entry.partyId))}</td>
       ${statusCell}
@@ -2205,7 +2629,7 @@ function toggleAllPurchases(event) {
 function renderItems() {
   $("#itemRows").innerHTML = state.items.map(item => `
     <tr>
-      <td>${escapeHtml(item.name)}</td>
+      <td>${escapeHtml(item.name)}${syncStatusBadge(item)}</td>
       <td>${escapeHtml(item.hsn)}</td>
       <td>${num(item.gstRate)}%</td>
       <td class="num">${money(item.saleRate)}</td>
@@ -2222,7 +2646,7 @@ function renderItems() {
 function renderParties() {
   $("#partyRows").innerHTML = partyMasterRows().map(party => `
     <tr>
-      <td>${escapeHtml(party.name)}</td>
+      <td>${escapeHtml(party.name)}${syncStatusBadge(party)}</td>
       <td>${escapeHtml(party.type)}</td>
       <td>${escapeHtml(party.gstin)}</td>
       <td>${escapeHtml(party.address || "-")}</td>
@@ -3538,8 +3962,9 @@ async function saveEntry(event) {
   const entryNumber = entryMode === "sale"
     ? saleInvoiceNumberForSave(form.elements.profileId.value, form.elements.number.value, editingEntryId)
     : form.elements.number.value.trim();
-  const entry = {
-    id: editingEntryId || uid(),
+  const entryId = editingEntryId || uid();
+  const entry = entityWithLocalMeta({
+    id: entryId,
     date: form.elements.date.value,
     number: entryNumber,
     profileId: form.elements.profileId.value,
@@ -3561,7 +3986,7 @@ async function saveEntry(event) {
     ewayDetails: purchaseEwayDetails,
     reviewMessages,
     reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
-  };
+  }, existingEntry);
   if (entryMode === "purchase") {
     const duplicateMessages = purchaseDuplicateReviewMessages(entry, editingEntryId);
     if (duplicateMessages.length) {
@@ -3597,15 +4022,18 @@ async function saveEntry(event) {
   saveState();
   $("#entryDialog").close();
   renderAll();
+  const canSyncNow = cloudReadyForSync();
+  const synced = canSyncNow ? await syncCloudNow(false) : false;
   if (entryMode === "purchase") {
-    const synced = await syncCloudNow(false);
-    toast(synced ? "Purchase saved and synced" : "Purchase saved locally. Cloud sync failed");
+    if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
+    toast(synced ? "Purchase saved and synced" : canSyncNow ? "Purchase saved locally. Cloud sync failed" : "Purchase saved locally");
     processQueuedPurchaseInvoiceUpload();
   } else if (entryMode === "po") {
-    const synced = await syncCloudNow(false);
-    toast(synced ? "PO saved and synced" : "PO saved locally. Cloud sync failed");
+    if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
+    toast(synced ? "PO saved and synced" : canSyncNow ? "PO saved locally. Cloud sync failed" : "PO saved locally");
   } else {
-    toast("Sale saved");
+    if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
+    toast(synced ? "Sale saved and synced" : canSyncNow ? "Sale saved locally. Cloud sync failed" : "Sale saved locally");
   }
 }
 
@@ -3635,6 +4063,7 @@ function cancelEntry(kind, id) {
   entry.cancelled = true;
   entry.cancelledAt = new Date().toISOString();
   entry.status = "Cancelled";
+  Object.assign(entry, entityWithLocalMeta(entry, entry));
   const profile = profileById(entry.profileId);
   profile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
   saveState();
@@ -3657,7 +4086,8 @@ function openItem(id = null) {
 function saveItem(event) {
   event.preventDefault();
   const form = $("#itemForm");
-  const item = {
+  const existingItem = state.items.find(row => row.id === editingItemId);
+  const item = entityWithLocalMeta({
     id: editingItemId || uid(),
     name: form.elements.name.value.trim(),
     hsn: form.elements.hsn.value.trim(),
@@ -3666,7 +4096,7 @@ function saveItem(event) {
     purchaseRate: num(form.elements.purchaseRate.value),
     openingStock: num(form.elements.openingStock.value),
     minStock: num(form.elements.minStock.value)
-  };
+  }, existingItem);
   const index = state.items.findIndex(row => row.id === item.id);
   if (index >= 0) state.items[index] = item;
   else state.items.push(item);
@@ -3848,7 +4278,8 @@ function saveParty(event) {
     toast(`GSTIN already exists for ${duplicate.name}`);
     return;
   }
-  const party = {
+  const existingParty = state.parties.find(row => row.id === editingPartyId);
+  const party = entityWithLocalMeta({
     id: editingPartyId || uid(),
     name: form.elements.name.value.trim(),
     type,
@@ -3860,9 +4291,9 @@ function saveParty(event) {
     address,
     shippingAddresses: parseShippingAddressesFromText(
       form.elements.shippingAddresses.value,
-      state.parties.find(row => row.id === editingPartyId)?.shippingAddresses || []
+      existingParty?.shippingAddresses || []
     )
-  };
+  }, existingParty);
   const index = state.parties.findIndex(row => row.id === party.id);
   if (index >= 0) state.parties[index] = party;
   else state.parties.push(party);
