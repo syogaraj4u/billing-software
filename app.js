@@ -2221,6 +2221,50 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
   await saveDailyCloudBackup(nextState, syncedAt, userId);
 }
 
+async function syncSingleEntryToCloud(kind, entry) {
+  if (!cloudClient || !cloudSession || !cloudWorkspace || !entry?.id) return false;
+  const syncedAt = new Date().toISOString();
+  const userId = currentCloudUserId();
+  const table = cloudEntryTable(kind);
+  const lineTable = cloudEntryLineTable(kind);
+  const parentColumn = cloudEntryLineParentColumn(kind);
+  if (!table || !lineTable || !parentColumn) return false;
+  const { error: entryError } = await cloudClient
+    .from(table)
+    .upsert(cloudEntryRow(cloudWorkspace.id, entry, kind, syncedAt, userId));
+  if (entryError) throw entryError;
+  await replaceCloudLineRowsForEntry(
+    lineTable,
+    parentColumn,
+    entry.id,
+    cloudLineRows(cloudWorkspace.id, entry, kind, syncedAt, userId)
+  );
+  markEntitySyncStatus(entry, SYNC_STATUS_SYNCED, syncedAt);
+  saveState({ skipCloud: true, skipLocalBackup: true });
+  return true;
+}
+
+function cloudEntryTable(kind) {
+  if (kind === "sale") return CLOUD_ROW_TABLES.sales;
+  if (kind === "purchase") return CLOUD_ROW_TABLES.purchases;
+  if (kind === "po") return CLOUD_ROW_TABLES.purchaseOrders;
+  return "";
+}
+
+function cloudEntryLineTable(kind) {
+  if (kind === "sale") return CLOUD_ROW_TABLES.saleItems;
+  if (kind === "purchase") return CLOUD_ROW_TABLES.purchaseItems;
+  if (kind === "po") return CLOUD_ROW_TABLES.purchaseOrderItems;
+  return "";
+}
+
+function cloudEntryLineParentColumn(kind) {
+  if (kind === "sale") return "sale_id";
+  if (kind === "purchase") return "purchase_id";
+  if (kind === "po") return "purchase_order_id";
+  return "";
+}
+
 async function syncCloudEntityTable(table, idColumn, currentRows = [], previousRows = [], mapRow) {
   const workspaceId = cloudWorkspace.id;
   const currentIds = new Set(currentRows.map(row => row.id).filter(Boolean));
@@ -2245,6 +2289,19 @@ async function replaceCloudLineRows(table, rows = []) {
     .from(table)
     .delete()
     .eq("workspace_id", cloudWorkspace.id);
+  if (deleteError) throw deleteError;
+  if (!rows.length) return;
+  const { error } = await cloudClient.from(table).insert(rows);
+  if (error) throw error;
+}
+
+async function replaceCloudLineRowsForEntry(table, parentColumn, entryId, rows = []) {
+  const query = cloudClient
+    .from(table)
+    .delete()
+    .eq("workspace_id", cloudWorkspace.id)
+    .eq(parentColumn, entryId);
+  const { error: deleteError } = await query;
   if (deleteError) throw deleteError;
   if (!rows.length) return;
   const { error } = await cloudClient.from(table).insert(rows);
@@ -4140,7 +4197,15 @@ async function saveEntry(event) {
   $("#entryDialog").close();
   renderAll();
   const canSyncNow = cloudReadyForSync();
-  const synced = canSyncNow ? await syncCloudNow(false) : false;
+  let synced = canSyncNow ? await syncCloudNow(false) : false;
+  if (canSyncNow && !synced) {
+    try {
+      synced = await syncSingleEntryToCloud(entryMode, entry);
+      if (synced) renderAll();
+    } catch (error) {
+      console.warn("Single entry cloud sync failed", error);
+    }
+  }
   if (entryMode === "purchase") {
     if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
     toast(synced ? "Purchase saved and synced" : canSyncNow ? "Purchase saved locally. Cloud sync failed" : "Purchase saved locally");
