@@ -47,7 +47,7 @@ window.CLOUD_CONFIG = {
 6. Deploy the site again and refresh the browser.
 7. Open the app, click Cloud, create an account, and create/sync a workspace.
 
-## OpenAI and Email Setup
+## OpenAI, Google Routes and Email Setup
 
 OpenAI calls must run in Supabase Edge Functions, not in browser JavaScript.
 
@@ -63,11 +63,14 @@ Set these Supabase secrets:
 ```bash
 supabase secrets set OPENAI_API_KEY=your-openai-key
 supabase secrets set OPENAI_MODEL=your-selected-openai-model
+supabase secrets set GOOGLE_MAPS_API_KEY=your-google-maps-key
 supabase secrets set RESEND_API_KEY=your-resend-key
 supabase secrets set REPORT_FROM_EMAIL=reports@yourdomain.com
 ```
 
 The OpenAI model is intentionally configurable so you can change it later without editing the website.
+
+The `estimate-eway-distance` function uses Google Routes API for road distance between supplier and buyer/ship-to pincodes. The Google key must stay in Supabase secrets and should not be added to `cloud-config.js` or browser JavaScript.
 
 ## Month-End Reports
 

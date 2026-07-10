@@ -3217,9 +3217,9 @@ function ewayDistanceHint(route, currentDistance) {
   if (samePincodeDistanceKm(route) && num(currentDistance) === 2) return "Same seller and buyer PIN, distance set to 2 KM.";
   if (num(currentDistance)) return route.routeKey ? `Distance saved for route ${route.routeKey}.` : "Distance entered.";
   if (route.savedDistance) return `Auto-filled saved route distance ${route.savedDistance} KM.`;
-  if (ewayDistanceEstimateKey === ewayDistanceEstimateRouteKey(route)) return "Estimating distance with ChatGPT...";
+  if (ewayDistanceEstimateKey === ewayDistanceEstimateRouteKey(route)) return "Calculating distance with Google Routes...";
   if (!route.fromPincode || !route.toPincode) return "Add supplier and buyer pincodes to remember route distance.";
-  return "ChatGPT will estimate distance when Cloud is connected.";
+  return "Google Routes will calculate distance when Cloud is connected.";
 }
 
 function ewayDistanceEstimateRouteKey(route = {}) {
@@ -3243,7 +3243,7 @@ async function estimateEwayDistanceWithCloud(route, key) {
   const form = $("#entryForm");
   if (!form || entryMode !== "purchase" || num(form.elements.ewayDistanceKmEntry.value)) return;
   if (!cloudConfigured() || !cloudClient || !cloudSession) {
-    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Login to Cloud to estimate distance with ChatGPT.";
+    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Login to Cloud to calculate distance with Google Routes.";
     return;
   }
   try {
@@ -3271,9 +3271,9 @@ async function estimateEwayDistanceWithCloud(route, key) {
     if (ewayDistanceEstimateRouteKey(currentRoute) !== key || num(form.elements.ewayDistanceKmEntry.value)) return;
     form.elements.ewayDistanceKmEntry.value = distanceKm;
     form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = key;
-    $("#ewayDistanceHint").textContent = `ChatGPT estimated ${distanceKm} KM.`;
+    $("#ewayDistanceHint").textContent = `Google Routes calculated ${distanceKm} KM.`;
   } catch (error) {
-    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Distance estimate failed. Enter KM manually.";
+    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Distance calculation failed. Enter KM manually.";
     console.warn("E-way distance estimate unavailable", error);
   }
 }

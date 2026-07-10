@@ -4,16 +4,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
-const distanceSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["distanceKm", "confidence", "reason"],
-  properties: {
-    distanceKm: { type: "number" },
-    confidence: { type: "string", enum: ["high", "medium", "low"] },
-    reason: { type: "string" }
-  }
-};
+const GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes";
 
 const specialDistanceKm: Record<string, number> = {
   "631001-517501": 80,
@@ -35,126 +26,107 @@ Deno.serve(async request => {
   }
 
   try {
-    const apiKey = (Deno.env.get("OPENAI_API_KEY") || "").trim();
-    const model = (Deno.env.get("OPENAI_MODEL") || "").trim();
-    if (!apiKey || !model) {
-      return json({ error: "OPENAI_API_KEY and OPENAI_MODEL must be configured" }, 500);
-    }
-
     const { fromAddress = "", toAddress = "", fromPincode = "", toPincode = "" } = await request.json();
-    if (!String(fromAddress).trim() || !String(toAddress).trim()) {
-      return json({ error: "fromAddress and toAddress are required" }, 400);
+    const fromPin = normalizePincode(fromPincode);
+    const toPin = normalizePincode(toPincode);
+    const origin = routeAddress(fromAddress, fromPin);
+    const destination = routeAddress(toAddress, toPin);
+    if (!origin || !destination) {
+      return json({ error: "from/to address or pincode is required" }, 400);
     }
 
-    if (fromPincode && toPincode && String(fromPincode) === String(toPincode)) {
+    if (fromPin && toPin && fromPin === toPin) {
       return json({ distanceKm: 2, confidence: "high", reason: "Same pincode default" });
     }
-    const specialDistance = fixedRouteDistance(fromPincode, toPincode);
+    const specialDistance = fixedRouteDistance(fromPin, toPin);
     if (specialDistance) {
       return json({ distanceKm: specialDistance, confidence: "high", reason: "Configured route distance" });
     }
 
-    const response = await callOpenAI(apiKey, model, {
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: [
-                "Estimate practical road transport distance in kilometers for an Indian e-way bill.",
-                "Use route distance, not straight-line distance.",
-                "Return a realistic integer kilometer value.",
-                "If the same pincode is provided for both sides, return 2.",
-                "If uncertain, return a reasonable conservative estimate and mark confidence low.",
-                "Return only the schema fields."
-              ].join(" ")
-            }
-          ]
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: JSON.stringify({ fromAddress, toAddress, fromPincode, toPincode })
-            }
-          ]
-        }
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "eway_distance_estimate",
-          strict: true,
-          schema: distanceSchema
-        }
-      }
-    });
+    const apiKey = googleRoutesApiKey();
+    if (!apiKey) {
+      return json({ error: "GOOGLE_MAPS_API_KEY must be configured in Supabase secrets" }, 500);
+    }
 
-    const estimate = parseJsonOutput(response);
-    const distanceKm = Math.max(1, Math.round(Number(estimate.distanceKm) || 0));
-    if (!distanceKm) return json({ error: "OpenAI returned no distance estimate" }, 500);
+    const route = await callGoogleRoutes(apiKey, origin, destination);
+    const distanceKm = Math.max(1, Math.round(Number(route.distanceMeters || 0) / 1000));
+    if (!distanceKm) return json({ error: "Google Routes returned no distance" }, 500);
     return json({
       distanceKm,
-      confidence: estimate.confidence || "low",
-      reason: estimate.reason || ""
+      confidence: "high",
+      reason: "Google Routes driving distance",
+      source: "google-routes",
+      distanceMeters: route.distanceMeters || 0,
+      duration: route.duration || ""
     });
   } catch (error) {
-    return json({ error: publicOpenAIError(error) }, 500);
+    return json({ error: publicGoogleRoutesError(error) }, 500);
   }
 });
 
 function fixedRouteDistance(fromPincode: unknown, toPincode: unknown) {
-  const fromPin = String(fromPincode || "").replace(/\D/g, "");
-  const toPin = String(toPincode || "").replace(/\D/g, "");
+  const fromPin = normalizePincode(fromPincode);
+  const toPin = normalizePincode(toPincode);
   return specialDistanceKm[`${fromPin}-${toPin}`] || 0;
 }
 
-async function callOpenAI(apiKey: string, model: string, body: Record<string, unknown>) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+function normalizePincode(value: unknown) {
+  const pin = String(value || "").replace(/\D/g, "");
+  return pin.length === 6 ? pin : "";
+}
+
+function routeAddress(address: unknown, pincode: string) {
+  const text = String(address || "").replace(/\s+/g, " ").trim();
+  const hasPin = pincode && text.includes(pincode);
+  if (text && hasPin) return `${text}, India`;
+  if (text && pincode) return `${text}, ${pincode}, India`;
+  if (text) return `${text}, India`;
+  if (pincode) return `${pincode}, India`;
+  return "";
+}
+
+function googleRoutesApiKey() {
+  return (Deno.env.get("GOOGLE_MAPS_API_KEY") || Deno.env.get("GOOGLE_ROUTES_API_KEY") || "").trim();
+}
+
+async function callGoogleRoutes(apiKey: string, origin: string, destination: string) {
+  const response = await fetch(GOOGLE_ROUTES_URL, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": "routes.distanceMeters,routes.duration"
     },
-    body: JSON.stringify({ model: model.trim(), ...body })
+    body: JSON.stringify({
+      origin: { address: origin },
+      destination: { address: destination },
+      travelMode: "DRIVE",
+      routingPreference: "TRAFFIC_UNAWARE",
+      units: "METRIC"
+    })
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data?.error?.message || "OpenAI request failed");
+    throw new Error(data?.error?.message || "Google Routes request failed");
   }
-  return data;
+  const routes = Array.isArray(data?.routes) ? data.routes : [];
+  const route = routes[0] || {};
+  if (!route.distanceMeters) {
+    throw new Error("No route found between the selected pincodes");
+  }
+  return route;
 }
 
-function publicOpenAIError(error: unknown) {
+function publicGoogleRoutesError(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected error";
-  if (/Invalid header value|Authorization|Bearer|api key|OPENAI_API_KEY|sk-/i.test(message)) {
-    return "OpenAI API key is invalid or has extra spaces/newlines. Reset OPENAI_API_KEY in Supabase.";
+  if (/api key|API_KEY|REQUEST_DENIED|permission|disabled|not authorized/i.test(message)) {
+    return "Google Routes API key is invalid or Routes API is not enabled. Check GOOGLE_MAPS_API_KEY in Supabase.";
   }
-  if (/model/i.test(message) && /not found|does not exist|invalid|unsupported/i.test(message)) {
-    return "OpenAI model is invalid or not available. Check OPENAI_MODEL in Supabase.";
+  if (/billing|quota|rate/i.test(message)) {
+    return "Google Routes billing/quota issue. Check Google Cloud billing and quota.";
   }
-  return "OpenAI request failed. Check Supabase function logs.";
-}
-
-function parseJsonOutput(response: Record<string, unknown>) {
-  const text = extractOutputText(response);
-  if (!text) throw new Error("OpenAI returned no text output");
-  return JSON.parse(text);
-}
-
-function extractOutputText(response: Record<string, unknown>) {
-  if (typeof response.output_text === "string") return response.output_text;
-  const output = Array.isArray(response.output) ? response.output : [];
-  for (const item of output as Array<Record<string, unknown>>) {
-    const content = Array.isArray(item.content) ? item.content : [];
-    for (const part of content as Array<Record<string, unknown>>) {
-      if (typeof part.text === "string") return part.text;
-      if (typeof part.output_text === "string") return part.output_text;
-    }
-  }
-  return "";
+  if (/No route|ZERO_RESULTS|NOT_FOUND/i.test(message)) return "No Google route found. Enter distance manually.";
+  return "Google Routes request failed. Check Supabase function logs.";
 }
 
 function json(payload: unknown, status = 200) {
