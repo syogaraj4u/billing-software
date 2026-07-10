@@ -5,6 +5,7 @@ const corsHeaders = {
 };
 
 const GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes";
+const GOOGLE_DISTANCE_MATRIX_URL = "https://maps.googleapis.com/maps/api/distancematrix/json";
 
 const specialDistanceKm: Record<string, number> = {
   "631001-517501": 80,
@@ -48,14 +49,14 @@ Deno.serve(async request => {
       return json({ error: "GOOGLE_MAPS_API_KEY must be configured in Supabase secrets" }, 500);
     }
 
-    const route = await callGoogleRoutes(apiKey, origin, destination);
+    const route = await callGoogleDistance(apiKey, origin, destination);
     const distanceKm = Math.max(1, Math.round(Number(route.distanceMeters || 0) / 1000));
     if (!distanceKm) return json({ error: "Google Routes returned no distance" }, 500);
     return json({
       distanceKm,
       confidence: "high",
-      reason: "Google Routes driving distance",
-      source: "google-routes",
+      reason: route.reason || "Google driving distance",
+      source: route.source || "google",
       distanceMeters: route.distanceMeters || 0,
       duration: route.duration || ""
     });
@@ -89,6 +90,17 @@ function googleRoutesApiKey() {
   return (Deno.env.get("GOOGLE_MAPS_API_KEY") || Deno.env.get("GOOGLE_ROUTES_API_KEY") || "").trim();
 }
 
+async function callGoogleDistance(apiKey: string, origin: string, destination: string) {
+  try {
+    return await callGoogleRoutes(apiKey, origin, destination);
+  } catch (routesError) {
+    const matrix = await callGoogleDistanceMatrix(apiKey, origin, destination).catch(matrixError => {
+      throw new Error(`${errorMessage(routesError)} | ${errorMessage(matrixError)}`);
+    });
+    return matrix;
+  }
+}
+
 async function callGoogleRoutes(apiKey: string, origin: string, destination: string) {
   const response = await fetch(GOOGLE_ROUTES_URL, {
     method: "POST",
@@ -114,19 +126,51 @@ async function callGoogleRoutes(apiKey: string, origin: string, destination: str
   if (!route.distanceMeters) {
     throw new Error("No route found between the selected pincodes");
   }
-  return route;
+  return {
+    ...route,
+    source: "google-routes",
+    reason: "Google Routes driving distance"
+  };
+}
+
+async function callGoogleDistanceMatrix(apiKey: string, origin: string, destination: string) {
+  const url = new URL(GOOGLE_DISTANCE_MATRIX_URL);
+  url.searchParams.set("origins", origin);
+  url.searchParams.set("destinations", destination);
+  url.searchParams.set("mode", "driving");
+  url.searchParams.set("units", "metric");
+  url.searchParams.set("key", apiKey);
+  const response = await fetch(url.toString());
+  const data = await response.json();
+  if (!response.ok || data?.status !== "OK") {
+    throw new Error(data?.error_message || data?.status || "Google Distance Matrix request failed");
+  }
+  const element = data?.rows?.[0]?.elements?.[0] || {};
+  if (element.status !== "OK" || !element.distance?.value) {
+    throw new Error(element.status || "No route found between the selected pincodes");
+  }
+  return {
+    distanceMeters: element.distance.value,
+    duration: element.duration?.text || "",
+    source: "google-distance-matrix",
+    reason: "Google Distance Matrix driving distance"
+  };
 }
 
 function publicGoogleRoutesError(error: unknown) {
-  const message = error instanceof Error ? error.message : "Unexpected error";
+  const message = errorMessage(error);
   if (/api key|API_KEY|REQUEST_DENIED|permission|disabled|not authorized/i.test(message)) {
-    return "Google Routes API key is invalid or Routes API is not enabled. Check GOOGLE_MAPS_API_KEY in Supabase.";
+    return "Google API key is invalid or the required Google Maps API is not enabled. Enable Routes API or Distance Matrix API and check GOOGLE_MAPS_API_KEY in Supabase.";
   }
   if (/billing|quota|rate/i.test(message)) {
-    return "Google Routes billing/quota issue. Check Google Cloud billing and quota.";
+    return "Google Maps billing/quota issue. Check Google Cloud billing and quota.";
   }
   if (/No route|ZERO_RESULTS|NOT_FOUND/i.test(message)) return "No Google route found. Enter distance manually.";
-  return "Google Routes request failed. Check Supabase function logs.";
+  return "Google Maps distance request failed. Check Supabase function logs.";
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "Unexpected error");
 }
 
 function json(payload: unknown, status = 200) {
