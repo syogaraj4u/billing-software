@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260709-buyer-search">
+  <link rel="stylesheet" href="styles.css?v=20260710-party-role-tabs">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -203,9 +203,17 @@
         <div class="section-head">
           <div>
             <h3>Party Master</h3>
-            <p>One shared buyer and supplier list for all 8 GST companies, with aliases, GSTIN, addresses and ship-to details.</p>
+            <p>One shared GST party master, split as customers, suppliers or both for all 8 companies.</p>
           </div>
-          <button class="primary-btn" id="newPartyBtn"><i data-lucide="plus"></i><span>New Party</span></button>
+          <div class="section-actions">
+            <div class="segmented party-role-tabs" role="tablist" aria-label="Party type">
+              <button class="active" data-party-filter="Customer" type="button">Customers <span id="partyCustomerCount">0</span></button>
+              <button data-party-filter="Supplier" type="button">Suppliers <span id="partySupplierCount">0</span></button>
+              <button data-party-filter="Both" type="button">Both <span id="partyBothCount">0</span></button>
+              <button data-party-filter="All" type="button">All <span id="partyAllCount">0</span></button>
+            </div>
+            <button class="primary-btn" id="newPartyBtn"><i data-lucide="plus"></i><span>New Customer</span></button>
+          </div>
         </div>
         <div class="table-wrap panel">
           <table>
@@ -522,6 +530,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260710-single-entry-sync-fallback"></script>
+  <script src="app.js?v=20260710-party-role-tabs"></script>
 </body>
 </html>

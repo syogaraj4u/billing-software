@@ -428,6 +428,7 @@ let editingItemId = null;
 let editingPartyId = null;
 let deviceViewMode = "";
 let activeReport = "summary";
+let activePartyFilter = "Customer";
 let cloudClient = null;
 let cloudSession = null;
 let cloudWorkspaces = [];
@@ -579,7 +580,7 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
   let changed = false;
   localCandidates.filter(Boolean).forEach(candidate => {
     const local = normalizeState(clone(candidate));
-    changed = mergeByIdentity(merged.parties, local.parties, partyMergeKey) || changed;
+    changed = mergeByIdentity(merged.parties, local.parties, partyMergeKey, mergeExistingParty) || changed;
     changed = mergeByIdentity(merged.items, local.items, itemMergeKey) || changed;
     changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey) || changed;
@@ -589,14 +590,20 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
   return { state: normalizeState(merged), changed };
 }
 
-function mergeByIdentity(target = [], source = [], identityFn) {
+function mergeByIdentity(target = [], source = [], identityFn, mergeExistingFn = null) {
   const ids = new Set(target.map(row => row?.id).filter(Boolean));
   const keys = new Set(target.map(identityFn).filter(Boolean));
   let changed = false;
   source.forEach(row => {
     const id = row?.id || "";
     const key = identityFn(row);
-    if ((id && ids.has(id)) || (key && keys.has(key))) return;
+    const existing = target.find(candidate => (
+      (id && candidate?.id === id) || (key && identityFn(candidate) === key)
+    ));
+    if (existing) {
+      changed = (mergeExistingFn?.(existing, row) || false) || changed;
+      return;
+    }
     target.push(clone(row));
     if (id) ids.add(id);
     if (key) keys.add(key);
@@ -605,10 +612,35 @@ function mergeByIdentity(target = [], source = [], identityFn) {
   return changed;
 }
 
+function mergeExistingParty(target, source) {
+  let changed = false;
+  const mergedType = mergePartyTypes(target.type, source.type);
+  if (normalizePartyType(target.type) !== mergedType) {
+    target.type = mergedType;
+    changed = true;
+  }
+  ["name", "gstin", "phone", "email", "place", "address"].forEach(key => {
+    if (!String(target[key] || "").trim() && String(source?.[key] || "").trim()) {
+      target[key] = source[key];
+      changed = true;
+    }
+  });
+  const aliases = cleanPartyAliasList([
+    ...partyAliasList(target),
+    ...partyAliasList(source)
+  ]);
+  const aliasText = aliases.join("\n");
+  if (aliasText !== String(target.aliases || "")) {
+    target.aliases = aliasText;
+    changed = true;
+  }
+  return changed;
+}
+
 function partyMergeKey(party = {}) {
   const gstin = normalizeGstin(party.gstin);
   if (gstin) return `gstin:${gstin}`;
-  return `party:${normalizeMergeText(party.name)}:${normalizeMergeText(party.type)}`;
+  return `party:${normalizeMergeText(party.name)}:${normalizeMergeText(normalizePartyType(party.type))}`;
 }
 
 function itemMergeKey(item = {}) {
@@ -650,7 +682,7 @@ function normalizePartyForState(party) {
   const normalized = {
     id: party.id || uid(),
     name: party.name || "",
-    type: party.type || "Customer",
+    type: normalizePartyType(party.type),
     gstin: party.gstin || "",
     phone: party.phone || "",
     email: party.email || "",
@@ -661,6 +693,25 @@ function normalizePartyForState(party) {
   };
   normalizeCloudEntityMeta(normalized, party);
   return normalized;
+}
+
+function normalizePartyType(type) {
+  const value = String(type || "").trim();
+  if (["Customer", "Supplier", "Both"].includes(value)) return value;
+  const normalized = value.toLowerCase();
+  const customerLike = /customer|buyer|sale/.test(normalized);
+  const supplierLike = /supplier|vendor|purchase/.test(normalized);
+  if (customerLike && supplierLike) return "Both";
+  if (supplierLike) return "Supplier";
+  return "Customer";
+}
+
+function mergePartyTypes(currentType, addedType) {
+  const current = normalizePartyType(currentType);
+  const added = normalizePartyType(addedType);
+  if (current === added) return current;
+  if (current === "Both" || added === "Both") return "Both";
+  return "Both";
 }
 
 function normalizeShippingAddresses(addresses = []) {
@@ -765,7 +816,7 @@ function mergeTallyBuyerMaster(value) {
 }
 
 function mergeTallyBuyerIntoParty(party, buyer) {
-  party.type = party.type === "Supplier" ? "Both" : (party.type || "Customer");
+  party.type = mergePartyTypes(party.type, "Customer");
   if (!String(party.name || "").trim() || /^customer\s/i.test(party.name)) party.name = buyer.name;
   if (!normalizeGstin(party.gstin)) party.gstin = normalizeGstin(buyer.gstin);
   if (!String(party.place || "").trim()) party.place = buyer.place || stateNameFromGstin(buyer.gstin) || "";
@@ -1400,7 +1451,13 @@ function bindEvents() {
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
   $("#newItemBtn").addEventListener("click", () => openItem());
-  $("#newPartyBtn").addEventListener("click", () => openParty(null, { type: "Customer", title: "New Party", saveLabel: "Save Party" }));
+  $("#newPartyBtn").addEventListener("click", () => openParty(null, newPartyDialogOptions()));
+  $$("[data-party-filter]").forEach(button => {
+    button.addEventListener("click", () => {
+      activePartyFilter = button.dataset.partyFilter || "Customer";
+      renderParties();
+    });
+  });
   $("#addLineBtn").addEventListener("click", () => addLineRow());
   $("#entryAddBuyerBtn").addEventListener("click", openBuyerFromEntry);
   bindIf("#entryPartySearch", "input", handleEntryPartySearchInput);
@@ -2313,7 +2370,7 @@ function cloudPartyRow(workspaceId, party, syncedAt, userId) {
     workspace_id: workspaceId,
     id: party.id,
     name: party.name || "",
-    type: party.type || "",
+    type: normalizePartyType(party.type),
     gstin: normalizeGstin(party.gstin),
     phone: party.phone || "",
     email: party.email || "",
@@ -2703,10 +2760,12 @@ function renderItems() {
 }
 
 function renderParties() {
-  $("#partyRows").innerHTML = partyMasterRows().map(party => `
+  updatePartyRoleTabs();
+  const rows = partyMasterRows();
+  $("#partyRows").innerHTML = rows.map(party => `
     <tr>
       <td>${escapeHtml(party.name)}${syncStatusBadge(party)}</td>
-      <td>${escapeHtml(party.type)}</td>
+      <td>${escapeHtml(normalizePartyType(party.type))}</td>
       <td>${escapeHtml(party.gstin)}</td>
       <td>${escapeHtml(party.address || "-")}</td>
       <td>${renderPartyShipTo(party)}</td>
@@ -2718,11 +2777,11 @@ function renderParties() {
         <button class="mini-btn" title="Delete" onclick="deleteParty('${party.id}')"><i data-lucide="trash-2"></i></button>
       </div></td>
     </tr>
-  `).join("") || emptyRow(9, "No parties added");
+  `).join("") || emptyRow(9, partyEmptyLabel());
 }
 
 function partyMasterRows() {
-  return [...state.parties].sort((a, b) => {
+  return state.parties.filter(party => partyMatchesActiveFilter(party)).sort((a, b) => {
     const typeRank = partyTypeRank(a.type) - partyTypeRank(b.type);
     if (typeRank) return typeRank;
     return String(a.name || "").localeCompare(String(b.name || ""));
@@ -2730,9 +2789,65 @@ function partyMasterRows() {
 }
 
 function partyTypeRank(type) {
-  if (type === "Customer") return 0;
-  if (type === "Both") return 1;
+  const normalized = normalizePartyType(type);
+  if (normalized === "Customer") return 0;
+  if (normalized === "Both") return 1;
   return 2;
+}
+
+function partyMatchesActiveFilter(party) {
+  return partyMatchesRoleFilter(party, activePartyFilter);
+}
+
+function partyMatchesRoleFilter(party, filter = "Customer") {
+  const type = normalizePartyType(party?.type);
+  if (filter === "All") return true;
+  if (filter === "Both") return type === "Both";
+  return type === filter || type === "Both";
+}
+
+function partyFilterCount(filter) {
+  return state.parties.filter(party => partyMatchesRoleFilter(party, filter)).length;
+}
+
+function updatePartyRoleTabs() {
+  $$("[data-party-filter]").forEach(button => {
+    button.classList.toggle("active", button.dataset.partyFilter === activePartyFilter);
+  });
+  const customerCount = $("#partyCustomerCount");
+  const supplierCount = $("#partySupplierCount");
+  const bothCount = $("#partyBothCount");
+  const allCount = $("#partyAllCount");
+  if (customerCount) customerCount.textContent = partyFilterCount("Customer");
+  if (supplierCount) supplierCount.textContent = partyFilterCount("Supplier");
+  if (bothCount) bothCount.textContent = partyFilterCount("Both");
+  if (allCount) allCount.textContent = partyFilterCount("All");
+  const newPartyLabel = $("#newPartyBtn span");
+  if (newPartyLabel) newPartyLabel.textContent = newPartyButtonLabel();
+}
+
+function partyEmptyLabel() {
+  if (activePartyFilter === "Supplier") return "No suppliers added";
+  if (activePartyFilter === "Both") return "No parties marked as both customer and supplier";
+  if (activePartyFilter === "All") return "No parties added";
+  return "No customers added";
+}
+
+function newPartyDialogOptions() {
+  const type = activePartyFilter === "Supplier" ? "Supplier" : activePartyFilter === "Both" ? "Both" : "Customer";
+  const label = type === "Supplier" ? "Supplier" : type === "Both" ? "Customer / Supplier" : "Customer";
+  return {
+    type,
+    title: `New ${label}`,
+    saveLabel: `Save ${label}`
+  };
+}
+
+function newPartyButtonLabel() {
+  if (activePartyFilter === "Supplier") return "New Supplier";
+  if (activePartyFilter === "Both") return "New Customer/Supplier";
+  if (activePartyFilter === "All") return "New Party";
+  return "New Customer";
 }
 
 function renderPartyContact(party) {
@@ -2777,7 +2892,7 @@ function entryPartyTypes(kind) {
 
 function entryPartyChoices(kind) {
   return state.parties
-    .filter(party => entryPartyTypes(kind).includes(party.type))
+    .filter(party => entryPartyTypes(kind).includes(normalizePartyType(party.type)))
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 }
 
@@ -4320,7 +4435,9 @@ function openParty(id = null, options = {}) {
   $("#partyDialogTitle").textContent = party ? "Edit Buyer / Supplier" : (options.title || "New Party");
   $("#savePartyBtn span").textContent = options.saveLabel || "Save Party";
   ["name", "type", "gstin", "phone", "email", "place", "address"].forEach(key => {
-    form.elements[key].value = party?.[key] ?? (key === "type" ? (options.type || "Customer") : "");
+    form.elements[key].value = key === "type"
+      ? normalizePartyType(party?.type || options.type || "Customer")
+      : (party?.[key] ?? "");
   });
   form.elements.shippingAddresses.value = formatShippingAddressesForForm(party?.shippingAddresses || []);
   partyAliasDraft = partyAliasList(party || {});
@@ -4444,7 +4561,7 @@ function saveParty(event) {
   const form = $("#partyForm");
   if ($("#partyAliasInput").value.trim() && !commitPendingPartyAliasInput()) return;
   renderPartyAliasManager();
-  const type = form.elements.type.value;
+  const type = normalizePartyType(form.elements.type.value);
   const gstin = normalizeGstin(form.elements.gstin.value);
   const address = form.elements.address.value.trim();
   if (isBuyerType(type) && !isValidGstin(gstin)) {
@@ -4495,6 +4612,16 @@ function findPartyByGstin(gstin, excludeId = "") {
   const normalized = normalizeGstin(gstin);
   if (!normalized) return null;
   return state.parties.find(party => party.id !== excludeId && normalizeGstin(party.gstin) === normalized) || null;
+}
+
+function ensurePartyRole(party, role) {
+  if (!party) return;
+  const nextType = mergePartyTypes(party.type, role);
+  if (normalizePartyType(party.type) === nextType) return;
+  Object.assign(party, entityWithLocalMeta({
+    ...party,
+    type: nextType
+  }, party));
 }
 
 function selectSavedPartyInOpenEntry(party) {
@@ -7149,7 +7276,7 @@ function supplierParties() {
 
 function partiesForRole(role) {
   const wanted = role === "Supplier" ? ["Supplier", "Both"] : ["Customer", "Both"];
-  return state.parties.filter(party => wanted.includes(party.type));
+  return state.parties.filter(party => wanted.includes(normalizePartyType(party.type)));
 }
 
 function partyMentions(message) {
@@ -7555,10 +7682,11 @@ function buildChatSaleDraft(parsed, sourceMessage) {
 function ensureChatCustomer(parsed) {
   const normalizedGstin = normalizeGstin(parsed.customerGstin);
   const customerName = String(parsed.customerName || "").trim();
-  const existing = customerParties().find(party => (
+  const existing = state.parties.find(party => (
     normalizedGstin && normalizeGstin(party.gstin) === normalizedGstin
-  ) || party.name.toLowerCase() === customerName.toLowerCase() || partyAliasMatch(party, customerName).index >= 0);
+  ) || String(party.name || "").toLowerCase() === customerName.toLowerCase() || partyAliasMatch(party, customerName).index >= 0);
   if (existing) {
+    ensurePartyRole(existing, "Customer");
     updateExistingChatCustomer(existing, parsed, normalizedGstin);
     return existing.id;
   }
@@ -8504,10 +8632,11 @@ function buildPurchaseDraft(parsed) {
 function ensureImportedSupplier(parsed) {
   const supplierName = parsed.supplierName || "Imported Supplier";
   const supplierGstin = normalizeGstin(parsed.supplierGstin);
-  const existing = supplierParties().find(party => (
+  const existing = state.parties.find(party => (
     supplierGstin && normalizeGstin(party.gstin) === supplierGstin
-  ) || party.name.toLowerCase() === supplierName.toLowerCase() || partyAliasMatch(party, supplierName).index >= 0);
+  ) || String(party.name || "").toLowerCase() === supplierName.toLowerCase() || partyAliasMatch(party, supplierName).index >= 0);
   if (existing) {
+    ensurePartyRole(existing, "Supplier");
     updateExistingImportedSupplier(existing, parsed, supplierGstin);
     return existing.id;
   }

@@ -1088,6 +1088,30 @@ textarea { resize: vertical; }
   gap: 3px;
 }
 
+.party-role-tabs {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.party-role-tabs span {
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  background: rgba(20, 34, 35, .08);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.party-role-tabs button.active span {
+  background: rgba(18, 128, 116, .13);
+  color: var(--accent);
+}
+
 .purchase-review-panel {
   display: grid;
   gap: 10px;
@@ -2812,6 +2836,19 @@ textarea { resize: vertical; }
   }
   .section-actions {
     justify-content: stretch;
+  }
+  #partiesView .section-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  #partiesView .party-role-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  #partiesView .party-role-tabs button,
+  #partiesView #newPartyBtn {
+    width: 100%;
   }
   .month-filter,
   .month-filter select {

@@ -353,6 +353,7 @@ create index if not exists billing_sales_workspace_date_idx on public.billing_sa
 create index if not exists billing_purchases_workspace_date_idx on public.billing_purchases(workspace_id, invoice_date);
 create index if not exists billing_purchase_orders_workspace_date_idx on public.billing_purchase_orders(workspace_id, po_date);
 create index if not exists billing_parties_workspace_gstin_idx on public.billing_parties(workspace_id, gstin);
+create index if not exists billing_parties_workspace_type_idx on public.billing_parties(workspace_id, type);
 create index if not exists billing_items_workspace_name_idx on public.billing_items(workspace_id, lower(name));
 create index if not exists billing_audit_workspace_created_idx on public.billing_audit_logs(workspace_id, created_at desc);
 create index if not exists billing_backups_workspace_date_idx on public.billing_cloud_backups(workspace_id, backup_date desc);
