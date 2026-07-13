@@ -861,6 +861,7 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
   entry.reviewStatus = entry.reviewStatus || (entry.reviewMessages.length ? "Needs Review" : "Ready");
   entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
   entry.rateIncludesGst = Boolean(entry.rateIncludesGst);
+  entry.internalTransfer = normalizeInternalTransfer(entry.internalTransfer);
   entry.lines.forEach(line => {
     const item = items.find(row => row.id === line.itemId);
     if (!String(line.itemName || "").trim() && item?.name) line.itemName = item.name;
@@ -871,6 +872,20 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
     entry.ewayDetails = normalizePurchaseEwayDetails(entry.ewayDetails || {});
     if (entry.roundOff) entry.total = round2(entry.taxable + entry.gst + entry.roundOff);
   }
+}
+
+function normalizeInternalTransfer(value = null) {
+  if (!value || typeof value !== "object") return null;
+  const normalized = {
+    role: String(value.role || "").trim(),
+    linkedSaleId: String(value.linkedSaleId || "").trim(),
+    linkedPurchaseId: String(value.linkedPurchaseId || "").trim(),
+    sellerProfileId: String(value.sellerProfileId || "").trim(),
+    buyerProfileId: String(value.buyerProfileId || "").trim(),
+    createdAt: String(value.createdAt || "").trim(),
+    updatedAt: String(value.updatedAt || "").trim()
+  };
+  return Object.values(normalized).some(Boolean) ? normalized : null;
 }
 
 function normalizeCloudEntityMeta(target, source = target) {
@@ -1165,7 +1180,7 @@ function isCancelledEntry(entry) {
 }
 
 function activeAccountingEntries(kind) {
-  return activeEntries(kind).filter(entry => kind !== "sale" || !isCancelledEntry(entry));
+  return activeEntries(kind).filter(entry => !isCancelledEntry(entry));
 }
 
 function entryPrefix(kind) {
@@ -1272,6 +1287,198 @@ function partyById(id) {
   return state.parties.find(row => row.id === id);
 }
 
+function internalBuyerProfileForSale(entry = {}) {
+  const buyerGstin = normalizeGstin(entry.buyerGstin || partyById(entry.partyId)?.gstin);
+  if (!buyerGstin) return null;
+  const buyerProfile = profileByGstin(buyerGstin);
+  if (!buyerProfile || buyerProfile.id === entry.profileId) return null;
+  return buyerProfile;
+}
+
+function profilePartyName(profile = {}) {
+  return profile.businessName || profile.label || profile.legalName || "Internal Company";
+}
+
+function profilePartyAddress(profile = {}) {
+  return profile.address || profile.state || "";
+}
+
+function ensureInternalCompanyParty(profile, role = "Supplier") {
+  const gstin = normalizeGstin(profile?.gstin);
+  if (!gstin) return null;
+  const existing = state.parties.find(party => normalizeGstin(party.gstin) === gstin);
+  const next = {
+    ...(existing || {}),
+    id: existing?.id || `internal-party-${gstin}`,
+    name: existing?.name || profilePartyName(profile),
+    type: mergePartyTypes(existing?.type || role, role),
+    gstin,
+    phone: existing?.phone || profile.phone || "",
+    email: existing?.email || profile.email || "",
+    place: existing?.place || profile.state || stateNameFromGstin(gstin) || "",
+    address: existing?.address || profilePartyAddress(profile),
+    aliases: existing?.aliases || (GST_PROFILE_ALIASES[profile.id] || []).join("\n"),
+    shippingAddresses: existing?.shippingAddresses || []
+  };
+  const party = entityWithLocalMeta(next, existing);
+  const index = state.parties.findIndex(row => row.id === party.id);
+  if (index >= 0) state.parties[index] = party;
+  else state.parties.push(party);
+  return party;
+}
+
+function findLinkedInternalPurchaseForSale(entry = {}) {
+  const linkedId = entry.internalTransfer?.linkedPurchaseId;
+  if (linkedId) {
+    const linked = state.purchases.find(purchase => purchase.id === linkedId);
+    if (linked) return linked;
+  }
+  const bySaleId = state.purchases.find(purchase => purchase.internalTransfer?.linkedSaleId === entry.id);
+  if (bySaleId) return bySaleId;
+  const buyerProfile = internalBuyerProfileForSale(entry);
+  if (!buyerProfile) return null;
+  const sellerGstin = normalizeGstin(entry.sellerGstin || profileById(entry.profileId)?.gstin);
+  const invoiceNumber = String(entry.number || "").trim();
+  return state.purchases.find(purchase => (
+    purchase.profileId === buyerProfile.id
+    && normalizeGstin(purchase.sellerGstin) === sellerGstin
+    && String(purchase.number || "").trim() === invoiceNumber
+  )) || null;
+}
+
+function internalPurchaseLinesFromSale(entry = {}) {
+  return clone(entry.lines || []).map(line => ({
+    ...line,
+    hsn: normalizeLineHsn(line.hsn || lineHsn(line)),
+    itemName: line.itemName || itemName(line.itemId)
+  }));
+}
+
+function internalPurchaseReviewMessages(saleEntry = {}, sellerProfile = {}, buyerProfile = {}) {
+  return uniqueMessages([
+    `Internal purchase auto-created from sales bill ${saleEntry.number}.`,
+    `${profilePartyName(sellerProfile)} to ${profilePartyName(buyerProfile)}.`
+  ]);
+}
+
+function internalPurchaseEwayDetailsFromSale(saleEntry = {}, sellerProfile = {}, buyerProfile = {}) {
+  const fromPincode = normalizePincode(extractPreferredPincode(sellerProfile.address || ""));
+  const toPincode = normalizePincode(extractPreferredPincode(saleEntry.shipToSnapshot?.address || buyerProfile.address || ""));
+  const route = purchaseEwayRouteFromValues(buyerProfile, { name: profilePartyName(sellerProfile), address: sellerProfile.address, place: sellerProfile.state }, {
+    transType: "1",
+    destinationPreset: "buyer",
+    dispatchFromAddress: sellerProfile.address || "",
+    shipToAddress: saleEntry.shipToSnapshot?.address || buyerProfile.address || "",
+    fromPincode,
+    toPincode
+  });
+  return normalizePurchaseEwayDetails({
+    transType: "1",
+    transMode: "1",
+    destinationPreset: "buyer",
+    dispatchFromAddress: sellerProfile.address || "",
+    shipToAddress: saleEntry.shipToSnapshot?.address || buyerProfile.address || "",
+    fromPincode: route.fromPincode || fromPincode,
+    toPincode: route.toPincode || toPincode,
+    distanceKm: route.distanceKm || 0,
+    routeKey: route.routeKey || ""
+  });
+}
+
+function syncInternalPurchaseForSale(saleEntry = {}, previousSaleEntry = null) {
+  if (!saleEntry || isCancelledEntry(saleEntry)) return cancelLinkedInternalPurchase(previousSaleEntry || saleEntry, "Linked sales bill was cancelled.");
+  const buyerProfile = internalBuyerProfileForSale(saleEntry);
+  const previousPurchase = findLinkedInternalPurchaseForSale(previousSaleEntry || saleEntry);
+  if (!buyerProfile) {
+    return cancelLinkedInternalPurchase(previousSaleEntry || saleEntry, "Sales bill is no longer billed to an internal GST company.");
+  }
+  const affectedPurchases = [];
+  const sellerProfile = profileById(saleEntry.profileId);
+  const supplierParty = ensureInternalCompanyParty(sellerProfile, "Supplier");
+  if (!supplierParty) return { action: "none", linkedPurchase: null, supplierParty: null };
+  if (previousPurchase && previousPurchase.profileId !== buyerProfile.id) {
+    cancelPurchaseEntry(previousPurchase, "Internal sale buyer company changed.");
+    affectedPurchases.push(previousPurchase);
+  }
+  const existingPurchase = previousPurchase && previousPurchase.profileId === buyerProfile.id ? previousPurchase : null;
+  const lines = internalPurchaseLinesFromSale(saleEntry);
+  const calculated = calculateEntryTotals(lines, buyerProfile, supplierParty, "purchase");
+  const now = new Date().toISOString();
+  const transfer = normalizeInternalTransfer({
+    role: "purchase",
+    linkedSaleId: saleEntry.id,
+    linkedPurchaseId: existingPurchase?.id || "",
+    sellerProfileId: sellerProfile.id,
+    buyerProfileId: buyerProfile.id,
+    createdAt: existingPurchase?.internalTransfer?.createdAt || now,
+    updatedAt: now
+  });
+  const purchase = entityWithLocalMeta({
+    ...(existingPurchase || {}),
+    id: existingPurchase?.id || uid(),
+    date: saleEntry.date,
+    number: saleEntry.number,
+    profileId: buyerProfile.id,
+    partyId: supplierParty.id,
+    status: existingPurchase?.status && existingPurchase.status !== "Cancelled" ? existingPurchase.status : "Paid",
+    notes: `Auto-created from internal sales bill ${saleEntry.number}`,
+    lines,
+    ...calculated,
+    roundOff: num(saleEntry.roundOff),
+    total: round2(num(calculated.total) + num(saleEntry.roundOff)),
+    attachments: clone(saleEntry.attachments || []),
+    extractedTaxes: null,
+    source: "internal-sale",
+    rateIncludesGst: false,
+    sellerGstin: normalizeGstin(sellerProfile.gstin),
+    buyerGstin: normalizeGstin(buyerProfile.gstin),
+    ewayDetails: internalPurchaseEwayDetailsFromSale(saleEntry, sellerProfile, buyerProfile),
+    reviewMessages: internalPurchaseReviewMessages(saleEntry, sellerProfile, buyerProfile),
+    reviewStatus: "Ready",
+    internalTransfer: transfer,
+    cancelled: false,
+    cancelledAt: ""
+  }, existingPurchase);
+  purchase.internalTransfer.linkedPurchaseId = purchase.id;
+  const index = state.purchases.findIndex(row => row.id === purchase.id);
+  if (index >= 0) state.purchases[index] = purchase;
+  else state.purchases.push(purchase);
+  const saleTransfer = normalizeInternalTransfer({
+    role: "sale",
+    linkedSaleId: saleEntry.id,
+    linkedPurchaseId: purchase.id,
+    sellerProfileId: sellerProfile.id,
+    buyerProfileId: buyerProfile.id,
+    createdAt: saleEntry.internalTransfer?.createdAt || now,
+    updatedAt: now
+  });
+  saleEntry.internalTransfer = saleTransfer;
+  Object.assign(saleEntry, entityWithLocalMeta(saleEntry, saleEntry));
+  return {
+    action: existingPurchase ? "updated" : "created",
+    linkedPurchase: purchase,
+    affectedPurchases: [...affectedPurchases, purchase],
+    supplierParty
+  };
+}
+
+function cancelLinkedInternalPurchase(saleEntry = {}, reason = "Linked sales bill was cancelled.") {
+  const linkedPurchase = findLinkedInternalPurchaseForSale(saleEntry);
+  if (!linkedPurchase) return { action: "none", linkedPurchase: null, supplierParty: null };
+  cancelPurchaseEntry(linkedPurchase, reason);
+  return { action: "cancelled", linkedPurchase, affectedPurchases: [linkedPurchase], supplierParty: null };
+}
+
+function cancelPurchaseEntry(purchase, reason = "Purchase cancelled.") {
+  if (!purchase || isCancelledEntry(purchase)) return;
+  purchase.cancelled = true;
+  purchase.cancelledAt = new Date().toISOString();
+  purchase.status = "Cancelled";
+  purchase.reviewStatus = "Cancelled";
+  purchase.reviewMessages = uniqueMessages([...(purchase.reviewMessages || []), reason]);
+  Object.assign(purchase, entityWithLocalMeta(purchase, purchase));
+}
+
 function lineTaxableAmount(line = {}) {
   return round2(num(line.qty) * num(line.rate));
 }
@@ -1352,7 +1559,7 @@ function amountsClose(a, b, tolerance = 1) {
 function stockForItem(itemId, profileId = activeProfileId()) {
   const item = state.items.find(row => row.id === itemId);
   let stock = num(item?.openingStock);
-  state.purchases.filter(entry => !profileId || entry.profileId === profileId).forEach(entry => entry.lines.forEach(line => {
+  state.purchases.filter(entry => (!profileId || entry.profileId === profileId) && !isCancelledEntry(entry)).forEach(entry => entry.lines.forEach(line => {
     if (line.itemId === itemId) stock += num(line.qty);
   }));
   state.sales.filter(entry => (!profileId || entry.profileId === profileId) && !isCancelledEntry(entry)).forEach(entry => entry.lines.forEach(line => {
@@ -2301,6 +2508,38 @@ async function syncSingleEntryToCloud(kind, entry) {
   return true;
 }
 
+async function syncSinglePartyToCloud(party) {
+  if (!cloudClient || !cloudSession || !cloudWorkspace || !party?.id) return false;
+  const syncedAt = new Date().toISOString();
+  const userId = currentCloudUserId();
+  const { error } = await cloudClient
+    .from(CLOUD_ROW_TABLES.parties)
+    .upsert(cloudPartyRow(cloudWorkspace.id, party, syncedAt, userId));
+  if (error) throw error;
+  markEntitySyncStatus(party, SYNC_STATUS_SYNCED, syncedAt);
+  saveState({ skipCloud: true, skipLocalBackup: true });
+  return true;
+}
+
+function markLinkedPurchaseSyncFailed(internalSyncResult = null) {
+  const purchases = internalSyncResult?.affectedPurchases?.length
+    ? internalSyncResult.affectedPurchases
+    : (internalSyncResult?.linkedPurchase ? [internalSyncResult.linkedPurchase] : []);
+  if (!purchases.length) return;
+  purchases.forEach(purchase => markEntitySyncStatus(purchase, SYNC_STATUS_FAILED));
+  saveState({ skipCloud: true });
+  renderEntries("purchase");
+}
+
+function saleSaveToast(synced, canSyncNow, internalSyncResult = null) {
+  const internalAction = internalSyncResult?.action;
+  const syncText = synced ? " and synced" : canSyncNow ? " locally. Cloud sync failed" : " locally";
+  if (internalAction === "created") return `Sale saved${syncText}. Internal purchase created`;
+  if (internalAction === "updated") return `Sale saved${syncText}. Internal purchase updated`;
+  if (internalAction === "cancelled") return `Sale saved${syncText}. Internal purchase cancelled`;
+  return synced ? "Sale saved and synced" : canSyncNow ? "Sale saved locally. Cloud sync failed" : "Sale saved locally";
+}
+
 function cloudEntryTable(kind) {
   if (kind === "sale") return CLOUD_ROW_TABLES.sales;
   if (kind === "purchase") return CLOUD_ROW_TABLES.purchases;
@@ -2626,10 +2865,10 @@ function renderEntries(kind) {
     const statusLabel = cancelled ? "Cancelled" : (entry.status || "-");
     const statusClass = cancelled ? "danger" : (entry.status === "Unpaid" ? "warn" : "");
     const purchaseSelect = kind === "purchase" ? `
-      <td><input class="purchase-select" type="checkbox" aria-label="Select ${escapeHtml(entry.number)}" data-purchase-id="${entry.id}" ${selectedPurchaseIds.has(entry.id) ? "checked" : ""}></td>
+      <td>${cancelled ? "" : `<input class="purchase-select" type="checkbox" aria-label="Select ${escapeHtml(entry.number)}" data-purchase-id="${entry.id}" ${selectedPurchaseIds.has(entry.id) ? "checked" : ""}>`}</td>
     ` : "";
     const statusCell = kind === "purchase"
-      ? `<td>${ewayReviewBadge(entry)}</td>`
+      ? `<td>${cancelled ? `<span class="badge danger">Cancelled</span>` : ewayReviewBadge(entry)}</td>`
       : `<td><span class="badge ${statusClass}">${escapeHtml(statusLabel)}</span></td>`;
     return `
     <tr class="${cancelled ? "cancelled-row" : ""}">
@@ -2731,14 +2970,16 @@ function bindPurchaseSelectors() {
 function updateSelectAllPurchases() {
   const control = $("#selectAllPurchases");
   if (!control) return;
-  const ids = monthFilteredEntries("purchase").map(entry => entry.id);
+  const ids = monthFilteredEntries("purchase").filter(entry => !isCancelledEntry(entry)).map(entry => entry.id);
   const selectedCount = ids.filter(id => selectedPurchaseIds.has(id)).length;
   control.checked = ids.length > 0 && selectedCount === ids.length;
   control.indeterminate = selectedCount > 0 && selectedCount < ids.length;
 }
 
 function toggleAllPurchases(event) {
-  selectedPurchaseIds = event.target.checked ? new Set(monthFilteredEntries("purchase").map(entry => entry.id)) : new Set();
+  selectedPurchaseIds = event.target.checked
+    ? new Set(monthFilteredEntries("purchase").filter(entry => !isCancelledEntry(entry)).map(entry => entry.id))
+    : new Set();
   renderEntries("purchase");
 }
 
@@ -4210,6 +4451,7 @@ async function saveEntry(event) {
   event.preventDefault();
   const form = $("#entryForm");
   const existingEntry = editingEntryId ? entryList(entryMode).find(row => row.id === editingEntryId) : null;
+  let internalSyncResult = null;
   if (entryMode === "sale" && isCancelledEntry(existingEntry)) {
     toast("Cancelled sales bill cannot be edited");
     return;
@@ -4302,6 +4544,7 @@ async function saveEntry(event) {
   const savedProfile = profileById(entry.profileId);
   if (entryMode === "sale") {
     savedProfile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
+    internalSyncResult = syncInternalPurchaseForSale(entry, existingEntry);
   } else if (entryMode === "purchase" && index < 0) {
     savedProfile.nextPurchaseNo = num(savedProfile.nextPurchaseNo) + 1;
   } else if (entryMode === "po" && index < 0) {
@@ -4315,7 +4558,16 @@ async function saveEntry(event) {
   let synced = canSyncNow ? await syncCloudNow(false) : false;
   if (canSyncNow && !synced) {
     try {
-      synced = await syncSingleEntryToCloud(entryMode, entry);
+      if (internalSyncResult?.supplierParty) await syncSinglePartyToCloud(internalSyncResult.supplierParty);
+      const entrySynced = await syncSingleEntryToCloud(entryMode, entry);
+      const affectedPurchases = internalSyncResult?.affectedPurchases?.length
+        ? internalSyncResult.affectedPurchases
+        : (internalSyncResult?.linkedPurchase ? [internalSyncResult.linkedPurchase] : []);
+      const linkedResults = [];
+      for (const purchase of affectedPurchases) {
+        linkedResults.push(await syncSingleEntryToCloud("purchase", purchase));
+      }
+      synced = entrySynced && linkedResults.every(Boolean);
       if (synced) renderAll();
     } catch (error) {
       console.warn("Single entry cloud sync failed", error);
@@ -4329,14 +4581,22 @@ async function saveEntry(event) {
     if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
     toast(synced ? "PO saved and synced" : canSyncNow ? "PO saved locally. Cloud sync failed" : "PO saved locally");
   } else {
-    if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
-    toast(synced ? "Sale saved and synced" : canSyncNow ? "Sale saved locally. Cloud sync failed" : "Sale saved locally");
+    if (canSyncNow && !synced) {
+      markEntrySyncFailed(entryMode, entry.id);
+      markLinkedPurchaseSyncFailed(internalSyncResult);
+    }
+    toast(saleSaveToast(synced, canSyncNow, internalSyncResult));
   }
 }
 
 function deleteEntry(kind, id) {
   if (kind === "sale") {
     cancelEntry(kind, id);
+    return;
+  }
+  const entry = entryList(kind).find(row => row.id === id);
+  if (kind === "purchase" && entry?.source === "internal-sale") {
+    toast("Internal purchase is linked. Cancel the sales bill instead");
     return;
   }
   if (!confirm("Delete this entry?")) return;
@@ -4360,12 +4620,15 @@ function cancelEntry(kind, id) {
   entry.cancelled = true;
   entry.cancelledAt = new Date().toISOString();
   entry.status = "Cancelled";
+  const internalSyncResult = cancelLinkedInternalPurchase(entry, "Linked sales bill was cancelled.");
   Object.assign(entry, entityWithLocalMeta(entry, entry));
   const profile = profileById(entry.profileId);
   profile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
   saveState();
   renderAll();
-  toast(`Sales bill ${entry.number} cancelled`);
+  toast(internalSyncResult?.action === "cancelled"
+    ? `Sales bill ${entry.number} cancelled. Internal purchase cancelled`
+    : `Sales bill ${entry.number} cancelled`);
 }
 
 function openItem(id = null) {
@@ -6404,7 +6667,7 @@ function renderReport() {
   const inRange = entry => entry.date >= from && entry.date <= to;
   const profile = activeProfile();
   const sales = activeAccountingEntries("sale").filter(inRange);
-  const purchases = activeEntries("purchase").filter(inRange);
+  const purchases = activeAccountingEntries("purchase").filter(inRange);
   const output = $("#reportOutput");
   if (activeReport === "stock") {
     output.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Purchase Rate</th><th class="num">Stock Value</th></tr></thead><tbody>
@@ -6451,7 +6714,7 @@ function renderReport() {
 }
 
 function exportSelectedEwayJson() {
-  const purchases = monthFilteredEntries("purchase").filter(entry => selectedPurchaseIds.has(entry.id));
+  const purchases = monthFilteredEntries("purchase").filter(entry => selectedPurchaseIds.has(entry.id) && !isCancelledEntry(entry));
   if (!purchases.length) return toast("Select purchase bills first");
   let warningCount = 0;
   const billLists = purchases.map(entry => {
@@ -6660,7 +6923,7 @@ function validateEwayPayload(payload = {}) {
 function exportPurchaseRegister() {
   const from = $("#reportFrom").value || "0000-01-01";
   const to = $("#reportTo").value || "9999-12-31";
-  const rows = activeEntries("purchase")
+  const rows = activeAccountingEntries("purchase")
     .filter(entry => entry.date >= from && entry.date <= to)
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(entry => {
