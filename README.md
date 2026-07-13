@@ -64,13 +64,19 @@ Set these Supabase secrets:
 supabase secrets set OPENAI_API_KEY=your-openai-key
 supabase secrets set OPENAI_MODEL=your-selected-openai-model
 supabase secrets set GOOGLE_MAPS_API_KEY=your-google-maps-key
+# Optional preferred name for a Routes API-only restricted key:
+# supabase secrets set GOOGLE_ROUTES_API_KEY=your-routes-key
 supabase secrets set RESEND_API_KEY=your-resend-key
 supabase secrets set REPORT_FROM_EMAIL=reports@yourdomain.com
 ```
 
 The OpenAI model is intentionally configurable so you can change it later without editing the website.
 
-The `estimate-eway-distance` function uses Google Maps for road distance between supplier and buyer/ship-to pincodes. Enable the Routes API if possible; Distance Matrix API is also supported as a fallback. The Google key must stay in Supabase secrets and should not be added to `cloud-config.js` or browser JavaScript.
+The `estimate-eway-distance` function uses only Google Routes API for road distance between supplier and buyer/ship-to pincodes. Google keys must stay in Supabase secrets and should not be added to `cloud-config.js` or browser JavaScript.
+
+Run `supabase/migrations/20260713161000_google_routes_safeguards.sql` before deploying the distance function. It adds a shared unordered PIN-pair cache, duplicate-request locks, and hard Google call limits of 60,000 per year, 5,000 per month, and 150 per day in the `Asia/Kolkata` timezone. Failed Google requests count because Google may still treat them as billable events, and the same PIN pair is not retried automatically after a failed attempt. Cached, same-PIN, configured, and manually confirmed distances do not count.
+
+As a second protection layer, restrict the server key to Routes API in Google Cloud, configure the lowest practical Routes API quota, and add billing-budget alerts. The database hard limits remain authoritative because Google Cloud does not provide the app's calendar-year counter.
 
 ## Month-End Reports
 

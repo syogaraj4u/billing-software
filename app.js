@@ -729,7 +729,12 @@ function normalizeShippingAddresses(addresses = []) {
 
 function normalizeEwayRouteDistances(value = {}) {
   return Object.fromEntries(Object.entries(value || {})
-    .map(([key, distance]) => [String(key || "").trim(), Math.max(0, num(distance))])
+    .map(([key, distance]) => {
+      const rawKey = String(key || "").trim();
+      const pins = rawKey.match(/^(\d{6})-(\d{6})$/);
+      const normalizedKey = pins ? ewayRouteKey(pins[1], pins[2]) : rawKey;
+      return [normalizedKey, Math.max(0, num(distance))];
+    })
     .filter(([key, distance]) => key && distance > 0));
 }
 
@@ -738,12 +743,17 @@ function normalizeVehicleNumber(value = "") {
 }
 
 function normalizePurchaseEwayDetails(details = {}) {
+  const fromPincode = normalizePincode(details.fromPincode || "");
+  const toPincode = normalizePincode(details.toPincode || "");
+  const routeKey = ewayRouteKey(fromPincode, toPincode) || String(details.routeKey || "").trim();
+  const distanceSource = String(details.distanceSource || "").trim();
+  const distanceKm = Math.max(0, num(details.distanceKm));
   return {
     transType: ["1", "2", "3", "4"].includes(String(details.transType || "")) ? String(details.transType) : "1",
     transMode: ["1", "2", "3", "4"].includes(String(details.transMode || "")) ? String(details.transMode) : "1",
     vehicleNo: normalizeVehicleNumber(details.vehicleNo || ""),
     vehicleType: details.vehicleType === "O" ? "O" : "R",
-    distanceKm: Math.max(0, num(details.distanceKm)),
+    distanceKm,
     destinationPreset: String(details.destinationPreset || "").trim(),
     dispatchFromAddress: String(details.dispatchFromAddress || "").trim(),
     shipToAddress: String(details.shipToAddress || "").trim(),
@@ -751,9 +761,11 @@ function normalizePurchaseEwayDetails(details = {}) {
     transporterId: normalizeGstin(details.transporterId || ""),
     transDocNo: String(details.transDocNo || "").trim(),
     transDocDate: String(details.transDocDate || "").trim(),
-    fromPincode: normalizePincode(details.fromPincode || ""),
-    toPincode: normalizePincode(details.toPincode || ""),
-    routeKey: String(details.routeKey || "").trim()
+    fromPincode,
+    toPincode,
+    routeKey,
+    distanceSource,
+    distanceConfirmed: distanceKm > 0 && (details.distanceConfirmed === true || distanceSource !== "local-estimate")
   };
 }
 
@@ -3438,20 +3450,33 @@ function setupPurchaseEwayPanel(kind, source = null) {
   form.elements.ewayDispatchFromAddress.value = supplierDefaultAddress || "";
   form.elements.ewayShipToAddress.value = details.shipToAddress || "";
   form.elements.ewayDistanceKmEntry.value = details.distanceKm || "";
+  form.elements.ewayDistanceKmEntry.dataset.distanceSource = details.distanceSource || (details.distanceKm ? "saved" : "");
   form.elements.ewayTransporterName.value = details.transporterName || "";
   form.elements.ewayTransporterId.value = details.transporterId || "";
   form.elements.ewayTransDocNo.value = details.transDocNo || "";
   form.elements.ewayTransDocDate.value = details.transDocDate || "";
   form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = "";
+  form.elements.ewayDistanceConfirmed.checked = Boolean(details.distanceConfirmed);
+  $("#ewayDistanceConfirmRow").hidden = !(details.distanceSource === "local-estimate" && !details.distanceConfirmed);
   ["ewayTransType", "ewayTransMode", "ewayVehicleNoEntry", "ewaySupplierPincodeEntry", "ewayDestinationPreset", "ewayDispatchFromAddress", "ewayShipToAddress", "ewayTransporterName", "ewayTransporterId", "ewayTransDocNo", "ewayTransDocDate"].forEach(name => {
     form.elements[name].oninput = updatePurchaseEwayPanel;
     form.elements[name].onchange = updatePurchaseEwayPanel;
   });
   form.elements.ewayDistanceKmEntry.oninput = () => {
     form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = "";
+    form.elements.ewayDistanceKmEntry.dataset.distanceSource = num(form.elements.ewayDistanceKmEntry.value) ? "manual-confirmed" : "";
+    form.elements.ewayDistanceConfirmed.checked = Boolean(num(form.elements.ewayDistanceKmEntry.value));
+    $("#ewayDistanceConfirmRow").hidden = true;
     updatePurchaseEwayPanel();
   };
   form.elements.ewayDistanceKmEntry.onchange = updatePurchaseEwayPanel;
+  form.elements.ewayDistanceConfirmed.onchange = () => {
+    if (form.elements.ewayDistanceConfirmed.checked) {
+      form.elements.ewayDistanceKmEntry.dataset.distanceSource = "manual-confirmed";
+      $("#ewayDistanceConfirmRow").hidden = true;
+    }
+    updatePurchaseEwayPanel();
+  };
   updatePurchaseEwayPanel();
 }
 
@@ -3492,7 +3517,12 @@ function updatePurchaseEwayPanel() {
   $("#ewayFromPreview").innerHTML = ewayAddressPreview(ewayUsesDispatchFrom(transType) ? "Dispatch From" : "From", refreshedRoute.fromName, refreshedRoute.fromAddress, refreshedRoute.fromPincode);
   $("#ewayBillToPreview").innerHTML = ewayAddressPreview("Bill To", refreshedRoute.billToName, refreshedRoute.billToAddress, refreshedRoute.billToPincode);
   $("#ewayToPreview").innerHTML = ewayAddressPreview(ewayUsesShipTo(transType) ? "Ship To" : "To", refreshedRoute.toName, refreshedRoute.toAddress, refreshedRoute.toPincode);
-  $("#ewayDistanceHint").textContent = ewayDistanceHint(refreshedRoute, form.elements.ewayDistanceKmEntry.value);
+  $("#ewayDistanceHint").textContent = ewayDistanceHint(
+    refreshedRoute,
+    form.elements.ewayDistanceKmEntry.value,
+    form.elements.ewayDistanceKmEntry.dataset.distanceSource,
+    form.elements.ewayDistanceConfirmed.checked
+  );
   updatePurchaseEwayRequiredHighlights(refreshedRoute, form);
 }
 
@@ -3502,13 +3532,15 @@ function applyEwayDistanceSuggestion(route, form) {
   const fixedRouteDistance = fixedEwayRouteDistance(route.fromPincode, route.toPincode);
   if (fixedRouteDistance && num(distanceInput.value) !== fixedRouteDistance) {
     clearTimeout(ewayDistanceEstimateTimer);
-    distanceInput.value = fixedRouteDistance;
-    distanceInput.dataset.autoRouteKey = routeKey;
+    setEwayDistanceValue(form, fixedRouteDistance, routeKey, "configured-route");
     return;
   }
   if (num(distanceInput.value) && distanceInput.dataset.autoRouteKey && distanceInput.dataset.autoRouteKey !== routeKey) {
     distanceInput.value = "";
     distanceInput.dataset.autoRouteKey = "";
+    distanceInput.dataset.distanceSource = "";
+    form.elements.ewayDistanceConfirmed.checked = false;
+    $("#ewayDistanceConfirmRow").hidden = true;
   }
   if (num(distanceInput.value)) {
     clearTimeout(ewayDistanceEstimateTimer);
@@ -3517,24 +3549,22 @@ function applyEwayDistanceSuggestion(route, form) {
   const samePinDistance = samePincodeDistanceKm(route);
   if (samePinDistance) {
     clearTimeout(ewayDistanceEstimateTimer);
-    distanceInput.value = samePinDistance;
-    distanceInput.dataset.autoRouteKey = routeKey;
-    return;
-  }
-  const calculatedDistance = calculateEwayDistance(route.fromPincode, route.toPincode);
-  if (calculatedDistance) {
-    clearTimeout(ewayDistanceEstimateTimer);
-    distanceInput.value = calculatedDistance;
-    distanceInput.dataset.autoRouteKey = routeKey;
-    return;
-  }
-  if (route.savedDistance) {
-    clearTimeout(ewayDistanceEstimateTimer);
-    distanceInput.value = route.savedDistance;
-    distanceInput.dataset.autoRouteKey = routeKey;
+    setEwayDistanceValue(form, samePinDistance, routeKey, "same-pincode");
     return;
   }
   scheduleEwayDistanceEstimate(route);
+}
+
+function setEwayDistanceValue(form, distanceKm, autoRouteKey, source, needsConfirmation = false) {
+  const distanceInput = form.elements.ewayDistanceKmEntry;
+  distanceInput.value = Math.max(1, Math.round(num(distanceKm)));
+  distanceInput.dataset.autoRouteKey = autoRouteKey || "";
+  distanceInput.dataset.distanceSource = source || "";
+  form.elements.ewayDistanceConfirmed.checked = !needsConfirmation;
+  $("#ewayDistanceConfirmRow").hidden = !needsConfirmation;
+  if (needsConfirmation) {
+    $("#ewayDistanceConfirmText").textContent = `Confirm the estimated ${distanceInput.value} KM or enter the correct distance`;
+  }
 }
 
 function samePincodeDistanceKm(route) {
@@ -3661,11 +3691,23 @@ function ewayPresetAddressText(preset = {}) {
 }
 
 function ewayRouteKey(fromPincode, toPincode) {
-  return fromPincode && toPincode ? `${fromPincode}-${toPincode}` : "";
+  const fromPin = normalizePincode(fromPincode);
+  const toPin = normalizePincode(toPincode);
+  return fromPin && toPin ? [fromPin, toPin].sort().join("-") : "";
 }
 
 function savedEwayRouteDistance(routeKey) {
-  return routeKey ? num(state.settings.ewayRouteDistances?.[routeKey]) : 0;
+  if (!routeKey) return 0;
+  const normalizedKey = normalizeEwayRouteKey(routeKey);
+  const [fromPin, toPin] = String(routeKey).split("-");
+  return num(state.settings.ewayRouteDistances?.[normalizedKey])
+    || num(state.settings.ewayRouteDistances?.[`${fromPin}-${toPin}`])
+    || num(state.settings.ewayRouteDistances?.[`${toPin}-${fromPin}`]);
+}
+
+function normalizeEwayRouteKey(routeKey) {
+  const pins = String(routeKey || "").match(/^(\d{6})-(\d{6})$/);
+  return pins ? ewayRouteKey(pins[1], pins[2]) : "";
 }
 
 function ewayAddressPreview(title, name, address, pincode) {
@@ -3675,11 +3717,15 @@ function ewayAddressPreview(title, name, address, pincode) {
     <small>PIN: ${escapeHtml(pincode || "-")}</small>`;
 }
 
-function ewayDistanceHint(route, currentDistance) {
+function ewayDistanceHint(route, currentDistance, source = "", confirmed = true) {
   if (samePincodeDistanceKm(route) && num(currentDistance) === 2) return "Same seller and buyer PIN, distance set to 2 KM.";
+  if (source === "local-estimate" && !confirmed) return `Estimated ${Math.round(num(currentDistance))} KM. Confirm or correct it before saving.`;
+  if (source === "shared-cache") return `Shared saved distance ${Math.round(num(currentDistance))} KM.`;
+  if (source === "google-routes") return `Google Routes calculated ${Math.round(num(currentDistance))} KM and saved it for future invoices.`;
+  if (source === "manual-confirmed") return `Confirmed distance ${Math.round(num(currentDistance))} KM.`;
   if (num(currentDistance)) return route.routeKey ? `Distance saved for route ${route.routeKey}.` : "Distance entered.";
-  if (route.savedDistance) return `Auto-filled saved route distance ${route.savedDistance} KM.`;
-  if (ewayDistanceEstimateKey === ewayDistanceEstimateRouteKey(route)) return "Calculating distance with Google Maps...";
+  if (ewayDistanceEstimateKey === ewayDistanceEstimateRouteKey(route)) return "Checking the shared distance cache...";
+  if (route.savedDistance) return `Previously saved route distance ${route.savedDistance} KM.`;
   if (!route.fromPincode || !route.toPincode) return "Add supplier and buyer pincodes to remember route distance.";
   return "Google Maps will calculate distance when Cloud is connected.";
 }
@@ -3695,7 +3741,7 @@ function ewayDistanceEstimateRouteKey(route = {}) {
 
 function scheduleEwayDistanceEstimate(route) {
   const key = ewayDistanceEstimateRouteKey(route);
-  if (!key.replace(/\|/g, "").trim() || !route.fromAddress || !route.toAddress) return;
+  if (!route.fromPincode || !route.toPincode || !key.replace(/\|/g, "").trim()) return;
   ewayDistanceEstimateKey = key;
   clearTimeout(ewayDistanceEstimateTimer);
   ewayDistanceEstimateTimer = setTimeout(() => estimateEwayDistanceWithCloud(route, key), 700);
@@ -3705,7 +3751,7 @@ async function estimateEwayDistanceWithCloud(route, key) {
   const form = $("#entryForm");
   if (!form || entryMode !== "purchase" || num(form.elements.ewayDistanceKmEntry.value)) return;
   if (!cloudConfigured() || !cloudClient || !cloudSession) {
-    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Login to Cloud to calculate distance with Google Maps.";
+    applyLocalEwayDistanceFallback(route, key, "Cloud is unavailable");
     return;
   }
   try {
@@ -3719,6 +3765,10 @@ async function estimateEwayDistanceWithCloud(route, key) {
     });
     if (error) throw error;
     if (data?.error) throw new Error(data.error);
+    if (data?.fallbackRequired) {
+      applyLocalEwayDistanceFallback(route, key, data.reason || "Google Routes is unavailable");
+      return;
+    }
     const distanceKm = Math.max(1, Math.round(num(data?.distanceKm)));
     if (!distanceKm || ewayDistanceEstimateKey !== key) return;
     const profile = profileById(form.elements.profileId.value);
@@ -3731,13 +3781,76 @@ async function estimateEwayDistanceWithCloud(route, key) {
       shipToAddress: form.elements.ewayShipToAddress.value
     });
     if (ewayDistanceEstimateRouteKey(currentRoute) !== key || num(form.elements.ewayDistanceKmEntry.value)) return;
-    form.elements.ewayDistanceKmEntry.value = distanceKm;
-    form.elements.ewayDistanceKmEntry.dataset.autoRouteKey = key;
-    $("#ewayDistanceHint").textContent = `Google Maps calculated ${distanceKm} KM.`;
+    const distanceSource = data?.source === "shared-cache" ? "shared-cache" : data?.source || "google-routes";
+    setEwayDistanceValue(form, distanceKm, key, distanceSource);
+    $("#ewayDistanceHint").textContent = data?.source === "shared-cache"
+      ? `Shared saved distance ${distanceKm} KM.`
+      : `Google Routes calculated ${distanceKm} KM and saved it for future invoices.`;
   } catch (error) {
-    if (ewayDistanceEstimateKey === key) $("#ewayDistanceHint").textContent = "Distance calculation failed. Enter KM manually.";
+    const message = await ewayDistanceCloudErrorMessage(error);
+    applyLocalEwayDistanceFallback(route, key, message);
     console.warn("E-way distance estimate unavailable", error);
   }
+}
+
+function applyLocalEwayDistanceFallback(route, key, reason) {
+  const form = $("#entryForm");
+  if (!form || entryMode !== "purchase" || ewayDistanceEstimateKey !== key || num(form.elements.ewayDistanceKmEntry.value)) return;
+  const profile = profileById(form.elements.profileId.value);
+  const supplier = partyById(form.elements.partyId.value) || {};
+  const currentRoute = purchaseEwayRouteFromValues(profile, supplier, {
+    transType: form.elements.ewayTransType.value || "1",
+    fromPincode: form.elements.ewaySupplierPincodeEntry.value,
+    destinationPreset: form.elements.ewayDestinationPreset.value,
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
+    shipToAddress: form.elements.ewayShipToAddress.value
+  });
+  if (ewayDistanceEstimateRouteKey(currentRoute) !== key) return;
+  if (route.savedDistance) {
+    setEwayDistanceValue(form, route.savedDistance, key, "saved-route");
+    $("#ewayDistanceHint").textContent = `${reason}. Using the previously saved ${route.savedDistance} KM distance.`;
+    return;
+  }
+  const estimatedDistance = calculateEwayDistance(route.fromPincode, route.toPincode);
+  if (!estimatedDistance) {
+    $("#ewayDistanceHint").textContent = `${reason}. Enter the distance manually.`;
+    return;
+  }
+  setEwayDistanceValue(form, estimatedDistance, key, "local-estimate", true);
+  $("#ewayDistanceHint").textContent = `${reason}. Estimated ${estimatedDistance} KM; confirm or correct it before saving.`;
+}
+
+async function ewayDistanceCloudErrorMessage(error) {
+  let responseMessage = "";
+  try {
+    const response = error?.context;
+    if (response && typeof response.clone === "function") {
+      const body = await response.clone().json();
+      responseMessage = body?.error || body?.message || "";
+    }
+  } catch {}
+  const message = [responseMessage, error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (/Shared PIN-distance cache|latest Supabase migration|schema cache/i.test(message)) {
+    return "Shared PIN-distance cache is not ready";
+  }
+  if (/GOOGLE_(MAPS|ROUTES)_API_KEY/i.test(message) && /configured|missing/i.test(message)) {
+    return "Google Routes API key is not configured in Supabase";
+  }
+  if (/api key|API_KEY|REQUEST_DENIED|permission|disabled|not authorized/i.test(message)) {
+    return "Google API key is invalid or Routes API is not enabled";
+  }
+  if (/billing|quota|rate|RESOURCE_EXHAUSTED/i.test(message)) {
+    return "Google Routes billing or quota is unavailable";
+  }
+  if (/No route|ZERO_RESULTS|NOT_FOUND/i.test(message)) return "No Google route found. Enter KM manually.";
+  if (/Failed to fetch|NetworkError|Could not resolve|resolve host|Load failed|fetch/i.test(message)) {
+    return "Distance service could not be reached.";
+  }
+  if (/401|403|JWT|auth|login|session/i.test(message)) return "Cloud login/session is not valid. Please logout and login again.";
+  return message || "Distance calculation failed. Enter KM manually.";
 }
 
 function collectPurchaseEwayDetails(form, profile, supplier) {
@@ -3755,12 +3868,15 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
     dispatchFromAddress: form.elements.ewayDispatchFromAddress.value,
     fromPincode: form.elements.ewaySupplierPincodeEntry.value || route.fromPincode
   }, supplier);
+  const distanceSource = String(form.elements.ewayDistanceKmEntry.dataset.distanceSource || "");
   return normalizePurchaseEwayDetails({
     transType,
     transMode,
     vehicleNo: form.elements.ewayVehicleNoEntry.value,
     vehicleType: "R",
-    distanceKm: num(form.elements.ewayDistanceKmEntry.value) || route.savedDistance || calculateEwayDistance(route.fromPincode, route.toPincode),
+    distanceKm: num(form.elements.ewayDistanceKmEntry.value) || 0,
+    distanceSource,
+    distanceConfirmed: form.elements.ewayDistanceConfirmed.checked || distanceSource !== "local-estimate",
     destinationPreset: form.elements.ewayDestinationPreset.value,
     dispatchFromAddress,
     shipToAddress: form.elements.ewayShipToAddress.value,
@@ -3774,13 +3890,29 @@ function collectPurchaseEwayDetails(form, profile, supplier) {
   });
 }
 
-function rememberPurchaseEwayRoute(details = {}) {
+async function rememberPurchaseEwayRoute(details = {}) {
   const normalized = normalizePurchaseEwayDetails(details);
-  if (!normalized.routeKey || !normalized.distanceKm) return;
+  const routeKey = ewayRouteKey(normalized.fromPincode, normalized.toPincode) || normalizeEwayRouteKey(normalized.routeKey);
+  if (!routeKey || !normalized.distanceKm) return false;
   state.settings.ewayRouteDistances = {
     ...(state.settings.ewayRouteDistances || {}),
-    [normalized.routeKey]: normalized.distanceKm
+    [routeKey]: normalized.distanceKm
   };
+  const alreadyShared = ["google-routes", "shared-cache"].includes(normalized.distanceSource);
+  if (alreadyShared || !normalized.distanceConfirmed || !cloudConfigured() || !cloudClient || !cloudSession) return true;
+  try {
+    const { error } = await cloudClient.rpc("billing_save_pin_distance", {
+      p_from_pincode: normalized.fromPincode,
+      p_to_pincode: normalized.toPincode,
+      p_distance_km: Math.round(normalized.distanceKm),
+      p_source: "manual-confirmed"
+    });
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.warn("Could not save shared PIN distance", error);
+    return false;
+  }
 }
 
 function shipToAddressOptions(party = {}, selectedId = "", shipTo = {}, same = true) {
@@ -4513,6 +4645,11 @@ async function saveEntry(event) {
   if (entryMode === "purchase") applyLineHsnToItems(lines);
   const profile = profileById(form.elements.profileId.value);
   const party = partyById(form.elements.partyId.value);
+  if (entryMode === "purchase" && purchaseEwayDistanceNeedsConfirmation(form)) {
+    toast("Confirm the estimated transport distance or enter the correct KM");
+    form.elements.ewayDistanceConfirmed.focus();
+    return;
+  }
   if (entryMode === "sale" && !isValidGstin(party?.gstin)) {
     toast("Buyer GSTIN is required for B2B sale");
     return;
@@ -4582,7 +4719,7 @@ async function saveEntry(event) {
       }
     }
   }
-  if (entryMode === "purchase") rememberPurchaseEwayRoute(entry.ewayDetails);
+  if (entryMode === "purchase") await rememberPurchaseEwayRoute(entry.ewayDetails);
   if (entryMode === "sale") saveShipToAddressIfNeeded(form, party, saleAddress);
   const list = entryList(entryMode);
   const index = list.findIndex(row => row.id === entry.id);
@@ -4644,6 +4781,12 @@ async function saveEntry(event) {
     }
     toast(saleSaveToast(synced, canSyncNow, internalSyncResult));
   }
+}
+
+function purchaseEwayDistanceNeedsConfirmation(form) {
+  return form.elements.ewayDistanceKmEntry.dataset.distanceSource === "local-estimate"
+    && num(form.elements.ewayDistanceKmEntry.value) > 0
+    && !form.elements.ewayDistanceConfirmed.checked;
 }
 
 function deleteEntry(kind, id) {
@@ -6873,7 +7016,7 @@ function buildEwayBill(entry) {
   const toPincode = route.toPincode || extractPreferredPincode(profile.address);
   const fromParts = ewayAddressParts(route.fromAddress || supplier.address || supplier.place, null, supplier.place, fromStateCode);
   const toParts = ewayAddressParts(route.toAddress || profile.address, route.destinationPresetData, profile.state, toStateCode);
-  const distanceKm = fixedEwayRouteDistance(fromPincode, toPincode) || ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey) || calculateEwayDistance(fromPincode, toPincode);
+  const distanceKm = fixedEwayRouteDistance(fromPincode, toPincode) || ewayDetails.distanceKm || savedEwayRouteDistance(route.routeKey);
   const otherValue = ewayEntryOtherValue(entry);
   const bill = {
     userGstin: toGstin,
