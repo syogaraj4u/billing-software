@@ -220,6 +220,7 @@ create table if not exists public.billing_purchases (
   seller_gstin text not null default '',
   buyer_gstin text not null default '',
   review_status text not null default '',
+  status text not null default '',
   taxable numeric(14,2) not null default 0,
   cgst numeric(14,2) not null default 0,
   sgst numeric(14,2) not null default 0,
@@ -234,6 +235,13 @@ create table if not exists public.billing_purchases (
   last_synced_at timestamptz,
   primary key (workspace_id, id)
 );
+
+alter table public.billing_purchases
+  add column if not exists status text not null default '';
+
+update public.billing_purchases
+set status = coalesce(data ->> 'status', '')
+where status = '' and coalesce(data ->> 'status', '') <> '';
 
 create table if not exists public.billing_purchase_orders (
   workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,

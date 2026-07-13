@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v144";
+const CACHE_NAME = "billing-software-v145";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -40,7 +40,8 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   const isAppShell = event.request.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith("/index.html");
-  if (isAppShell) {
+  const isRuntimeAsset = url.origin === self.location.origin && /\.(?:js|css)$/.test(url.pathname);
+  if (isAppShell || isRuntimeAsset) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
@@ -48,7 +49,12 @@ self.addEventListener("fetch", event => {
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
           return response;
         })
-        .catch(() => caches.match(event.request).then(cached => cached || caches.match("./index.html")))
+        .catch(async () => {
+          const cached = await caches.match(event.request)
+            || await caches.match(event.request, { ignoreSearch: true });
+          if (cached) return cached;
+          return isAppShell ? caches.match("./index.html") : Response.error();
+        })
     );
     return;
   }
