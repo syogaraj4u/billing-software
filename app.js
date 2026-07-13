@@ -2655,7 +2655,6 @@ function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
     id: entry.id,
     profile_id: entry.profileId || "",
     party_id: entry.partyId || "",
-    status: entry.status || "",
     taxable: round2(entry.taxable),
     cgst: round2(entry.cgst),
     sgst: round2(entry.sgst),
@@ -2668,6 +2667,7 @@ function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
   if (kind === "po") {
     return {
       ...base,
+      status: entry.status || "",
       po_number: entry.number || "",
       po_date: cloudDate(entry.date)
     };
@@ -2684,6 +2684,7 @@ function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
   }
   return {
     ...base,
+    status: entry.status || "",
     invoice_number: entry.number || "",
     invoice_date: cloudDate(entry.date),
     cancelled: isCancelledEntry(entry)
