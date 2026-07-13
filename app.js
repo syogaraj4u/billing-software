@@ -436,6 +436,7 @@ let cloudWorkspace = null;
 let cloudLoading = false;
 let cloudSyncTimer = null;
 let cloudWorkspaceAutoSwitchPending = "";
+let lastCloudSyncError = "";
 let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
@@ -2413,6 +2414,7 @@ async function syncCloudNow(showToast) {
     .eq("id", cloudWorkspace.id)
     .single();
   if (readError) {
+    lastCloudSyncError = cloudErrorText(readError);
     if (showToast) toast(readError.message);
     else toast("Cloud sync failed");
     return false;
@@ -2432,6 +2434,7 @@ async function syncCloudNow(showToast) {
   try {
     await syncNormalizedCloudTables(uploadState, previousState, syncedAt);
   } catch (syncError) {
+    lastCloudSyncError = cloudErrorText(syncError);
     console.warn("Normalized cloud sync failed", syncError);
     if (showToast) toast(normalizedSyncErrorMessage(syncError));
     else toast("Cloud row sync failed");
@@ -2447,10 +2450,12 @@ async function syncCloudNow(showToast) {
     .select(selectColumns)
     .single();
   if (error) {
+    lastCloudSyncError = cloudErrorText(error);
     if (showToast) toast(error.message);
     else toast("Cloud sync failed");
     return false;
   }
+  lastCloudSyncError = "";
   cloudWorkspace = data;
   cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
   state = normalizeState(clone(data.data || uploadState));
@@ -2463,6 +2468,13 @@ async function syncCloudNow(showToast) {
 function normalizedSyncErrorMessage(error = {}) {
   if (isMissingCloudTableError(error)) return "Cloud row tables are not ready. Run the latest database setup.";
   return error.message || "Cloud row sync failed";
+}
+
+function cloudErrorText(error = {}) {
+  return [error.message, error.details, error.hint, error.code]
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .join(" | ");
 }
 
 async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
@@ -2495,7 +2507,7 @@ async function syncSingleEntryToCloud(kind, entry) {
   if (!table || !lineTable || !parentColumn) return false;
   const { error: entryError } = await cloudClient
     .from(table)
-    .upsert(cloudEntryRow(cloudWorkspace.id, entry, kind, syncedAt, userId));
+    .upsert(cloudEntryRow(cloudWorkspace.id, entry, kind, syncedAt, userId), { onConflict: "workspace_id,id" });
   if (entryError) throw entryError;
   await replaceCloudLineRowsForEntry(
     lineTable,
@@ -2514,7 +2526,7 @@ async function syncSinglePartyToCloud(party) {
   const userId = currentCloudUserId();
   const { error } = await cloudClient
     .from(CLOUD_ROW_TABLES.parties)
-    .upsert(cloudPartyRow(cloudWorkspace.id, party, syncedAt, userId));
+    .upsert(cloudPartyRow(cloudWorkspace.id, party, syncedAt, userId), { onConflict: "workspace_id,id" });
   if (error) throw error;
   markEntitySyncStatus(party, SYNC_STATUS_SYNCED, syncedAt);
   saveState({ skipCloud: true, skipLocalBackup: true });
@@ -2533,11 +2545,15 @@ function markLinkedPurchaseSyncFailed(internalSyncResult = null) {
 
 function saleSaveToast(synced, canSyncNow, internalSyncResult = null) {
   const internalAction = internalSyncResult?.action;
-  const syncText = synced ? " and synced" : canSyncNow ? " locally. Cloud sync failed" : " locally";
+  const syncText = synced ? " and synced" : canSyncNow ? ` locally. Cloud sync failed${cloudFailureSuffix()}` : " locally";
   if (internalAction === "created") return `Sale saved${syncText}. Internal purchase created`;
   if (internalAction === "updated") return `Sale saved${syncText}. Internal purchase updated`;
   if (internalAction === "cancelled") return `Sale saved${syncText}. Internal purchase cancelled`;
-  return synced ? "Sale saved and synced" : canSyncNow ? "Sale saved locally. Cloud sync failed" : "Sale saved locally";
+  return synced ? "Sale saved and synced" : canSyncNow ? `Sale saved locally. Cloud sync failed${cloudFailureSuffix()}` : "Sale saved locally";
+}
+
+function cloudFailureSuffix() {
+  return lastCloudSyncError ? `: ${lastCloudSyncError.slice(0, 110)}` : "";
 }
 
 function cloudEntryTable(kind) {
@@ -2567,7 +2583,7 @@ async function syncCloudEntityTable(table, idColumn, currentRows = [], previousR
   const removedIds = previousRows.map(row => row.id).filter(id => id && !currentIds.has(id));
   const mappedRows = currentRows.map(mapRow);
   if (mappedRows.length) {
-    const { error } = await cloudClient.from(table).upsert(mappedRows);
+    const { error } = await cloudClient.from(table).upsert(mappedRows, { onConflict: `workspace_id,${idColumn}` });
     if (error) throw error;
   }
   if (removedIds.length) {
@@ -4558,7 +4574,14 @@ async function saveEntry(event) {
   let synced = canSyncNow ? await syncCloudNow(false) : false;
   if (canSyncNow && !synced) {
     try {
-      if (internalSyncResult?.supplierParty) await syncSinglePartyToCloud(internalSyncResult.supplierParty);
+      if (internalSyncResult?.supplierParty) {
+        try {
+          await syncSinglePartyToCloud(internalSyncResult.supplierParty);
+        } catch (partyError) {
+          lastCloudSyncError = cloudErrorText(partyError);
+          console.warn("Single party cloud sync failed", partyError);
+        }
+      }
       const entrySynced = await syncSingleEntryToCloud(entryMode, entry);
       const affectedPurchases = internalSyncResult?.affectedPurchases?.length
         ? internalSyncResult.affectedPurchases
@@ -4570,16 +4593,17 @@ async function saveEntry(event) {
       synced = entrySynced && linkedResults.every(Boolean);
       if (synced) renderAll();
     } catch (error) {
+      lastCloudSyncError = cloudErrorText(error);
       console.warn("Single entry cloud sync failed", error);
     }
   }
   if (entryMode === "purchase") {
     if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
-    toast(synced ? "Purchase saved and synced" : canSyncNow ? "Purchase saved locally. Cloud sync failed" : "Purchase saved locally");
+    toast(synced ? "Purchase saved and synced" : canSyncNow ? `Purchase saved locally. Cloud sync failed${cloudFailureSuffix()}` : "Purchase saved locally");
     processQueuedPurchaseInvoiceUpload();
   } else if (entryMode === "po") {
     if (canSyncNow && !synced) markEntrySyncFailed(entryMode, entry.id);
-    toast(synced ? "PO saved and synced" : canSyncNow ? "PO saved locally. Cloud sync failed" : "PO saved locally");
+    toast(synced ? "PO saved and synced" : canSyncNow ? `PO saved locally. Cloud sync failed${cloudFailureSuffix()}` : "PO saved locally");
   } else {
     if (canSyncNow && !synced) {
       markEntrySyncFailed(entryMode, entry.id);
