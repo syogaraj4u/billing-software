@@ -15,6 +15,7 @@ const CLOUD_ROW_TABLES = {
   backups: "billing_cloud_backups"
 };
 const CLOUD_SELECTED_WORKSPACE_KEY = "billingSoftware.cloudWorkspaceId";
+const DEVICE_ACTIVE_PROFILE_KEY = "billingSoftware.activeProfileId";
 const PURCHASE_ATTACHMENT_BUCKET = "purchase-invoices";
 const SYNC_STATUS_LOCAL = "Saved locally";
 const SYNC_STATUS_SYNCING = "Syncing";
@@ -470,11 +471,11 @@ function uid() {
 
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) return normalizeState(clone(defaultState));
+  if (!saved) return restoreDeviceActiveProfile(normalizeState(clone(defaultState)));
   try {
-    return normalizeState({ ...clone(defaultState), ...JSON.parse(saved) });
+    return restoreDeviceActiveProfile(normalizeState({ ...clone(defaultState), ...JSON.parse(saved) }));
   } catch {
-    return normalizeState(clone(defaultState));
+    return restoreDeviceActiveProfile(normalizeState(clone(defaultState)));
   }
 }
 
@@ -961,6 +962,32 @@ function activeProfile() {
 
 function activeProfileId() {
   return state.settings.activeProfileId;
+}
+
+function restoreDeviceActiveProfile(targetState, preferredProfileId = "") {
+  if (!targetState?.settings?.profiles?.length) return targetState;
+  let storedProfileId = "";
+  try {
+    storedProfileId = localStorage.getItem(DEVICE_ACTIVE_PROFILE_KEY) || "";
+  } catch {
+    storedProfileId = "";
+  }
+  const profileId = preferredProfileId || storedProfileId || targetState.settings.activeProfileId;
+  if (targetState.settings.profiles.some(profile => profile.id === profileId)) {
+    targetState.settings.activeProfileId = profileId;
+  }
+  return targetState;
+}
+
+function setActiveProfileId(profileId) {
+  if (!state.settings.profiles.some(profile => profile.id === profileId)) return false;
+  state.settings.activeProfileId = profileId;
+  try {
+    localStorage.setItem(DEVICE_ACTIVE_PROFILE_KEY, profileId);
+  } catch {
+    // The current page still keeps the selection when local storage is unavailable.
+  }
+  return true;
 }
 
 function profileById(id) {
@@ -1843,14 +1870,14 @@ function selectCompany(profileId) {
   const profile = state.settings.profiles.find(row => row.id === profileId);
   if (!profile) return;
   const shouldSlide = companySelectionOpen && canSlideCompanyPages();
-  state.settings.activeProfileId = profileId;
+  setActiveProfileId(profileId);
   entryMonthFilters = {
     sale: defaultEntryMonth("sale", profileId),
     purchase: defaultEntryMonth("purchase", profileId),
     po: defaultEntryMonth("po", profileId)
   };
   selectedPurchaseIds.clear();
-  saveState();
+  saveState({ skipCloud: true });
   if (shouldSlide) {
     slideToCompanyWorkspace(profileId);
     return;
@@ -2257,6 +2284,7 @@ function normalizeCloudWorkspaceName(value) {
 }
 
 function applyCloudWorkspace(workspace, message) {
+  const selectedProfileId = activeProfileId();
   const localBeforeCloud = normalizeState(clone(state || defaultState));
   const previousWorkspaceId = cloudWorkspace?.id || localStorage.getItem(CLOUD_SELECTED_WORKSPACE_KEY) || "";
   const canUseCurrentLocal = !previousWorkspaceId || previousWorkspaceId === workspace.id;
@@ -2265,7 +2293,7 @@ function applyCloudWorkspace(workspace, message) {
   const merged = mergeCloudStateWithLocalCandidates(workspace.data || defaultState, [localBackup, canUseCurrentLocal ? localBeforeCloud : null]);
   cloudWorkspace = workspace;
   localStorage.setItem(CLOUD_SELECTED_WORKSPACE_KEY, workspace.id);
-  state = merged.state;
+  state = restoreDeviceActiveProfile(merged.state, selectedProfileId);
   saveState({ skipCloud: true, skipLocalBackup: true });
   renderAll();
   if (merged.changed) syncCloudNow(false);
@@ -2410,6 +2438,7 @@ async function syncCloudNow(showToast) {
     return false;
   }
   clearTimeout(cloudSyncTimer);
+  const selectedProfileId = activeProfileId();
   const selectColumns = "id,name,owner_id,member_emails,data,updated_at,created_at";
   const { data: latestWorkspace, error: readError } = await cloudClient
     .from(CLOUD_WORKSPACE_TABLE)
@@ -2434,6 +2463,7 @@ async function syncCloudNow(showToast) {
   }
   const syncedAt = new Date().toISOString();
   uploadState = markStateSyncStatus(uploadState, SYNC_STATUS_SYNCED, syncedAt);
+  restoreDeviceActiveProfile(uploadState, selectedProfileId);
   try {
     await syncNormalizedCloudTables(uploadState, previousState, syncedAt);
   } catch (syncError) {
@@ -2461,7 +2491,7 @@ async function syncCloudNow(showToast) {
   lastCloudSyncError = "";
   cloudWorkspace = data;
   cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
-  state = normalizeState(clone(data.data || uploadState));
+  state = restoreDeviceActiveProfile(normalizeState(clone(data.data || uploadState)), selectedProfileId);
   saveState({ skipCloud: true, skipLocalBackup: true });
   renderAll();
   if (showToast) toast("Cloud synced");
@@ -4961,7 +4991,7 @@ function saveSettings(event) {
     vehicleNo: form.elements.ewayVehicleNo.value.trim().toUpperCase(),
     distanceKm: Math.max(0, num(form.elements.ewayDistanceKm.value))
   };
-  state.settings.activeProfileId = profile.id;
+  setActiveProfileId(profile.id);
   saveState();
   renderAll();
   toast("GST profile saved");
@@ -8170,7 +8200,7 @@ async function processQueuedPurchaseInvoiceUpload() {
     toast(`Reading ${file.name}...`);
     const draft = await buildPurchaseDraftFromFile(file);
     if (draft.profileId !== activeProfileId()) {
-      state.settings.activeProfileId = draft.profileId;
+      setActiveProfileId(draft.profileId);
     }
     saveState();
     renderAll();
