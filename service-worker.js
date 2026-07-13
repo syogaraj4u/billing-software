@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v148";
+const CACHE_NAME = "billing-software-v149";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -13,6 +13,7 @@ const APP_ASSETS = [
 const OPTIONAL_ASSETS = [
   "https://unpkg.com/lucide@latest/dist/umd/lucide.min.js",
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
+  "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"
 ];

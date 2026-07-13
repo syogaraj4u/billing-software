@@ -2730,6 +2730,291 @@ textarea { resize: vertical; }
   background: #f6faf8;
 }
 
+.reconciliation-view {
+  min-width: 0;
+}
+
+.reconciliation-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.reconciliation-summary > div {
+  min-width: 0;
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
+  display: grid;
+  gap: 5px;
+}
+
+.reconciliation-summary > div:last-child {
+  border-right: 0;
+}
+
+.reconciliation-summary span,
+.reconciliation-amount span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.reconciliation-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-source-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(250px, 300px);
+  gap: 10px;
+  margin-bottom: 14px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+  scrollbar-width: thin;
+}
+
+.payment-source-card {
+  min-width: 0;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.payment-source-card.selected {
+  border-color: var(--primary);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.payment-source-card.inactive {
+  opacity: .62;
+}
+
+.payment-source-main {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.payment-source-main > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.payment-source-main strong,
+.payment-source-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payment-source-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.payment-source-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--primary-dark);
+}
+
+.reconciliation-tabs {
+  width: 100%;
+  margin-bottom: 10px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.reconciliation-tabs button {
+  flex: 1 0 auto;
+}
+
+.reconciliation-tabs button span {
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(20, 34, 35, .08);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.reconciliation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.reconciliation-row {
+  min-width: 0;
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: minmax(210px, 1.35fr) minmax(120px, .45fr) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.reconciliation-row-main,
+.reconciliation-amount,
+.reconciliation-link {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.reconciliation-row-main time,
+.reconciliation-row-main small,
+.reconciliation-link small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.reconciliation-row-main strong,
+.reconciliation-row-main small,
+.reconciliation-link strong {
+  overflow-wrap: anywhere;
+}
+
+.reconciliation-amount {
+  text-align: right;
+}
+
+.reconciliation-amount strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.reconciliation-amount.debit strong {
+  color: #9f3a22;
+}
+
+.reconciliation-amount.credit strong {
+  color: #0f7a45;
+}
+
+.reconciliation-link > span {
+  justify-self: start;
+}
+
+.reconciliation-link strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.reconciliation-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.compact-btn {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.reconciliation-empty {
+  min-height: 170px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+  color: var(--muted);
+  text-align: center;
+}
+
+.reconciliation-empty svg {
+  width: 26px;
+  height: 26px;
+  color: var(--primary);
+}
+
+.reconciliation-match-transaction {
+  margin: 18px 20px 12px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.reconciliation-match-transaction span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.reconciliation-match-transaction strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reconciliation-match-transaction em {
+  font-style: normal;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+#reconciliationMatchForm > label,
+#reconciliationMatchForm > .help-text {
+  margin: 0 20px 14px;
+}
+
+@media (min-width: 821px) and (max-width: 1200px) {
+  .reconciliation-row {
+    grid-template-columns: minmax(0, 1fr) minmax(140px, .45fr);
+  }
+
+  .reconciliation-link {
+    grid-column: 1 / 2;
+  }
+
+  .reconciliation-row-actions {
+    grid-column: 2 / 3;
+  }
+}
+
 @media (max-width: 980px) {
   .company-grid {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
@@ -2794,10 +3079,14 @@ textarea { resize: vertical; }
   }
   .nav-tabs {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(62px, 1fr);
     gap: 3px;
-    overflow: visible;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
+  .nav-tabs::-webkit-scrollbar { display: none; }
   .nav-tab {
     min-width: 0;
     min-height: 52px;
@@ -3113,6 +3402,105 @@ textarea { resize: vertical; }
   }
   .section-head p {
     display: none;
+  }
+  #reconciliationView .reconciliation-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+  #reconciliationView .reconciliation-actions .month-filter,
+  #reconciliationView .reconciliation-actions .month-filter input,
+  #reconciliationView .reconciliation-actions .month-filter select,
+  #reconciliationView .reconciliation-actions .primary-btn,
+  #reconciliationView .reconciliation-actions .secondary-btn {
+    width: 100%;
+    min-width: 0;
+  }
+  .reconciliation-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 10px;
+  }
+  .reconciliation-summary > div {
+    padding: 11px 12px;
+  }
+  .reconciliation-summary > div:nth-child(2) {
+    border-right: 0;
+  }
+  .reconciliation-summary > div:nth-child(-n+2) {
+    border-bottom: 1px solid var(--line);
+  }
+  .reconciliation-summary strong {
+    font-size: 17px;
+  }
+  .payment-source-strip {
+    grid-auto-columns: minmax(235px, 82vw);
+    margin: 0 -12px 10px;
+    padding: 0 12px 4px;
+  }
+  .reconciliation-tabs {
+    width: calc(100% + 24px);
+    margin: 0 -12px 10px;
+    padding: 4px 12px;
+    border-radius: 0;
+  }
+  .reconciliation-tabs button {
+    flex: 0 0 auto;
+  }
+  .reconciliation-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 12px;
+  }
+  .reconciliation-row-main,
+  .reconciliation-link,
+  .reconciliation-row-actions {
+    grid-column: 1 / -1;
+  }
+  .reconciliation-amount {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    text-align: left;
+  }
+  .reconciliation-row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .reconciliation-row-actions .compact-btn {
+    flex: 1 1 110px;
+  }
+  .reconciliation-empty {
+    min-height: 150px;
+  }
+  #paymentSourceDialog {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+  }
+  #paymentSourceForm {
+    height: 100dvh;
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+  #paymentSourceForm .form-grid {
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .reconciliation-match-transaction {
+    grid-template-columns: 1fr auto;
+    margin: 14px 14px 12px;
+  }
+  .reconciliation-match-transaction strong {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  #reconciliationMatchForm > label,
+  #reconciliationMatchForm > .help-text {
+    margin-right: 14px;
+    margin-left: 14px;
   }
   #dashboardView .table-wrap,
   #salesView .table-wrap,

@@ -21,6 +21,7 @@ Browser-based cloud billing software for purchase entry, sales entry, purchase o
 - PWA support
 - Supabase login and cloud workspace sync
 - Share a workspace with staff by email
+- Bank/card statement import and purchase/sale reconciliation
 - Supabase Edge Function scaffolds for OpenAI extraction and month-end email
 
 ## GitHub Pages
@@ -77,6 +78,14 @@ The `estimate-eway-distance` function uses only Google Routes API for road dista
 Run `supabase/migrations/20260713161000_google_routes_safeguards.sql` before deploying the distance function. It adds a shared unordered PIN-pair cache, duplicate-request locks, and hard Google call limits of 60,000 per year, 5,000 per month, and 150 per day in the `Asia/Kolkata` timezone. Failed Google requests count because Google may still treat them as billable events, and the same PIN pair is not retried automatically after a failed attempt. Cached, same-PIN, configured, and manually confirmed distances do not count.
 
 As a second protection layer, restrict the server key to Routes API in Google Cloud, configure the lowest practical Routes API quota, and add billing-budget alerts. The database hard limits remain authoritative because Google Cloud does not provide the app's calendar-year counter.
+
+## Bank Reconciliation
+
+Run `supabase/migrations/20260713180000_bank_reconciliation.sql` once, or rerun the complete `supabase-schema.sql`. This creates workspace-secured payment-source and bank-transaction tables and backfills any reconciliation data already stored in the workspace JSON.
+
+In Banking, add or edit the company bank accounts and cards, then upload a CSV, XLS or XLSX statement for one selected account. Statement files are parsed in the browser. Only normalized transaction rows are synced to Supabase; the original statement file is not uploaded.
+
+The app automatically matches a unique debit to a purchase and a unique credit to a sale when the date and amount are close. Ambiguous entries remain in Needs Review for manual confirmation. Books Missing shows bills without a statement match, Differences shows amount mismatches, and Due Payments estimates each configured credit card's statement-cycle debits less credits.
 
 ## Month-End Reports
 

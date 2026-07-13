@@ -11,6 +11,8 @@ const CLOUD_ROW_TABLES = {
   saleItems: "billing_sale_items",
   purchaseItems: "billing_purchase_items",
   purchaseOrderItems: "billing_purchase_order_items",
+  paymentSources: "billing_payment_sources",
+  bankTransactions: "billing_bank_transactions",
   auditLogs: "billing_audit_logs",
   backups: "billing_cloud_backups"
 };
@@ -396,6 +398,27 @@ function createDefaultProfiles() {
   return clone(OFFICIAL_GST_PROFILES);
 }
 
+function createDefaultPaymentSources() {
+  return OFFICIAL_GST_PROFILES.map(profile => {
+    const bank = profile.bankDetails || {};
+    const last4 = String(bank.accountNumber || "").replace(/\D/g, "").slice(-4);
+    return {
+      id: `bank-${profile.id}-primary`,
+      profileId: profile.id,
+      type: "Bank Account",
+      name: bank.bankName || "Primary Bank Account",
+      institution: bank.bankName || "",
+      last4,
+      accountName: bank.accountName || profile.businessName || profile.label || "",
+      openingBalance: 0,
+      statementDay: 0,
+      dueDay: 0,
+      active: true,
+      systemDefault: true
+    };
+  });
+}
+
 const defaultState = {
   settings: {
     currency: "Rs.",
@@ -418,7 +441,9 @@ const defaultState = {
   ],
   sales: [],
   purchases: [],
-  purchaseOrders: []
+  purchaseOrders: [],
+  paymentSources: createDefaultPaymentSources(),
+  bankTransactions: []
 };
 
 let state = loadState();
@@ -459,6 +484,11 @@ let currentInvoiceShareContext = null;
 let partyAliasDraft = [];
 let ewayDistanceEstimateTimer = null;
 let ewayDistanceEstimateKey = "";
+let activeReconciliationTab = "review";
+let reconciliationMonth = "";
+let reconciliationSourceFilterId = "";
+let editingPaymentSourceId = null;
+let reconciliationMatchTransactionId = null;
 
 const COMPANY_PAGE_TRANSITION_MS = 460;
 
@@ -544,6 +574,12 @@ function normalizeState(value) {
   value.sales = Array.isArray(value.sales) ? value.sales : [];
   value.purchases = Array.isArray(value.purchases) ? value.purchases : [];
   value.purchaseOrders = Array.isArray(value.purchaseOrders) ? value.purchaseOrders : [];
+  value.paymentSources = Array.isArray(value.paymentSources)
+    ? value.paymentSources.map(normalizePaymentSourceForState)
+    : createDefaultPaymentSources().map(normalizePaymentSourceForState);
+  value.bankTransactions = Array.isArray(value.bankTransactions)
+    ? value.bankTransactions.map(normalizeBankTransactionForState)
+    : [];
   [...value.sales, ...value.purchases, ...value.purchaseOrders].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
@@ -587,6 +623,8 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
     changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.purchaseOrders, local.purchaseOrders, entryMergeKey) || changed;
+    changed = mergeByIdentity(merged.paymentSources, local.paymentSources, paymentSourceMergeKey) || changed;
+    changed = mergeByIdentity(merged.bankTransactions, local.bankTransactions, bankTransactionMergeKey) || changed;
     mergeProfileCounters(merged.settings.profiles, local.settings.profiles);
   });
   return { state: normalizeState(merged), changed };
@@ -656,6 +694,27 @@ function entryMergeKey(entry = {}) {
     entry.partyId || "",
     entry.date || "",
     round2(entry.total)
+  ].join("|");
+}
+
+function paymentSourceMergeKey(source = {}) {
+  return source.id || [
+    source.profileId || "",
+    normalizeMergeText(source.institution),
+    String(source.last4 || ""),
+    normalizeMergeText(source.name)
+  ].join("|");
+}
+
+function bankTransactionMergeKey(transaction = {}) {
+  return transaction.id || transaction.fingerprint || [
+    transaction.profileId || "",
+    transaction.paymentSourceId || "",
+    transaction.date || "",
+    round2(transaction.debit),
+    round2(transaction.credit),
+    normalizeMergeText(transaction.reference),
+    normalizeMergeText(transaction.description)
   ].join("|");
 }
 
@@ -861,6 +920,10 @@ function initialsAlias(value) {
 
 function normalizeEntryForState(entry, kind, parties = [], items = []) {
   normalizeCloudEntityMeta(entry);
+  entry.paymentSourceId = String(entry.paymentSourceId || "").trim();
+  entry.paymentDate = /^\d{4}-\d{2}-\d{2}$/.test(String(entry.paymentDate || "")) ? entry.paymentDate : "";
+  entry.paymentReference = String(entry.paymentReference || "").trim();
+  entry.reconciledTransactionId = String(entry.reconciledTransactionId || "").trim();
   entry.lines = Array.isArray(entry.lines) ? entry.lines : [];
   const calculated = basicTotals(entry.lines);
   entry.taxable = num(entry.taxable) || calculated.taxable;
@@ -886,6 +949,56 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
     entry.ewayDetails = normalizePurchaseEwayDetails(entry.ewayDetails || {});
     if (entry.roundOff) entry.total = round2(entry.taxable + entry.gst + entry.roundOff);
   }
+}
+
+function normalizePaymentSourceForState(source = {}) {
+  const normalized = {
+    id: String(source.id || uid()),
+    profileId: String(source.profileId || "gst-1"),
+    type: ["Bank Account", "Credit Card", "UPI", "Cash"].includes(source.type) ? source.type : "Bank Account",
+    name: String(source.name || source.institution || "Payment Source").trim(),
+    institution: String(source.institution || "").trim(),
+    last4: String(source.last4 || "").replace(/\D/g, "").slice(-4),
+    accountName: String(source.accountName || "").trim(),
+    openingBalance: round2(source.openingBalance),
+    statementDay: Math.min(31, Math.max(0, Math.round(num(source.statementDay)))),
+    dueDay: Math.min(31, Math.max(0, Math.round(num(source.dueDay)))),
+    active: source.active !== false,
+    systemDefault: Boolean(source.systemDefault)
+  };
+  normalizeCloudEntityMeta(normalized, source);
+  return normalized;
+}
+
+function normalizeBankTransactionForState(transaction = {}) {
+  const status = ["unmatched", "suggested", "matched", "difference", "ignored"].includes(transaction.status)
+    ? transaction.status
+    : "unmatched";
+  const normalized = {
+    id: String(transaction.id || uid()),
+    profileId: String(transaction.profileId || "gst-1"),
+    paymentSourceId: String(transaction.paymentSourceId || ""),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(String(transaction.date || "")) ? transaction.date : "",
+    description: String(transaction.description || "").trim(),
+    reference: String(transaction.reference || "").trim(),
+    debit: Math.max(0, round2(transaction.debit)),
+    credit: Math.max(0, round2(transaction.credit)),
+    balance: round2(transaction.balance),
+    status,
+    matchEntryType: ["sale", "purchase"].includes(transaction.matchEntryType) ? transaction.matchEntryType : "",
+    matchEntryId: String(transaction.matchEntryId || ""),
+    suggestedEntryType: ["sale", "purchase"].includes(transaction.suggestedEntryType) ? transaction.suggestedEntryType : "",
+    suggestedEntryId: String(transaction.suggestedEntryId || ""),
+    matchedAmount: Math.max(0, round2(transaction.matchedAmount)),
+    difference: round2(transaction.difference),
+    differenceAccepted: Boolean(transaction.differenceAccepted),
+    fingerprint: String(transaction.fingerprint || ""),
+    importBatchId: String(transaction.importBatchId || ""),
+    sourceFile: String(transaction.sourceFile || "").trim(),
+    importedAt: String(transaction.importedAt || "")
+  };
+  normalizeCloudEntityMeta(normalized, transaction);
+  return normalized;
 }
 
 function normalizeInternalTransfer(value = null) {
@@ -1693,6 +1806,23 @@ function bindEvents() {
     renderEntries("purchase");
   });
   bindIf("#newPoBtn", "click", () => openEntry("po"));
+  bindIf("#newPaymentSourceBtn", "click", () => openPaymentSource());
+  bindIf("#paymentSourceForm", "submit", savePaymentSource);
+  bindIf("#bankStatementInput", "change", handleBankStatementUpload);
+  bindIf("#reconciliationMonth", "change", event => {
+    reconciliationMonth = event.target.value;
+    renderReconciliation();
+  });
+  bindIf("#reconciliationSourceFilter", "change", event => {
+    reconciliationSourceFilterId = event.target.value;
+    renderReconciliation();
+  });
+  $$('[data-reconciliation-tab]').forEach(button => button.addEventListener("click", () => {
+    activeReconciliationTab = button.dataset.reconciliationTab || "review";
+    renderReconciliation();
+  }));
+  bindIf("#reconciliationMatchForm", "submit", saveManualReconciliationMatch);
+  bindIf("#reconciliationBookEntrySelect", "change", updateReconciliationMatchDifference);
   bindIf("#poMonthFilter", "change", event => {
     entryMonthFilters.po = event.target.value;
     renderEntries("po");
@@ -1770,9 +1900,9 @@ function bindEvents() {
   $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
   $("#reportFrom").addEventListener("change", renderReport);
   $("#reportTo").addEventListener("change", renderReport);
-  $$(".segmented button").forEach(button => button.addEventListener("click", () => {
+  $$('[data-report]').forEach(button => button.addEventListener("click", () => {
     activeReport = button.dataset.report;
-    $$(".segmented button").forEach(item => item.classList.toggle("active", item === button));
+    $$('[data-report]').forEach(item => item.classList.toggle("active", item === button));
     renderReport();
   }));
   window.addEventListener("popstate", closeChatBillOnBack);
@@ -1797,6 +1927,7 @@ function showView(view) {
     purchaseOrders: "Purchase Orders",
     items: "Items",
     parties: "Party Master",
+    reconciliation: "Banking",
     reports: "Reports",
     settings: "Settings"
   }[view];
@@ -1813,6 +1944,7 @@ function renderAll() {
   renderEntries("po");
   renderItems();
   renderParties();
+  renderReconciliation();
   renderSettings();
   renderReport();
   renderCloudUi();
@@ -1889,6 +2021,8 @@ function selectCompany(profileId) {
     po: defaultEntryMonth("po", profileId)
   };
   selectedPurchaseIds.clear();
+  reconciliationMonth = defaultReconciliationMonth(profileId);
+  reconciliationSourceFilterId = "";
   saveState({ skipCloud: true });
   if (shouldSlide) {
     slideToCompanyWorkspace(profileId);
@@ -2219,7 +2353,7 @@ function bestCloudWorkspace(workspaces = []) {
 
 function cloudWorkspaceScore(workspace = {}) {
   const counts = cloudWorkspaceCounts(workspace);
-  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.purchaseOrders * 50) + (counts.parties * 10) + counts.items;
+  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.purchaseOrders * 50) + (counts.parties * 10) + counts.items + counts.bankTransactions;
 }
 
 function cloudWorkspaceCounts(workspace = {}) {
@@ -2228,6 +2362,7 @@ function cloudWorkspaceCounts(workspace = {}) {
     sales: Array.isArray(data.sales) ? data.sales.length : 0,
     purchases: Array.isArray(data.purchases) ? data.purchases.length : 0,
     purchaseOrders: Array.isArray(data.purchaseOrders) ? data.purchaseOrders.length : 0,
+    bankTransactions: Array.isArray(data.bankTransactions) ? data.bankTransactions.length : 0,
     parties: Array.isArray(data.parties) ? data.parties.length : 0,
     items: Array.isArray(data.items) ? data.items.length : 0
   };
@@ -2321,15 +2456,17 @@ async function enrichCloudWorkspaceWithRows(workspace = {}) {
 
 async function readNormalizedCloudState(workspaceId) {
   if (!cloudClient || !workspaceId) return null;
-  const [parties, items, sales, purchases, purchaseOrders] = await Promise.all([
+  const [parties, items, sales, purchases, purchaseOrders, paymentSources, bankTransactions] = await Promise.all([
     readCloudTableRows(CLOUD_ROW_TABLES.parties, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.items, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.sales, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.purchases, workspaceId),
-    readCloudTableRows(CLOUD_ROW_TABLES.purchaseOrders, workspaceId)
+    readCloudTableRows(CLOUD_ROW_TABLES.purchaseOrders, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.paymentSources, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.bankTransactions, workspaceId)
   ]);
   if ([parties, items, sales, purchases, purchaseOrders].some(result => result === null)) return null;
-  const hasRows = [parties, items, sales, purchases, purchaseOrders].some(rows => rows.length);
+  const hasRows = [parties, items, sales, purchases, purchaseOrders, paymentSources || [], bankTransactions || []].some(rows => rows.length);
   if (!hasRows) return null;
   return normalizeState({
     ...clone(defaultState),
@@ -2352,7 +2489,44 @@ async function readNormalizedCloudState(workspaceId) {
     })),
     sales: sales.map(row => cloudRowData(row, cloudEntryFallback(row, "sale"))),
     purchases: purchases.map(row => cloudRowData(row, cloudEntryFallback(row, "purchase"))),
-    purchaseOrders: purchaseOrders.map(row => cloudRowData(row, cloudEntryFallback(row, "po")))
+    purchaseOrders: purchaseOrders.map(row => cloudRowData(row, cloudEntryFallback(row, "po"))),
+    paymentSources: (paymentSources || []).map(row => cloudRowData(row, {
+      id: row.id,
+      profileId: row.profile_id,
+      name: row.name,
+      type: row.type,
+      institution: row.institution,
+      last4: row.last4,
+      accountName: row.account_name,
+      openingBalance: row.opening_balance,
+      statementDay: row.statement_day,
+      dueDay: row.due_day,
+      active: row.active,
+      systemDefault: row.system_default
+    })),
+    bankTransactions: (bankTransactions || []).map(row => cloudRowData(row, {
+      id: row.id,
+      profileId: row.profile_id,
+      paymentSourceId: row.payment_source_id,
+      date: row.transaction_date,
+      description: row.description,
+      reference: row.reference,
+      debit: row.debit,
+      credit: row.credit,
+      balance: row.balance,
+      status: row.status,
+      matchEntryType: row.match_entry_type,
+      matchEntryId: row.match_entry_id,
+      suggestedEntryType: row.suggested_entry_type,
+      suggestedEntryId: row.suggested_entry_id,
+      matchedAmount: row.matched_amount,
+      difference: row.difference,
+      differenceAccepted: row.difference_accepted,
+      fingerprint: row.fingerprint,
+      importBatchId: row.import_batch_id,
+      sourceFile: row.source_file,
+      importedAt: row.imported_at
+    }))
   });
 }
 
@@ -2534,6 +2708,10 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
     syncCloudEntityTable(CLOUD_ROW_TABLES.purchaseOrders, "id", nextState.purchaseOrders, previousState.purchaseOrders, row => cloudEntryRow(workspaceId, row, "po", syncedAt, userId))
   ]);
   await Promise.all([
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.paymentSources, "id", nextState.paymentSources, previousState.paymentSources, row => cloudPaymentSourceRow(workspaceId, row, syncedAt, userId)),
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.bankTransactions, "id", nextState.bankTransactions, previousState.bankTransactions, row => cloudBankTransactionRow(workspaceId, row, syncedAt, userId))
+  ]);
+  await Promise.all([
     replaceCloudLineRows(CLOUD_ROW_TABLES.saleItems, nextState.sales.flatMap(entry => cloudLineRows(workspaceId, entry, "sale", syncedAt, userId))),
     replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseItems, nextState.purchases.flatMap(entry => cloudLineRows(workspaceId, entry, "purchase", syncedAt, userId))),
     replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseOrderItems, nextState.purchaseOrders.flatMap(entry => cloudLineRows(workspaceId, entry, "po", syncedAt, userId)))
@@ -2627,17 +2805,29 @@ async function syncCloudEntityTable(table, idColumn, currentRows = [], previousR
   const currentIds = new Set(currentRows.map(row => row.id).filter(Boolean));
   const removedIds = previousRows.map(row => row.id).filter(id => id && !currentIds.has(id));
   const mappedRows = currentRows.map(mapRow);
-  if (mappedRows.length) {
-    const { error } = await cloudClient.from(table).upsert(mappedRows, { onConflict: `workspace_id,${idColumn}` });
+  for (let index = 0; index < mappedRows.length; index += 250) {
+    const batch = mappedRows.slice(index, index + 250);
+    const { error } = await cloudClient.from(table).upsert(batch, { onConflict: `workspace_id,${idColumn}` });
     if (error) throw error;
   }
-  if (removedIds.length) {
+  for (let index = 0; index < removedIds.length; index += 250) {
+    const batch = removedIds.slice(index, index + 250);
     const { error } = await cloudClient
       .from(table)
       .delete()
       .eq("workspace_id", workspaceId)
-      .in(idColumn, removedIds);
+      .in(idColumn, batch);
     if (error) throw error;
+  }
+}
+
+async function syncOptionalCloudEntityTable(table, idColumn, currentRows = [], previousRows = [], mapRow) {
+  try {
+    await syncCloudEntityTable(table, idColumn, currentRows, previousRows, mapRow);
+    return true;
+  } catch (error) {
+    if (isMissingCloudTableError(error)) return false;
+    throw error;
   }
 }
 
@@ -2691,6 +2881,55 @@ function cloudItemRow(workspaceId, item, syncedAt, userId) {
     purchase_rate: num(item.purchaseRate),
     data: clone(item),
     ...cloudSyncColumns(item, syncedAt, userId)
+  };
+}
+
+function cloudPaymentSourceRow(workspaceId, source, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    id: source.id,
+    profile_id: source.profileId || "",
+    name: source.name || "",
+    type: source.type || "Bank Account",
+    institution: source.institution || "",
+    last4: source.last4 || "",
+    account_name: source.accountName || "",
+    opening_balance: round2(source.openingBalance),
+    statement_day: Math.round(num(source.statementDay)),
+    due_day: Math.round(num(source.dueDay)),
+    active: source.active !== false,
+    system_default: Boolean(source.systemDefault),
+    data: clone(source),
+    ...cloudSyncColumns(source, syncedAt, userId)
+  };
+}
+
+function cloudBankTransactionRow(workspaceId, transaction, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    id: transaction.id,
+    profile_id: transaction.profileId || "",
+    payment_source_id: transaction.paymentSourceId || "",
+    transaction_date: cloudDate(transaction.date),
+    description: transaction.description || "",
+    reference: transaction.reference || "",
+    debit: round2(transaction.debit),
+    credit: round2(transaction.credit),
+    balance: round2(transaction.balance),
+    status: transaction.status || "unmatched",
+    match_entry_type: transaction.matchEntryType || "",
+    match_entry_id: transaction.matchEntryId || "",
+    suggested_entry_type: transaction.suggestedEntryType || "",
+    suggested_entry_id: transaction.suggestedEntryId || "",
+    matched_amount: round2(transaction.matchedAmount),
+    difference: round2(transaction.difference),
+    difference_accepted: Boolean(transaction.differenceAccepted),
+    fingerprint: transaction.fingerprint || "",
+    import_batch_id: transaction.importBatchId || "",
+    source_file: transaction.sourceFile || "",
+    imported_at: cloudTimestamp(transaction.importedAt) || null,
+    data: clone(transaction),
+    ...cloudSyncColumns(transaction, syncedAt, userId)
   };
 }
 
@@ -2785,7 +3024,7 @@ function cloudTimestamp(value) {
 
 function markStateSyncStatus(sourceState, status, syncedAt = "") {
   const nextState = normalizeState(clone(sourceState || defaultState));
-  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.purchases, ...nextState.purchaseOrders]
+  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.purchases, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions]
     .forEach(entity => markEntitySyncStatus(entity, status, syncedAt));
   return nextState;
 }
@@ -2811,7 +3050,9 @@ function buildCloudAuditRows(previousState, nextState, syncedAt, userId) {
     ["item", previousState.items, nextState.items],
     ["sale", previousState.sales, nextState.sales],
     ["purchase", previousState.purchases, nextState.purchases],
-    ["purchase_order", previousState.purchaseOrders, nextState.purchaseOrders]
+    ["purchase_order", previousState.purchaseOrders, nextState.purchaseOrders],
+    ["payment_source", previousState.paymentSources, nextState.paymentSources],
+    ["bank_transaction", previousState.bankTransactions, nextState.bankTransactions]
   ];
   return groups.flatMap(([entityType, beforeRows, afterRows]) => buildCloudAuditRowsForGroup(entityType, beforeRows, afterRows, syncedAt, userId));
 }
@@ -2855,9 +3096,10 @@ function cloudAuditComparable(entity = {}) {
 }
 
 async function insertCloudAuditRows(rows = []) {
-  if (!rows.length) return;
-  const { error } = await cloudClient.from(CLOUD_ROW_TABLES.auditLogs).insert(rows);
-  if (error) throw error;
+  for (let index = 0; index < rows.length; index += 250) {
+    const { error } = await cloudClient.from(CLOUD_ROW_TABLES.auditLogs).insert(rows.slice(index, index + 250));
+    if (error) throw error;
+  }
 }
 
 async function saveDailyCloudBackup(nextState, syncedAt, userId) {
@@ -2906,6 +3148,814 @@ function syncStatusBadge(entity = {}) {
 
 function renderDashboard() {
   if (window.lucide) lucide.createIcons();
+}
+
+function defaultReconciliationMonth() {
+  return today().slice(0, 7);
+}
+
+function reconciliationMonthMatches(date, month = reconciliationMonth || defaultReconciliationMonth()) {
+  return String(date || "").slice(0, 7) === month;
+}
+
+function reconciliationTransactionAmount(transaction = {}) {
+  return round2(num(transaction.debit) || num(transaction.credit));
+}
+
+function reconciliationTransactionDirection(transaction = {}) {
+  return num(transaction.debit) > 0 ? "debit" : num(transaction.credit) > 0 ? "credit" : "";
+}
+
+function reconciliationBookEntries(profileId = activeProfileId()) {
+  const purchases = state.purchases
+    .filter(entry => entry.profileId === profileId && !isCancelledEntry(entry))
+    .map(entry => reconciliationBookEntry(entry, "purchase"));
+  const sales = state.sales
+    .filter(entry => entry.profileId === profileId && !isCancelledEntry(entry))
+    .map(entry => reconciliationBookEntry(entry, "sale"));
+  return [...purchases, ...sales];
+}
+
+function reconciliationBookEntry(entry, type) {
+  return {
+    id: entry.id,
+    key: `${type}:${entry.id}`,
+    type,
+    direction: type === "purchase" ? "debit" : "credit",
+    date: entry.paymentDate || entry.date || "",
+    invoiceDate: entry.date || "",
+    number: entry.number || "",
+    party: partyName(entry.partyId),
+    amount: round2(entry.total),
+    paymentSourceId: entry.paymentSourceId || "",
+    paymentReference: entry.paymentReference || "",
+    entry
+  };
+}
+
+function reconciliationBookEntryByKey(type, id) {
+  if (!type || !id) return null;
+  return reconciliationBookEntries(activeProfileId()).find(entry => entry.type === type && entry.id === id) || null;
+}
+
+function reconciliationMatchedBookKeys(excludeTransactionId = "") {
+  return new Set(state.bankTransactions
+    .filter(transaction => transaction.id !== excludeTransactionId && ["matched", "difference"].includes(transaction.status))
+    .filter(transaction => transaction.matchEntryType && transaction.matchEntryId)
+    .map(transaction => `${transaction.matchEntryType}:${transaction.matchEntryId}`));
+}
+
+function reconciliationDateGap(first, second) {
+  const a = new Date(`${first || "1970-01-01"}T00:00:00`);
+  const b = new Date(`${second || "1970-01-01"}T00:00:00`);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 9999;
+  return Math.abs(Math.round((a.getTime() - b.getTime()) / 86400000));
+}
+
+function reconciliationComparableText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function reconciliationCandidateScore(transaction, entry) {
+  const transactionText = reconciliationComparableText(`${transaction.reference} ${transaction.description}`);
+  const invoiceText = reconciliationComparableText(entry.number);
+  const partyText = reconciliationComparableText(entry.party);
+  let score = reconciliationDateGap(transaction.date, entry.date) * 10;
+  score += Math.min(999, Math.abs(reconciliationTransactionAmount(transaction) - entry.amount));
+  if (invoiceText.length >= 3 && transactionText.includes(invoiceText)) score -= 80;
+  if (partyText.length >= 4 && transactionText.includes(partyText)) score -= 30;
+  return score;
+}
+
+function reconciliationCandidates(transaction, options = {}) {
+  const direction = reconciliationTransactionDirection(transaction);
+  const matchedKeys = reconciliationMatchedBookKeys(transaction.id);
+  const maximumDays = options.maximumDays ?? 7;
+  return reconciliationBookEntries(transaction.profileId)
+    .filter(entry => entry.direction === direction)
+    .filter(entry => !matchedKeys.has(entry.key))
+    .filter(entry => !entry.paymentSourceId || entry.paymentSourceId === transaction.paymentSourceId)
+    .filter(entry => reconciliationDateGap(transaction.date, entry.date) <= maximumDays)
+    .sort((a, b) => reconciliationCandidateScore(transaction, a) - reconciliationCandidateScore(transaction, b));
+}
+
+function markReconciliationEntityChanged(entity) {
+  const now = new Date().toISOString();
+  entity.syncStatus = newLocalSyncStatus();
+  entity.createdAt = entity.createdAt || now;
+  entity.updatedAt = now;
+  entity.createdBy = entity.createdBy || currentCloudUserId() || "";
+}
+
+function applyReconciliationMatch(transaction, bookEntry) {
+  if (!transaction || !bookEntry) return false;
+  const previousEntry = reconciliationBookEntryByKey(transaction.matchEntryType, transaction.matchEntryId)?.entry;
+  if (previousEntry && previousEntry.id !== bookEntry.id && previousEntry.reconciledTransactionId === transaction.id) {
+    previousEntry.reconciledTransactionId = "";
+    markReconciliationEntityChanged(previousEntry);
+  }
+  const amount = reconciliationTransactionAmount(transaction);
+  const difference = round2(amount - bookEntry.amount);
+  transaction.matchEntryType = bookEntry.type;
+  transaction.matchEntryId = bookEntry.id;
+  transaction.suggestedEntryType = "";
+  transaction.suggestedEntryId = "";
+  transaction.matchedAmount = bookEntry.amount;
+  transaction.difference = difference;
+  transaction.differenceAccepted = false;
+  transaction.status = Math.abs(difference) <= 1 ? "matched" : "difference";
+  markReconciliationEntityChanged(transaction);
+
+  const entry = bookEntry.entry;
+  if (!entry.paymentSourceId) entry.paymentSourceId = transaction.paymentSourceId;
+  if (!entry.paymentDate) entry.paymentDate = transaction.date;
+  if (!entry.paymentReference) entry.paymentReference = transaction.reference;
+  entry.reconciledTransactionId = transaction.id;
+  markReconciliationEntityChanged(entry);
+  return true;
+}
+
+function suggestReconciliationMatch(transaction, bookEntry) {
+  transaction.status = "suggested";
+  transaction.suggestedEntryType = bookEntry?.type || "";
+  transaction.suggestedEntryId = bookEntry?.id || "";
+  markReconciliationEntityChanged(transaction);
+}
+
+function autoReconcileTransactions(transactionIds = []) {
+  const targetIds = new Set(transactionIds);
+  const transactions = state.bankTransactions.filter(transaction => (
+    (!targetIds.size || targetIds.has(transaction.id))
+    && transaction.status === "unmatched"
+  ));
+  let matched = 0;
+  let suggested = 0;
+  transactions.forEach(transaction => {
+    const amount = reconciliationTransactionAmount(transaction);
+    const candidates = reconciliationCandidates(transaction);
+    const exact = candidates.filter(entry => Math.abs(entry.amount - amount) <= 1);
+    if (exact.length === 1) {
+      applyReconciliationMatch(transaction, exact[0]);
+      matched += 1;
+      return;
+    }
+    if (exact.length > 1) {
+      const transactionText = reconciliationComparableText(`${transaction.reference} ${transaction.description}`);
+      const referenced = exact.filter(entry => {
+        const invoiceText = reconciliationComparableText(entry.number);
+        return invoiceText.length >= 3 && transactionText.includes(invoiceText);
+      });
+      if (referenced.length === 1) {
+        applyReconciliationMatch(transaction, referenced[0]);
+        matched += 1;
+      } else {
+        suggestReconciliationMatch(transaction, exact[0]);
+        suggested += 1;
+      }
+      return;
+    }
+    const near = candidates.filter(entry => {
+      const tolerance = Math.max(100, entry.amount * 0.01);
+      return Math.abs(entry.amount - amount) <= tolerance;
+    });
+    if (near.length) {
+      suggestReconciliationMatch(transaction, near[0]);
+      suggested += 1;
+    }
+  });
+  return { matched, suggested };
+}
+
+function reconciliationSourceTransactions(profileId, sourceId, month) {
+  return state.bankTransactions.filter(transaction => (
+    transaction.profileId === profileId
+    && reconciliationMonthMatches(transaction.date, month)
+    && (sourceId === "all" || transaction.paymentSourceId === sourceId)
+  ));
+}
+
+function reconciliationBooksMissing(profileId, sourceId, month) {
+  const matchedKeys = reconciliationMatchedBookKeys();
+  return reconciliationBookEntries(profileId)
+    .filter(entry => reconciliationMonthMatches(entry.date, month))
+    .filter(entry => sourceId === "all" || !entry.paymentSourceId || entry.paymentSourceId === sourceId)
+    .filter(entry => !matchedKeys.has(entry.key));
+}
+
+function reconciliationDuePayments(profileId, month) {
+  return state.paymentSources
+    .filter(source => source.profileId === profileId && source.active && source.type === "Credit Card")
+    .map(source => {
+      const cycle = reconciliationStatementCycle(month, source.statementDay);
+      const transactions = state.bankTransactions.filter(transaction => (
+        transaction.profileId === profileId
+        && transaction.paymentSourceId === source.id
+        && transaction.date >= cycle.start
+        && transaction.date <= cycle.end
+      ));
+      const debits = round2(transactions.reduce((sum, transaction) => sum + num(transaction.debit), 0));
+      const credits = round2(transactions.reduce((sum, transaction) => sum + num(transaction.credit), 0));
+      return {
+        source,
+        cycle,
+        transactionCount: transactions.length,
+        debits,
+        credits,
+        amount: Math.max(0, round2(debits - credits)),
+        dueDate: reconciliationDueDate(month, source.dueDay)
+      };
+    });
+}
+
+function reconciliationStatementCycle(month, statementDay) {
+  const [year, monthNumber] = String(month || "").split("-").map(Number);
+  if (!year || !monthNumber) return { start: "", end: "" };
+  const monthIndex = monthNumber - 1;
+  const selectedMonthDays = new Date(year, monthNumber, 0).getDate();
+  const requestedCloseDay = num(statementDay) ? Math.min(31, Math.max(1, Math.round(num(statementDay)))) : 0;
+  const closeDay = requestedCloseDay ? Math.min(selectedMonthDays, requestedCloseDay) : selectedMonthDays;
+  const end = new Date(year, monthIndex, closeDay);
+  if (!num(statementDay)) return { start: dateToIso(new Date(year, monthIndex, 1)), end: dateToIso(end) };
+  const previousMonthDays = new Date(year, monthIndex, 0).getDate();
+  const previousClose = new Date(year, monthIndex - 1, Math.min(previousMonthDays, requestedCloseDay));
+  const start = new Date(previousClose);
+  start.setDate(start.getDate() + 1);
+  return { start: dateToIso(start), end: dateToIso(end) };
+}
+
+function reconciliationDueDate(month, dueDay) {
+  const [year, monthNumber] = String(month || "").split("-").map(Number);
+  if (!year || !monthNumber || !num(dueDay)) return "";
+  const lastDayOfNextMonth = new Date(year, monthNumber + 1, 0).getDate();
+  const day = Math.min(lastDayOfNextMonth, Math.max(1, Math.round(num(dueDay))));
+  return dateToIso(new Date(year, monthNumber, day));
+}
+
+function renderReconciliation() {
+  const list = $("#reconciliationList");
+  const monthControl = $("#reconciliationMonth");
+  const sourceControl = $("#reconciliationSourceFilter");
+  if (!list || !monthControl || !sourceControl) return;
+
+  const profileId = activeProfileId();
+  reconciliationMonth = reconciliationMonth || defaultReconciliationMonth(profileId);
+  monthControl.value = reconciliationMonth;
+  const sources = state.paymentSources.filter(source => source.profileId === profileId);
+  const sourceIds = new Set(sources.map(source => source.id));
+  if (!reconciliationSourceFilterId || (reconciliationSourceFilterId !== "all" && !sourceIds.has(reconciliationSourceFilterId))) {
+    reconciliationSourceFilterId = sources.find(source => source.active)?.id || sources[0]?.id || "all";
+  }
+  sourceControl.innerHTML = `<option value="all">All accounts</option>${sources.map(source => `
+    <option value="${escapeHtml(source.id)}">${escapeHtml(paymentSourceLabel(source))}${source.active ? "" : " (Inactive)"}</option>
+  `).join("")}`;
+  sourceControl.value = reconciliationSourceFilterId;
+  const statementInput = $("#bankStatementInput");
+  if (statementInput) statementInput.disabled = !sources.length;
+
+  const transactions = reconciliationSourceTransactions(profileId, reconciliationSourceFilterId, reconciliationMonth);
+  const review = transactions.filter(transaction => ["unmatched", "suggested"].includes(transaction.status));
+  const matched = transactions.filter(transaction => transaction.status === "matched");
+  const differences = transactions.filter(transaction => transaction.status === "difference");
+  const ignored = transactions.filter(transaction => transaction.status === "ignored");
+  const booksMissing = reconciliationBooksMissing(profileId, reconciliationSourceFilterId, reconciliationMonth);
+  const duePayments = reconciliationDuePayments(profileId, reconciliationMonth);
+  const differenceAmount = differences.reduce((sum, transaction) => sum + Math.abs(num(transaction.difference)), 0);
+
+  $("#reconciliationSummary").innerHTML = [
+    ["Statement Entries", transactions.length],
+    ["Matched", matched.length],
+    ["Needs Review", review.length + differences.length],
+    ["Difference", money(differenceAmount)]
+  ].map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("");
+  $("#paymentSourceStrip").innerHTML = renderPaymentSourceStrip(sources, transactions);
+  $("#reconReviewCount").textContent = review.length;
+  $("#reconMatchedCount").textContent = matched.length;
+  $("#reconDifferenceCount").textContent = differences.length;
+  $("#reconBooksCount").textContent = booksMissing.length;
+  $("#reconDueCount").textContent = duePayments.filter(payment => payment.amount > 1).length;
+  $("#reconIgnoredCount").textContent = ignored.length;
+  $$('[data-reconciliation-tab]').forEach(button => button.classList.toggle("active", button.dataset.reconciliationTab === activeReconciliationTab));
+
+  if (activeReconciliationTab === "books") {
+    list.innerHTML = booksMissing.map(renderReconciliationBookCard).join("") || reconciliationEmptyState("All book entries are matched for this month");
+  } else if (activeReconciliationTab === "due") {
+    list.innerHTML = duePayments.map(renderReconciliationDueCard).join("") || reconciliationEmptyState("No credit-card payment sources are configured");
+  } else {
+    const selectedTransactions = activeReconciliationTab === "matched"
+      ? matched
+      : activeReconciliationTab === "differences"
+        ? differences
+        : activeReconciliationTab === "ignored"
+          ? ignored
+          : review;
+    list.innerHTML = selectedTransactions
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .map(renderReconciliationTransactionCard)
+      .join("") || reconciliationEmptyState(reconciliationEmptyLabel(activeReconciliationTab));
+  }
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderPaymentSourceStrip(sources = [], visibleTransactions = []) {
+  if (!sources.length) return reconciliationEmptyState("Add a bank account or card to begin");
+  return sources.map(source => {
+    const count = state.bankTransactions.filter(transaction => transaction.paymentSourceId === source.id && reconciliationMonthMatches(transaction.date)).length;
+    const selected = reconciliationSourceFilterId === source.id;
+    return `<div class="payment-source-card ${selected ? "selected" : ""} ${source.active ? "" : "inactive"}">
+      <button class="payment-source-main" type="button" onclick="selectReconciliationSource('${escapeHtml(source.id)}')">
+        <span class="payment-source-icon"><i data-lucide="${source.type === "Credit Card" ? "credit-card" : source.type === "Cash" ? "banknote" : "landmark"}"></i></span>
+        <span><strong>${escapeHtml(paymentSourceLabel(source))}</strong><small>${escapeHtml(source.type)} · ${count} entries</small></span>
+      </button>
+      <button class="mini-btn" type="button" title="Edit account" onclick="openPaymentSource('${escapeHtml(source.id)}')"><i data-lucide="pencil"></i></button>
+    </div>`;
+  }).join("");
+}
+
+function reconciliationStatusMarkup(transaction) {
+  if (transaction.status === "matched") return `<span class="badge ok">Matched</span>`;
+  if (transaction.status === "difference") return `<span class="badge warn">Difference</span>`;
+  if (transaction.status === "suggested") return `<span class="badge warn">Suggested</span>`;
+  if (transaction.status === "ignored") return `<span class="badge">Ignored</span>`;
+  return `<span class="badge danger">Unmatched</span>`;
+}
+
+function renderReconciliationTransactionCard(transaction) {
+  const direction = reconciliationTransactionDirection(transaction);
+  const amount = reconciliationTransactionAmount(transaction);
+  const source = paymentSourceById(transaction.paymentSourceId) || {};
+  const matchedEntry = reconciliationBookEntryByKey(transaction.matchEntryType, transaction.matchEntryId);
+  const suggestedEntry = reconciliationBookEntryByKey(transaction.suggestedEntryType, transaction.suggestedEntryId);
+  const linkedEntry = matchedEntry || suggestedEntry;
+  const matchText = linkedEntry
+    ? `${linkedEntry.type === "purchase" ? "Purchase" : "Sale"} ${linkedEntry.number} · ${linkedEntry.party} · ${money(linkedEntry.amount)}`
+    : "No book entry linked";
+  let actions = "";
+  if (["unmatched", "suggested"].includes(transaction.status)) {
+    actions = `${suggestedEntry ? `<button class="primary-btn compact-btn" type="button" onclick="acceptReconciliationSuggestion('${escapeHtml(transaction.id)}')"><i data-lucide="check"></i><span>Accept</span></button>` : ""}
+      <button class="secondary-btn compact-btn" type="button" onclick="openReconciliationMatch('${escapeHtml(transaction.id)}')"><i data-lucide="link"></i><span>Match</span></button>
+      <button class="icon-btn" type="button" title="Ignore" onclick="ignoreReconciliationTransaction('${escapeHtml(transaction.id)}')"><i data-lucide="eye-off"></i></button>`;
+  } else if (transaction.status === "difference") {
+    actions = `<button class="primary-btn compact-btn" type="button" onclick="acceptReconciliationDifference('${escapeHtml(transaction.id)}')"><i data-lucide="check"></i><span>Accept</span></button>
+      <button class="secondary-btn compact-btn" type="button" onclick="openReconciliationMatch('${escapeHtml(transaction.id)}')"><i data-lucide="link"></i><span>Change</span></button>
+      <button class="icon-btn" type="button" title="Unmatch" onclick="unmatchReconciliationTransaction('${escapeHtml(transaction.id)}')"><i data-lucide="unlink"></i></button>`;
+  } else if (transaction.status === "matched") {
+    actions = `<button class="secondary-btn compact-btn" type="button" onclick="unmatchReconciliationTransaction('${escapeHtml(transaction.id)}')"><i data-lucide="unlink"></i><span>Unmatch</span></button>`;
+  } else {
+    actions = `<button class="secondary-btn compact-btn" type="button" onclick="restoreReconciliationTransaction('${escapeHtml(transaction.id)}')"><i data-lucide="rotate-ccw"></i><span>Restore</span></button>`;
+  }
+  return `<article class="reconciliation-row">
+    <div class="reconciliation-row-main">
+      <time>${escapeHtml(formatInvoiceDate(transaction.date) || transaction.date || "-")}</time>
+      <strong>${escapeHtml(transaction.description || "Bank transaction")}</strong>
+      <small>${escapeHtml([transaction.reference, paymentSourceLabel(source)].filter(Boolean).join(" · ") || "-")}</small>
+    </div>
+    <div class="reconciliation-amount ${direction}"><span>${direction === "debit" ? "Debit" : "Credit"}</span><strong>${money(amount)}</strong></div>
+    <div class="reconciliation-link"><span>${reconciliationStatusMarkup(transaction)}</span><strong>${escapeHtml(matchText)}</strong>${transaction.status === "difference" ? `<small>Difference ${money(transaction.difference)}</small>` : ""}</div>
+    <div class="reconciliation-row-actions">${actions}</div>
+  </article>`;
+}
+
+function renderReconciliationBookCard(entry) {
+  const source = paymentSourceById(entry.paymentSourceId);
+  return `<article class="reconciliation-row book-missing-row">
+    <div class="reconciliation-row-main">
+      <time>${escapeHtml(formatInvoiceDate(entry.date) || entry.date || "-")}</time>
+      <strong>${escapeHtml(entry.type === "purchase" ? `Purchase ${entry.number}` : `Sale ${entry.number}`)}</strong>
+      <small>${escapeHtml(entry.party)}</small>
+    </div>
+    <div class="reconciliation-amount ${entry.direction}"><span>${entry.direction === "debit" ? "Expected Debit" : "Expected Credit"}</span><strong>${money(entry.amount)}</strong></div>
+    <div class="reconciliation-link"><span class="badge warn">Not in statement</span><strong>${escapeHtml(source ? paymentSourceLabel(source) : "Payment source not selected")}</strong></div>
+    <div class="reconciliation-row-actions"><button class="secondary-btn compact-btn" type="button" onclick="openEntry('${entry.type}', '${escapeHtml(entry.id)}')"><i data-lucide="pencil"></i><span>Edit Bill</span></button></div>
+  </article>`;
+}
+
+function renderReconciliationDueCard(payment) {
+  const { source } = payment;
+  const overdue = payment.amount > 1 && payment.dueDate && payment.dueDate < today();
+  const status = payment.amount <= 1 ? "No balance due" : overdue ? "Overdue" : "Payment due";
+  const statusClass = payment.amount <= 1 ? "ok" : overdue ? "danger" : "warn";
+  const statementMeta = [
+    payment.transactionCount ? `${payment.transactionCount} statement entries` : "No statement entries",
+    payment.cycle.start && payment.cycle.end
+      ? `${formatInvoiceDate(payment.cycle.start)} to ${formatInvoiceDate(payment.cycle.end)}`
+      : "Statement cycle not set"
+  ].join(" · ");
+  return `<article class="reconciliation-row due-payment-row">
+    <div class="reconciliation-row-main">
+      <time>${escapeHtml(payment.dueDate ? `Due ${formatInvoiceDate(payment.dueDate)}` : "Due day not set")}</time>
+      <strong>${escapeHtml(paymentSourceLabel(source))}</strong>
+      <small>${escapeHtml(statementMeta)}</small>
+    </div>
+    <div class="reconciliation-amount debit"><span>Estimated Due</span><strong>${money(payment.amount)}</strong></div>
+    <div class="reconciliation-link"><span class="badge ${statusClass}">${escapeHtml(status)}</span><strong>Debits ${escapeHtml(money(payment.debits))} · Credits ${escapeHtml(money(payment.credits))}</strong></div>
+    <div class="reconciliation-row-actions"><button class="secondary-btn compact-btn" type="button" onclick="openPaymentSource('${escapeHtml(source.id)}')"><i data-lucide="pencil"></i><span>Edit Card</span></button></div>
+  </article>`;
+}
+
+function reconciliationEmptyState(label) {
+  return `<div class="reconciliation-empty"><i data-lucide="circle-check"></i><strong>${escapeHtml(label)}</strong></div>`;
+}
+
+function reconciliationEmptyLabel(tab) {
+  if (tab === "matched") return "No matched entries for this month";
+  if (tab === "differences") return "No amount differences for this month";
+  if (tab === "due") return "No card payments are due for this month";
+  if (tab === "ignored") return "No ignored entries for this month";
+  return "No statement entries need review";
+}
+
+function selectReconciliationSource(sourceId) {
+  reconciliationSourceFilterId = sourceId || "all";
+  renderReconciliation();
+}
+
+function openPaymentSource(id = "") {
+  editingPaymentSourceId = id || null;
+  const source = id ? paymentSourceById(id) : null;
+  const form = $("#paymentSourceForm");
+  if (!form) return;
+  form.reset();
+  $("#paymentSourceDialogTitle").textContent = source ? "Edit Account" : "Add Account";
+  form.elements.profileId.innerHTML = profileOptions(source?.profileId || activeProfileId());
+  form.elements.profileId.value = source?.profileId || activeProfileId();
+  form.elements.type.value = source?.type || "Bank Account";
+  form.elements.name.value = source?.name || "";
+  form.elements.institution.value = source?.institution || "";
+  form.elements.last4.value = source?.last4 || "";
+  form.elements.accountName.value = source?.accountName || "";
+  form.elements.openingBalance.value = num(source?.openingBalance) || 0;
+  form.elements.statementDay.value = num(source?.statementDay) || "";
+  form.elements.dueDay.value = num(source?.dueDay) || "";
+  form.elements.active.checked = source?.active !== false;
+  $("#paymentSourceDialog").showModal();
+  if (window.lucide) lucide.createIcons();
+}
+
+async function savePaymentSource(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const existing = editingPaymentSourceId ? paymentSourceById(editingPaymentSourceId) : null;
+  const source = entityWithLocalMeta(normalizePaymentSourceForState({
+    id: existing?.id || uid(),
+    profileId: form.elements.profileId.value || activeProfileId(),
+    type: form.elements.type.value,
+    name: form.elements.name.value.trim(),
+    institution: form.elements.institution.value.trim(),
+    last4: form.elements.last4.value,
+    accountName: form.elements.accountName.value.trim(),
+    openingBalance: form.elements.openingBalance.value,
+    statementDay: form.elements.statementDay.value,
+    dueDay: form.elements.dueDay.value,
+    active: form.elements.active.checked,
+    systemDefault: Boolean(existing?.systemDefault)
+  }), existing);
+  if (!source.name) return toast("Enter an account name");
+  const index = state.paymentSources.findIndex(row => row.id === source.id);
+  if (index >= 0) state.paymentSources[index] = source;
+  else state.paymentSources.push(source);
+  reconciliationSourceFilterId = source.id;
+  saveState();
+  $("#paymentSourceDialog").close();
+  renderAll();
+  await syncCloudNow(false);
+  toast(existing ? "Account updated" : "Account added");
+}
+
+async function handleBankStatementUpload(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  const sources = activePaymentSources(activeProfileId());
+  const sourceId = reconciliationSourceFilterId !== "all" ? reconciliationSourceFilterId : (sources.length === 1 ? sources[0].id : "");
+  if (!sourceId || !paymentSourceById(sourceId)) return toast("Select one bank account or card before uploading the statement");
+  try {
+    const matrix = await readBankStatementMatrix(file);
+    const imported = parseBankStatementTransactions(matrix, {
+      fileName: file.name,
+      profileId: activeProfileId(),
+      paymentSourceId: sourceId,
+      sourceType: paymentSourceById(sourceId)?.type || "Bank Account"
+    });
+    if (!imported.length) return toast("No debit or credit entries were found in this statement");
+    const existingFingerprints = new Set(state.bankTransactions.map(transaction => transaction.fingerprint).filter(Boolean));
+    const newTransactions = imported.filter(transaction => !existingFingerprints.has(transaction.fingerprint));
+    if (!newTransactions.length) return toast("This statement has already been imported");
+    const rows = newTransactions.map(transaction => entityWithLocalMeta(normalizeBankTransactionForState(transaction)));
+    state.bankTransactions.push(...rows);
+    const result = autoReconcileTransactions(rows.map(row => row.id));
+    saveState();
+    renderAll();
+    const synced = await syncCloudNow(false);
+    const duplicateCount = imported.length - newTransactions.length;
+    toast(`${newTransactions.length} entries imported · ${result.matched} matched${duplicateCount ? ` · ${duplicateCount} duplicates skipped` : ""}${synced ? "" : " · saved locally"}`);
+  } catch (error) {
+    console.warn("Bank statement import failed", error);
+    toast(error.message || "Could not read this bank statement");
+  }
+}
+
+async function readBankStatementMatrix(file) {
+  if (window.XLSX) {
+    const buffer = await file.arrayBuffer();
+    const workbook = window.XLSX.read(buffer, { type: "array", cellDates: true, raw: true });
+    const sheets = workbook.SheetNames.map(name => window.XLSX.utils.sheet_to_json(workbook.Sheets[name], {
+      header: 1,
+      raw: true,
+      defval: ""
+    })).filter(rows => rows.length);
+    if (!sheets.length) throw new Error("The statement file is empty");
+    return sheets.sort((a, b) => statementLayoutScore(b) - statementLayoutScore(a))[0];
+  }
+  if (!/\.csv$/i.test(file.name)) throw new Error("Excel reader is unavailable. Upload a CSV file instead");
+  return parseCsvMatrix(await file.text());
+}
+
+function parseCsvMatrix(text) {
+  const firstLine = String(text || "").split(/\r?\n/, 1)[0] || "";
+  const delimiters = [",", "\t", ";"];
+  const delimiter = delimiters.sort((a, b) => firstLine.split(b).length - firstLine.split(a).length)[0];
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') {
+      if (quoted && text[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else quoted = !quoted;
+    } else if (character === delimiter && !quoted) {
+      row.push(value);
+      value = "";
+    } else if ((character === "\n" || character === "\r") && !quoted) {
+      if (character === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(value);
+      if (row.some(cell => String(cell).trim())) rows.push(row);
+      row = [];
+      value = "";
+    } else value += character;
+  }
+  row.push(value);
+  if (row.some(cell => String(cell).trim())) rows.push(row);
+  return rows;
+}
+
+function normalizeStatementHeader(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function statementHeaderMap(row = []) {
+  const headers = row.map(normalizeStatementHeader);
+  const find = patterns => headers.findIndex(header => patterns.some(pattern => pattern.test(header)));
+  return {
+    date: find([/^transaction date$/, /^transaction dt$/, /^txn date$/, /^txn dt$/, /^tran date$/, /^date$/, /^value date$/, /^value dt$/, /^posting date$/]),
+    description: find([/narration/, /description/, /particular/, /transaction detail/, /^details$/, /remarks/, /merchant/]),
+    reference: find([/reference/, /ref no/, /cheque/, /chq/, /utr/, /transaction id/]),
+    debit: find([/^debit/, /withdrawal/, /withdraw amount/, /^dr amount$/, /paid out/]),
+    credit: find([/^credit/, /deposit/, /^cr amount$/, /paid in/]),
+    amount: find([/^amount(?: inr)?$/, /transaction amount/, /txn amount/]),
+    type: find([/dr cr/, /debit credit/, /^type$/, /transaction type/, /indicator/]),
+    balance: find([/balance/])
+  };
+}
+
+function statementLayoutScore(matrix = []) {
+  return matrix.slice(0, 25).reduce((best, row) => {
+    const map = statementHeaderMap(row);
+    const score = (map.date >= 0 ? 4 : 0)
+      + (map.debit >= 0 ? 2 : 0)
+      + (map.credit >= 0 ? 2 : 0)
+      + (map.amount >= 0 ? 2 : 0)
+      + (map.description >= 0 ? 1 : 0)
+      + (map.reference >= 0 ? 1 : 0);
+    return Math.max(best, score);
+  }, 0);
+}
+
+function detectStatementLayout(matrix = []) {
+  let best = null;
+  matrix.slice(0, 30).forEach((row, index) => {
+    const map = statementHeaderMap(row);
+    const score = (map.date >= 0 ? 4 : 0)
+      + (map.debit >= 0 ? 2 : 0)
+      + (map.credit >= 0 ? 2 : 0)
+      + (map.amount >= 0 ? 2 : 0)
+      + (map.description >= 0 ? 1 : 0)
+      + (map.reference >= 0 ? 1 : 0);
+    if (!best || score > best.score) best = { index, map, score };
+  });
+  if (!best || best.map.date < 0 || (best.map.debit < 0 && best.map.credit < 0 && best.map.amount < 0)) {
+    throw new Error("Could not identify the Date and Debit/Credit columns in this statement");
+  }
+  return best;
+}
+
+function parseBankStatementTransactions(matrix, context) {
+  const layout = detectStatementLayout(matrix);
+  const batchId = uid();
+  const occurrence = new Map();
+  return matrix.slice(layout.index + 1).flatMap(row => {
+    const date = parseStatementDate(row[layout.map.date]);
+    if (!date) return [];
+    let debit = layout.map.debit >= 0 ? Math.abs(parseStatementNumber(row[layout.map.debit])) : 0;
+    let credit = layout.map.credit >= 0 ? Math.abs(parseStatementNumber(row[layout.map.credit])) : 0;
+    if (!debit && !credit && layout.map.amount >= 0) {
+      const rawAmount = row[layout.map.amount];
+      const amount = parseStatementNumber(rawAmount);
+      const typeIndicator = String(layout.map.type >= 0 ? row[layout.map.type] : "").trim().toUpperCase();
+      const indicator = `${typeIndicator} ${rawAmount} ${layout.map.description >= 0 ? row[layout.map.description] : ""}`.toUpperCase();
+      if (/^(D|DR|DEBIT)$/.test(typeIndicator) || /\bDR\b|DEBIT|WITHDRAW/.test(indicator) || amount < 0) debit = Math.abs(amount);
+      else if (/^(C|CR|CREDIT)$/.test(typeIndicator) || /\bCR\b|CREDIT|DEPOSIT|REFUND|REVERSAL/.test(indicator)) credit = Math.abs(amount);
+      else if (context.sourceType === "Credit Card" && amount > 0) debit = Math.abs(amount);
+      else if (amount > 0) credit = Math.abs(amount);
+    }
+    if (!debit && !credit) return [];
+    const description = String(layout.map.description >= 0 ? row[layout.map.description] : "").trim();
+    const reference = String(layout.map.reference >= 0 ? row[layout.map.reference] : "").trim();
+    const balance = layout.map.balance >= 0 ? parseStatementNumber(row[layout.map.balance]) : 0;
+    const base = [context.profileId, context.paymentSourceId, date, round2(debit), round2(credit), round2(balance), reference, description]
+      .map(value => String(value || "").trim())
+      .join("|");
+    const baseHash = hashStatementText(base);
+    const count = (occurrence.get(baseHash) || 0) + 1;
+    occurrence.set(baseHash, count);
+    const fingerprint = `${baseHash}:${count}`;
+    return [{
+      id: `banktx-${fingerprint}`,
+      profileId: context.profileId,
+      paymentSourceId: context.paymentSourceId,
+      date,
+      description: description || "Bank transaction",
+      reference,
+      debit,
+      credit,
+      balance,
+      status: "unmatched",
+      fingerprint,
+      importBatchId: batchId,
+      sourceFile: context.fileName,
+      importedAt: new Date().toISOString()
+    }];
+  });
+}
+
+function parseStatementNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  const negative = /^\(.*\)$/.test(text) || /^-/.test(text);
+  const cleaned = text.replace(/[^0-9.-]/g, "");
+  const parsed = Number(cleaned);
+  if (!Number.isFinite(parsed)) return 0;
+  return negative ? -Math.abs(parsed) : parsed;
+}
+
+function parseStatementDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return dateToIso(value);
+  if (typeof value === "number" && value > 20000 && value < 80000) {
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.round(value * 86400000));
+    return date.toISOString().slice(0, 10);
+  }
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const iso = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (iso) return validIsoDate(`${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`);
+  const indian = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+  if (indian) {
+    const year = indian[3].length === 2 ? `20${indian[3]}` : indian[3];
+    return validIsoDate(`${year}-${String(indian[2]).padStart(2, "0")}-${String(indian[1]).padStart(2, "0")}`);
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? "" : dateToIso(parsed);
+}
+
+function dateToIso(date) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+}
+
+function validIsoDate(value) {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return dateToIso(date) === value ? value : "";
+}
+
+function hashStatementText(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function openReconciliationMatch(transactionId) {
+  const transaction = state.bankTransactions.find(row => row.id === transactionId);
+  if (!transaction) return;
+  reconciliationMatchTransactionId = transactionId;
+  const candidates = reconciliationCandidates(transaction, { maximumDays: 90 });
+  const selectedKey = transaction.matchEntryType && transaction.matchEntryId
+    ? `${transaction.matchEntryType}:${transaction.matchEntryId}`
+    : transaction.suggestedEntryType && transaction.suggestedEntryId
+      ? `${transaction.suggestedEntryType}:${transaction.suggestedEntryId}`
+      : candidates[0]?.key || "";
+  $("#reconciliationMatchTransaction").innerHTML = `<span>${escapeHtml(formatInvoiceDate(transaction.date) || transaction.date || "-")}</span><strong>${escapeHtml(transaction.description || "Bank transaction")}</strong><em>${money(reconciliationTransactionAmount(transaction))}</em>`;
+  $("#reconciliationBookEntrySelect").innerHTML = candidates.map(entry => `
+    <option value="${escapeHtml(entry.key)}" ${entry.key === selectedKey ? "selected" : ""}>${escapeHtml(entry.type === "purchase" ? "Purchase" : "Sale")} ${escapeHtml(entry.number)} · ${escapeHtml(entry.party)} · ${escapeHtml(money(entry.amount))}</option>
+  `).join("") || `<option value="">No available book entries</option>`;
+  updateReconciliationMatchDifference();
+  $("#reconciliationMatchDialog").showModal();
+  if (window.lucide) lucide.createIcons();
+}
+
+function updateReconciliationMatchDifference() {
+  const transaction = state.bankTransactions.find(row => row.id === reconciliationMatchTransactionId);
+  const [type, id] = String($("#reconciliationBookEntrySelect")?.value || "").split(":");
+  const entry = reconciliationBookEntryByKey(type, id);
+  const target = $("#reconciliationMatchDifference");
+  if (!target) return;
+  if (!transaction || !entry) {
+    target.textContent = "Select a book entry";
+    return;
+  }
+  const difference = round2(reconciliationTransactionAmount(transaction) - entry.amount);
+  target.textContent = Math.abs(difference) <= 1 ? "Amounts match" : `Amount difference: ${money(difference)}`;
+}
+
+async function saveManualReconciliationMatch(event) {
+  event.preventDefault();
+  const transaction = state.bankTransactions.find(row => row.id === reconciliationMatchTransactionId);
+  const [type, id] = String($("#reconciliationBookEntrySelect").value || "").split(":");
+  const entry = reconciliationBookEntryByKey(type, id);
+  if (!transaction || !entry) return toast("Select a book entry to match");
+  applyReconciliationMatch(transaction, entry);
+  saveState();
+  $("#reconciliationMatchDialog").close();
+  renderAll();
+  await syncCloudNow(false);
+  toast(transaction.status === "difference" ? "Matched with amount difference" : "Entry matched");
+}
+
+function acceptReconciliationSuggestion(transactionId) {
+  const transaction = state.bankTransactions.find(row => row.id === transactionId);
+  const entry = reconciliationBookEntryByKey(transaction?.suggestedEntryType, transaction?.suggestedEntryId);
+  if (!transaction || !entry) return;
+  applyReconciliationMatch(transaction, entry);
+  saveState();
+  renderAll();
+  toast(transaction.status === "difference" ? "Matched with amount difference" : "Entry matched");
+}
+
+function acceptReconciliationDifference(transactionId) {
+  const transaction = state.bankTransactions.find(row => row.id === transactionId);
+  if (!transaction || transaction.status !== "difference") return;
+  transaction.status = "matched";
+  transaction.differenceAccepted = true;
+  markReconciliationEntityChanged(transaction);
+  saveState();
+  renderAll();
+  toast("Difference accepted");
+}
+
+function unmatchReconciliationTransaction(transactionId) {
+  const transaction = state.bankTransactions.find(row => row.id === transactionId);
+  if (!transaction) return;
+  const entry = reconciliationBookEntryByKey(transaction.matchEntryType, transaction.matchEntryId)?.entry;
+  if (entry?.reconciledTransactionId === transaction.id) {
+    entry.reconciledTransactionId = "";
+    markReconciliationEntityChanged(entry);
+  }
+  transaction.status = "unmatched";
+  transaction.matchEntryType = "";
+  transaction.matchEntryId = "";
+  transaction.matchedAmount = 0;
+  transaction.difference = 0;
+  transaction.differenceAccepted = false;
+  markReconciliationEntityChanged(transaction);
+  saveState();
+  renderAll();
+  toast("Match removed");
+}
+
+function ignoreReconciliationTransaction(transactionId) {
+  const transaction = state.bankTransactions.find(row => row.id === transactionId);
+  if (!transaction) return;
+  transaction.status = "ignored";
+  transaction.suggestedEntryType = "";
+  transaction.suggestedEntryId = "";
+  markReconciliationEntityChanged(transaction);
+  saveState();
+  renderAll();
+}
+
+function restoreReconciliationTransaction(transactionId) {
+  const transaction = state.bankTransactions.find(row => row.id === transactionId);
+  if (!transaction) return;
+  transaction.status = "unmatched";
+  markReconciliationEntityChanged(transaction);
+  autoReconcileTransactions([transaction.id]);
+  saveState();
+  renderAll();
 }
 
 function renderEntries(kind) {
@@ -3243,6 +4293,51 @@ function partyOptions(kind, selected = "", query = "") {
   return `${placeholder}${options}`;
 }
 
+function paymentSourceById(id) {
+  return state.paymentSources.find(source => source.id === id) || null;
+}
+
+function activePaymentSources(profileId = activeProfileId(), includeInactiveId = "") {
+  return state.paymentSources
+    .filter(source => source.profileId === profileId && (source.active || source.id === includeInactiveId))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+}
+
+function paymentSourceLabel(source = {}) {
+  const suffix = source.last4 ? ` •••• ${source.last4}` : "";
+  return `${source.name || source.institution || source.type || "Payment Source"}${suffix}`;
+}
+
+function paymentSourceOptions(profileId, selected = "", includeAll = false) {
+  const sources = activePaymentSources(profileId, selected);
+  const allOption = includeAll ? `<option value="all">All accounts</option>` : `<option value="">Not selected</option>`;
+  return allOption + sources.map(source => `
+    <option value="${escapeHtml(source.id)}" ${source.id === selected ? "selected" : ""}>${escapeHtml(paymentSourceLabel(source))}</option>
+  `).join("");
+}
+
+function setupEntryPaymentPanel(kind, source = null) {
+  const form = $("#entryForm");
+  if (!form) return;
+  const visible = kind === "sale" || kind === "purchase";
+  ["#entryPaymentSourceLabel", "#entryPaymentDateLabel", "#entryPaymentReferenceLabel"].forEach(selector => {
+    const element = $(selector);
+    if (element) element.hidden = !visible;
+  });
+  if (!visible) return;
+  const profileId = source?.profileId || state.settings.activeProfileId;
+  $("#entryPaymentSourceText").textContent = kind === "sale" ? "Received In" : "Paid Through";
+  form.elements.paymentSourceId.innerHTML = paymentSourceOptions(profileId, source?.paymentSourceId || "");
+  form.elements.paymentSourceId.value = source?.paymentSourceId || "";
+  form.elements.paymentDate.value = source?.paymentDate || "";
+  form.elements.paymentReference.value = source?.paymentReference || "";
+  form.elements.paymentSourceId.onchange = () => {
+    if (form.elements.paymentSourceId.value && !form.elements.paymentDate.value) {
+      form.elements.paymentDate.value = form.elements.date.value || today();
+    }
+  };
+}
+
 function setupEntryPartySearch(kind, selectedId = "") {
   const search = $("#entryPartySearch");
   const hint = $("#entryPartySearchHint");
@@ -3374,6 +4469,7 @@ function openEntry(kind, id = null, draft = null) {
     : "<option>Paid</option><option>Unpaid</option><option>Partial</option>";
   form.elements.status.value = source?.status || (isPo ? "Draft" : "Paid");
   $("#entryStatusLabel").hidden = !isPo;
+  setupEntryPaymentPanel(kind, source);
   $("#entryNotesLabel")?.setAttribute("hidden", "");
   if (form.elements.notes) form.elements.notes.value = isSale ? "" : (source?.notes || "");
   $("#entryPartyLabelText").textContent = isSale ? "Buyer" : "Supplier";
@@ -4687,6 +5783,9 @@ async function saveEntry(event) {
     profileId: form.elements.profileId.value,
     partyId: form.elements.partyId.value,
     status: form.elements.status.value,
+    paymentSourceId: entryMode === "po" ? "" : form.elements.paymentSourceId.value,
+    paymentDate: entryMode === "po" ? "" : form.elements.paymentDate.value,
+    paymentReference: entryMode === "po" ? "" : form.elements.paymentReference.value.trim(),
     notes: entryMode === "sale" ? "" : (form.elements.notes?.value || "").trim(),
     lines,
     ...entryTotals,
@@ -9252,5 +10351,13 @@ window.openItem = openItem;
 window.deleteItem = deleteItem;
 window.openParty = openParty;
 window.deleteParty = deleteParty;
+window.openPaymentSource = openPaymentSource;
+window.selectReconciliationSource = selectReconciliationSource;
+window.openReconciliationMatch = openReconciliationMatch;
+window.acceptReconciliationSuggestion = acceptReconciliationSuggestion;
+window.acceptReconciliationDifference = acceptReconciliationDifference;
+window.unmatchReconciliationTransaction = unmatchReconciliationTransaction;
+window.ignoreReconciliationTransaction = ignoreReconciliationTransaction;
+window.restoreReconciliationTransaction = restoreReconciliationTransaction;
 
 document.addEventListener("DOMContentLoaded", init);
