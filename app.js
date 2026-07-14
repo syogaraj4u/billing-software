@@ -580,7 +580,10 @@ function normalizeState(value) {
     value.settings.activeProfileId = profiles[0].id;
   }
   value.items = (Array.isArray(value.items) ? value.items : []).filter(item => !isDefaultSampleProduct(item));
-  value.items.forEach(item => normalizeCloudEntityMeta(item));
+  value.items.forEach(item => {
+    item.hsn = normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN;
+    normalizeCloudEntityMeta(item);
+  });
   value.parties = Array.isArray(value.parties) ? value.parties.map(normalizePartyForState) : [];
   mergeTallyBuyerMaster(value);
   mergeInternalCompanyPartyMaster(value);
@@ -993,6 +996,7 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
   entry.lines.forEach(line => {
     const item = items.find(row => row.id === line.itemId);
     if (!String(line.itemName || "").trim() && item?.name) line.itemName = item.name;
+    line.hsn = lineHsn(line, item || {});
   });
   if (kind === "sale") normalizeSaleAddressSnapshots(entry, parties);
   if (kind === "purchase") {
@@ -1584,7 +1588,7 @@ function findLinkedInternalPurchaseForSale(entry = {}) {
 function internalPurchaseLinesFromSale(entry = {}) {
   return clone(entry.lines || []).map(line => ({
     ...line,
-    hsn: normalizeLineHsn(line.hsn || lineHsn(line)),
+    hsn: lineHsn(line),
     itemName: line.itemName || itemName(line.itemId)
   }));
 }
@@ -2957,7 +2961,7 @@ function cloudItemRow(workspaceId, item, syncedAt, userId) {
     workspace_id: workspaceId,
     id: item.id,
     name: item.name || "",
-    hsn: item.hsn || "",
+    hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
     gst_rate: num(item.gstRate),
     sale_rate: num(item.saleRate),
     purchase_rate: num(item.purchaseRate),
@@ -5475,7 +5479,7 @@ function lineInputRate(line = {}) {
 
 function lineInputHsn(line = {}) {
   const item = state.items.find(row => row.id === line.itemId) || {};
-  return String(line.hsn || item.hsn || DEFAULT_SALE_HSN).trim();
+  return lineHsn(line, item);
 }
 
 function normalizeLineRateForEntry(line = {}) {
@@ -5515,7 +5519,7 @@ function addLineRow(line = blankLine(entryMode)) {
     const item = state.items.find(candidate => candidate.id === event.target.value);
     row.dataset.grossRate = "";
     row.dataset.taxableRate = "";
-    row.querySelector(".line-hsn").value = String(item?.hsn || DEFAULT_SALE_HSN);
+    row.querySelector(".line-hsn").value = lineHsn({}, item || {});
     row.querySelector(".line-rate").value = entryMode === "sale" ? num(item?.saleRate) : num(item?.purchaseRate);
     row.querySelector(".line-gst").value = num(item?.gstRate);
     updateEntryTotals();
@@ -5546,7 +5550,7 @@ function collectLines(options = {}) {
     return {
       itemId,
       itemName: item.name || selectedName,
-      hsn: normalizeLineHsn(row.querySelector(".line-hsn")?.value || DEFAULT_SALE_HSN),
+      hsn: lineHsn({ hsn: row.querySelector(".line-hsn")?.value }, item),
       qty: num(row.querySelector(".line-qty").value),
       rate: num(row.querySelector(".line-rate").value),
       grossRate: purchaseGrossRateFromRow(row),
@@ -5558,12 +5562,15 @@ function collectLines(options = {}) {
 }
 
 function normalizeLineHsn(value) {
-  return String(value || "").toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 8);
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
+  return digits.length >= 4 ? digits : "";
 }
 
 function lineHsn(line = {}, item = null) {
   const sourceItem = item || state.items.find(row => row.id === line.itemId) || {};
-  return normalizeLineHsn(line.hsn || sourceItem.hsn || DEFAULT_SALE_HSN);
+  return normalizeLineHsn(line.hsn)
+    || normalizeLineHsn(sourceItem.hsn)
+    || DEFAULT_SALE_HSN;
 }
 
 function applyLineHsnToItems(lines = []) {
@@ -6026,7 +6033,9 @@ function openItem(id = null) {
   const form = $("#itemForm");
   form.reset();
   ["name", "hsn", "gstRate", "saleRate", "purchaseRate", "openingStock", "minStock"].forEach(key => {
-    form.elements[key].value = item?.[key] ?? "";
+    form.elements[key].value = key === "hsn"
+      ? (normalizeLineHsn(item?.hsn) || DEFAULT_SALE_HSN)
+      : (item?.[key] ?? "");
   });
   $("#itemDialog").showModal();
   if (window.lucide) lucide.createIcons();
@@ -6039,7 +6048,7 @@ function saveItem(event) {
   const item = entityWithLocalMeta({
     id: editingItemId || uid(),
     name: form.elements.name.value.trim(),
-    hsn: form.elements.hsn.value.trim(),
+    hsn: normalizeLineHsn(form.elements.hsn.value) || DEFAULT_SALE_HSN,
     gstRate: num(form.elements.gstRate.value),
     saleRate: num(form.elements.saleRate.value),
     purchaseRate: num(form.elements.purchaseRate.value),
@@ -6392,7 +6401,7 @@ function showInvoice(id, kind) {
             return `<tr class="invoice-item-row">
               <td class="num">${index + 1}</td>
               <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}${invoiceImeiMarkup(line.imeiNumbers)}</td>
-              <td>${escapeHtml(item.hsn || "")}</td>
+              <td>${escapeHtml(lineHsn(line, item))}</td>
               <td class="num strong">${formatQty(line.qty)}</td>
               <td class="num">${formatInvoiceMoney(line.rate)}</td>
               <td class="num strong">${formatInvoiceMoney(taxable)}</td>
@@ -7624,7 +7633,7 @@ function invoicePdfLineRow(line, item, index, documentKind = "invoice") {
   return {
     sl: String(index + 1),
     description,
-    hsn: item.hsn || "",
+    hsn: lineHsn(line, item),
     qty: formatQty(line.qty),
     rate: formatInvoiceMoney(documentKind === "po" ? lineGrossRate(line) : line.rate),
     taxable: formatInvoiceMoney(lineTaxableAmount(line)),
@@ -8018,7 +8027,7 @@ function invoiceTaxGroups(entry) {
   const map = new Map();
   entry.lines.forEach(line => {
     const item = state.items.find(row => row.id === line.itemId) || {};
-    const hsn = item.hsn || "NA";
+    const hsn = lineHsn(line, item);
     const key = `${hsn}-${num(line.gstRate)}`;
     const taxable = lineTaxableAmount(line);
     const existing = map.get(key) || { hsn, rate: num(line.gstRate), taxable: 0, tax: 0 };
@@ -9195,9 +9204,10 @@ function taxableRateFromInclusive(rate, gstRate) {
 }
 
 function resolveSaleLineHsn(line, explicitHsn = "") {
-  const lineHsn = String(line?.hsn || "").trim();
-  if (explicitHsn && (!lineHsn || lineHsn === DEFAULT_SALE_HSN)) return explicitHsn;
-  return lineHsn || explicitHsn || inferHsnFromItemName(line?.name);
+  const currentHsn = normalizeLineHsn(line?.hsn);
+  const requestedHsn = normalizeLineHsn(explicitHsn);
+  if (requestedHsn && (!currentHsn || currentHsn === DEFAULT_SALE_HSN)) return requestedHsn;
+  return currentHsn || requestedHsn || inferHsnFromItemName(line?.name);
 }
 
 function resolveSaleLineGstRate(line, explicitGstRate = 0) {
@@ -9416,7 +9426,7 @@ function ensureChatItem(line) {
   const item = {
     id: uid(),
     name: line.name || "Smart Bill Item",
-    hsn: line.hsn || DEFAULT_SALE_HSN,
+    hsn: lineHsn(line, {}),
     gstRate: num(line.gstRate) || 18,
     saleRate: num(line.rate),
     purchaseRate: 0,
@@ -9496,7 +9506,7 @@ function renderSmartBillReview(parsed) {
               const taxable = lineTaxableAmount(line);
               return `<tr>
                 <td>${escapeHtml(line.name || "Item")}</td>
-                <td>${escapeHtml(line.hsn || DEFAULT_SALE_HSN)}</td>
+                <td>${escapeHtml(lineHsn(line, {}))}</td>
                 <td class="num">${formatQty(line.qty)}</td>
                 <td class="num">${money(line.rate)}</td>
                 <td class="num">${num(line.gstRate)}%</td>
@@ -9535,7 +9545,7 @@ function smartBillReviewLines(parsed) {
   const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
   return lines.map(line => ({
     name: line.name || "Smart Bill Item",
-    hsn: line.hsn || DEFAULT_SALE_HSN,
+    hsn: lineHsn(line, {}),
     qty: num(line.qty) || 1,
     rate: num(line.rate),
     gstRate: num(line.gstRate) || DEFAULT_SALE_GST_RATE
@@ -10376,7 +10386,7 @@ function appendPartyAlias(party, alias) {
 }
 
 function ensureImportedItem(line) {
-  const hsn = normalizeLineHsn(line.hsn || DEFAULT_SALE_HSN);
+  const hsn = normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN;
   const rawName = String(line.name || "Imported Purchase").trim() || "Imported Purchase";
   const name = normalizeImportedItemName(rawName);
   const existing = findImportedItemByNormalizedName(name, hsn);
