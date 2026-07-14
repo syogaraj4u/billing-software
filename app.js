@@ -583,6 +583,7 @@ function normalizeState(value) {
   value.items.forEach(item => normalizeCloudEntityMeta(item));
   value.parties = Array.isArray(value.parties) ? value.parties.map(normalizePartyForState) : [];
   mergeTallyBuyerMaster(value);
+  mergeInternalCompanyPartyMaster(value);
   value.sales = Array.isArray(value.sales) ? value.sales : [];
   value.purchases = Array.isArray(value.purchases) ? value.purchases : [];
   value.purchaseOrders = Array.isArray(value.purchaseOrders) ? value.purchaseOrders : [];
@@ -898,6 +899,44 @@ function mergeTallyBuyerMaster(value) {
     });
   });
   value.settings.tallyBuyerMasterVersion = TALLY_BUYER_MASTER_VERSION;
+}
+
+function mergeInternalCompanyPartyMaster(value) {
+  const profiles = value.settings?.profiles || [];
+  profiles.forEach(profile => {
+    const gstin = normalizeGstin(profile.gstin);
+    if (!gstin) return;
+    const existing = value.parties.find(party => normalizeGstin(party.gstin) === gstin);
+    const generatedParty = existing?.id === `internal-party-${gstin}`;
+    const name = profilePartyName(profile);
+    const address = profilePartyAddress(profile);
+    const aliases = cleanPartyAliasList([
+      ...partyAliasList(existing || {}),
+      ...profileAliases(profile)
+    ]).join("\n");
+    if (!existing) {
+      value.parties.push(normalizePartyForState({
+        id: `internal-party-${gstin}`,
+        name,
+        type: "Both",
+        gstin,
+        phone: profile.phone || "",
+        email: profile.email || "",
+        place: profile.state || stateNameFromGstin(gstin) || "",
+        address,
+        aliases,
+        shippingAddresses: []
+      }));
+      return;
+    }
+    existing.type = mergePartyTypes(existing.type, "Both");
+    if (generatedParty || !String(existing.name || "").trim()) existing.name = name;
+    if (generatedParty || !String(existing.address || "").trim()) existing.address = address;
+    if (generatedParty || !String(existing.place || "").trim()) existing.place = profile.state || stateNameFromGstin(gstin) || "";
+    if (!String(existing.phone || "").trim()) existing.phone = profile.phone || "";
+    if (!String(existing.email || "").trim()) existing.email = profile.email || "";
+    existing.aliases = aliases;
+  });
 }
 
 function mergeTallyBuyerIntoParty(party, buyer) {
@@ -4285,9 +4324,17 @@ function entryPartyTypes(kind) {
   return wanted;
 }
 
+function isSelectedCompanyParty(party = {}) {
+  const selectedGstin = normalizeGstin(activeProfile()?.gstin);
+  return Boolean(selectedGstin) && normalizeGstin(party.gstin) === selectedGstin;
+}
+
 function entryPartyChoices(kind) {
   return state.parties
-    .filter(party => entryPartyTypes(kind).includes(normalizePartyType(party.type)))
+    .filter(party => (
+      entryPartyTypes(kind).includes(normalizePartyType(party.type))
+      && !isSelectedCompanyParty(party)
+    ))
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 }
 
