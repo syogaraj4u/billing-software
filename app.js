@@ -25,6 +25,7 @@ const SYNC_STATUS_SYNCED = "Synced";
 const SYNC_STATUS_FAILED = "Sync failed";
 const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
+const DISALLOWED_HSN_CODES = new Set(["85176290"]);
 const DEFAULT_SALE_GST_RATE = 18;
 const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
@@ -5571,7 +5572,7 @@ function collectLines(options = {}) {
 
 function normalizeLineHsn(value) {
   const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
-  return digits.length >= 4 ? digits : "";
+  return digits.length >= 4 && !DISALLOWED_HSN_CODES.has(digits) ? digits : "";
 }
 
 function lineHsn(line = {}, item = null) {
