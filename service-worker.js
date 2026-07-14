@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v152";
+const CACHE_NAME = "billing-software-v153";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const APP_ASSETS = [
   "./cloud-config.js",
   "./manifest.webmanifest",
   "./icon.svg",
+  "./assets/logos/nirvana-solutions-logo.jpg",
   "./assets/logos/kala-nirvana-mark.jpg",
   "./assets/logos/kala-nirvana-wordmark.jpg"
 ];

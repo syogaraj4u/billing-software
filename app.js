@@ -325,7 +325,15 @@ const SALE_INVOICE_NUMBER_RULES = {
 };
 
 const FIRM_LOGOS = {
-  "gst-1": { initials: "NS", kind: "phoneOrbit", primary: "#0f766e", accent: "#2563eb", ink: "#0f172a" },
+  "gst-1": {
+    initials: "NS",
+    markSrc: "assets/logos/nirvana-solutions-logo.jpg",
+    markWidth: 512,
+    markHeight: 512,
+    primary: "#d6a74e",
+    accent: "#c7ccd4",
+    ink: "#111827"
+  },
   "gst-2": {
     initials: "KN",
     markSrc: "assets/logos/kala-nirvana-mark.jpg",
