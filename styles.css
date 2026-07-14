@@ -241,6 +241,20 @@ body.company-page-transitioning .app-shell.page-slide-exit-right.is-active {
   height: 100%;
 }
 
+.company-logo-mark img,
+.invoice-firm-logo img,
+.po-firm-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.company-logo-mark.firm-logo-image img,
+.invoice-firm-logo.firm-logo-image img {
+  border-radius: 6px;
+}
+
 .company-card-main {
   display: grid;
   gap: 5px;
@@ -1775,6 +1789,11 @@ textarea { resize: vertical; }
 .po-firm-logo svg {
   width: 100%;
   height: 100%;
+}
+
+.po-firm-logo.firm-logo-wordmark {
+  width: 150px;
+  height: 48px;
 }
 
 .po-company-block {

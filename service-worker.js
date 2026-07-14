@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v149";
+const CACHE_NAME = "billing-software-v150";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -8,7 +8,9 @@ const APP_ASSETS = [
   "./app.js",
   "./cloud-config.js",
   "./manifest.webmanifest",
-  "./icon.svg"
+  "./icon.svg",
+  "./assets/logos/kala-nirvana-mark.jpg",
+  "./assets/logos/kala-nirvana-wordmark.jpg"
 ];
 const OPTIONAL_ASSETS = [
   "https://unpkg.com/lucide@latest/dist/umd/lucide.min.js",

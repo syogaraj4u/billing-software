@@ -326,7 +326,18 @@ const SALE_INVOICE_NUMBER_RULES = {
 
 const FIRM_LOGOS = {
   "gst-1": { initials: "NS", kind: "phoneOrbit", primary: "#0f766e", accent: "#2563eb", ink: "#0f172a" },
-  "gst-2": { initials: "KN", kind: "deviceSpark", primary: "#111827", accent: "#d97706", ink: "#111827" },
+  "gst-2": {
+    initials: "KN",
+    markSrc: "assets/logos/kala-nirvana-mark.jpg",
+    markWidth: 320,
+    markHeight: 320,
+    wordmarkSrc: "assets/logos/kala-nirvana-wordmark.jpg",
+    wordmarkWidth: 1400,
+    wordmarkHeight: 396,
+    primary: "#111827",
+    accent: "#1557ff",
+    ink: "#111827"
+  },
   "gst-3": { initials: "HHM", kind: "dualPhones", primary: "#7c3aed", accent: "#0f766e", ink: "#1e1b4b" },
   "gst-4": { initials: "SNC", kind: "signalPhone", primary: "#1d4ed8", accent: "#0891b2", ink: "#111827" },
   "gst-5": { initials: "SD", kind: "pixelPhone", primary: "#0369a1", accent: "#14b8a6", ink: "#0f172a" },
@@ -334,6 +345,7 @@ const FIRM_LOGOS = {
   "gst-7": { initials: "LJT", kind: "stackedPhones", primary: "#166534", accent: "#64748b", ink: "#111827" },
   "gst-8": { initials: "SLD", kind: "retailDevice", primary: "#b91c1c", accent: "#f59e0b", ink: "#111827" }
 };
+const FIRM_PDF_LOGO_CACHE = new Map();
 
 const HOME_COMPANY_PROFILE_ORDER = ["gst-1", "gst-2", "gst-7", "gst-5", "gst-6", "gst-8", "gst-4", "gst-3"];
 const AMBIGUOUS_PROFILE_ALIASES = new Set(["lakshmi", "s lakshmi"]);
@@ -1128,7 +1140,38 @@ function profileName(id) {
 function firmLogoMarkup(profile, className = "firm-logo") {
   const logo = FIRM_LOGOS[profile?.id] || fallbackFirmLogo(profile);
   const title = `${profile?.businessName || profile?.label || "Business"} logo`;
+  if (logo.markSrc) {
+    const useWordmark = className === "po-firm-logo" && logo.wordmarkSrc;
+    const src = useWordmark ? logo.wordmarkSrc : logo.markSrc;
+    const variantClass = useWordmark ? "firm-logo-wordmark" : "firm-logo-image";
+    return `<span class="${escapeHtml(className)} ${variantClass}" title="${escapeHtml(title)}"><img src="${escapeHtml(src)}" alt="" decoding="async"></span>`;
+  }
   return `<span class="${escapeHtml(className)}" title="${escapeHtml(title)}">${firmLogoSvg(logo)}</span>`;
+}
+
+async function loadFirmPdfLogo(profile, documentKind = "invoice") {
+  const logo = FIRM_LOGOS[profile?.id];
+  if (!logo?.markSrc) return null;
+  const useWordmark = documentKind === "po" && logo.wordmarkSrc;
+  const src = useWordmark ? logo.wordmarkSrc : logo.markSrc;
+  const key = `${profile.id}:${src}`;
+  if (!FIRM_PDF_LOGO_CACHE.has(key)) {
+    FIRM_PDF_LOGO_CACHE.set(key, fetch(src).then(async response => {
+      if (!response.ok) throw new Error(`Logo could not be loaded (${response.status})`);
+      return {
+        key,
+        bytes: new Uint8Array(await response.arrayBuffer()),
+        width: useWordmark ? logo.wordmarkWidth : logo.markWidth,
+        height: useWordmark ? logo.wordmarkHeight : logo.markHeight
+      };
+    }));
+  }
+  try {
+    return await FIRM_PDF_LOGO_CACHE.get(key);
+  } catch {
+    FIRM_PDF_LOGO_CACHE.delete(key);
+    return null;
+  }
 }
 
 function fallbackFirmLogo(profile) {
@@ -6762,7 +6805,11 @@ function whatsappPhoneNumber(phone) {
 async function buildInvoicePdfBlob() {
   if (!currentInvoiceShareContext?.entry) throw new Error("Document is not open");
   const pdf = createInvoicePdfDocument();
-  renderInvoiceVectorPdf(pdf, currentInvoiceShareContext);
+  const pdfLogo = await loadFirmPdfLogo(
+    currentInvoiceShareContext.settings,
+    currentInvoiceShareContext.documentKind || "invoice"
+  );
+  renderInvoiceVectorPdf(pdf, { ...currentInvoiceShareContext, pdfLogo });
   return pdf.output("blob");
 }
 
@@ -6781,6 +6828,7 @@ class InvoiceVectorPdf {
     this.pageWidthPt = this.mmToPt(this.pageWidth);
     this.pageHeightPt = this.mmToPt(this.pageHeight);
     this.pages = [[]];
+    this.images = [];
     this.pageIndex = 0;
     this.fontSize = 10;
     this.fontStyle = "normal";
@@ -6811,6 +6859,19 @@ class InvoiceVectorPdf {
   addPage() {
     this.pages.push([]);
     this.pageIndex = this.pages.length - 1;
+  }
+
+  addImage(imageData, _format, x, y, width, height) {
+    if (!imageData?.bytes?.length) return;
+    let image = this.images.find(row => row.key === imageData.key);
+    if (!image) {
+      image = {
+        ...imageData,
+        name: `Im${this.images.length + 1}`
+      };
+      this.images.push(image);
+    }
+    this.add(`q ${this.pt(width)} 0 0 ${this.pt(height)} ${this.pt(x)} ${this.yPt(y + height)} cm /${image.name} Do Q`);
   }
 
   setPage(pageNo) {
@@ -6935,11 +6996,20 @@ class InvoiceVectorPdf {
     const fontRegularId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
     const fontBoldId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
     const fontItalicId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>");
+    const imageIds = new Map();
+    this.images.forEach(image => {
+      const hex = Array.from(image.bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+      const imageId = addObject(`<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter [/ASCIIHexDecode /DCTDecode] /Length ${hex.length + 2} >>\nstream\n${hex}>\nendstream`);
+      imageIds.set(image.name, imageId);
+    });
+    const imageResources = this.images.length
+      ? `/XObject << ${this.images.map(image => `/${image.name} ${imageIds.get(image.name)} 0 R`).join(" ")} >>`
+      : "";
     const pageIds = [];
     this.pages.forEach(commands => {
       const stream = commands.join("\n");
       const contentId = addObject(`<< /Length ${this.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
-      const pageId = addObject(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${this.num(this.pageWidthPt)} ${this.num(this.pageHeightPt)}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R /F3 ${fontItalicId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+      const pageId = addObject(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${this.num(this.pageWidthPt)} ${this.num(this.pageHeightPt)}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R /F3 ${fontItalicId} 0 R >> ${imageResources} >> /Contents ${contentId} 0 R >>`);
       pageIds.push(pageId);
     });
     objects[pagesId - 1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
@@ -7016,6 +7086,16 @@ function renderInvoiceVectorPdf(pdf, context) {
   renderInvoicePdfFooters(pdf, layout);
 }
 
+function drawFirmPdfLogo(pdf, details, x, y, width, height) {
+  if (!details.pdfLogo?.bytes?.length || typeof pdf.addImage !== "function") return false;
+  if (pdf instanceof InvoiceVectorPdf) {
+    pdf.addImage(details.pdfLogo, "JPEG", x, y, width, height);
+  } else {
+    pdf.addImage(details.pdfLogo.bytes, "JPEG", x, y, width, height, undefined, "FAST");
+  }
+  return true;
+}
+
 function renderPurchaseOrderVectorPdf(pdf, context) {
   const details = invoicePdfDetails(context);
   const poDetails = purchaseOrderTemplateDetails(details.entry, details.party, details.settings);
@@ -7040,6 +7120,11 @@ function renderPurchaseOrderPdfHeader(pdf, details, layout, continued = false) {
   pdf.text(`GSTIN : ${pdfClean(details.settings.gstin || "-")}`, margin + 3, y + 6);
   pdf.setFontSize(continued ? 13 : 11);
   pdf.text("Purchase Order", pageWidth / 2, y + 8, { align: "center" });
+  if (!continued && details.pdfLogo) {
+    const logoWidth = 43;
+    const logoHeight = logoWidth * details.pdfLogo.height / details.pdfLogo.width;
+    drawFirmPdfLogo(pdf, details, margin + 3, y + 11, logoWidth, logoHeight);
+  }
   pdf.setFontSize(continued ? 11 : 15);
   pdf.text(pdfClean(po.companyName || details.sellerName), pageWidth / 2, y + (continued ? 16 : 18), { align: "center" });
   pdf.setFont("helvetica", "normal");
@@ -7302,7 +7387,7 @@ function renderPurchaseOrderPdfFooters(pdf, layout) {
   pdf.setTextColor(20, 34, 35);
 }
 
-function invoicePdfDetails({ entry, party, settings, documentKind = "invoice" }) {
+function invoicePdfDetails({ entry, party, settings, documentKind = "invoice", pdfLogo = null }) {
   const isPo = documentKind === "po";
   const buyerProfile = normalizeAddressSnapshot({
     name: settings.businessName || settings.label || "",
@@ -7318,6 +7403,7 @@ function invoicePdfDetails({ entry, party, settings, documentKind = "invoice" })
     party,
     settings,
     documentKind,
+    pdfLogo,
     documentTitle: isPo ? "PURCHASE ORDER" : "TAX INVOICE",
     numberLabel: isPo ? "PO No." : "Invoice No.",
     firstPartyLabel: isPo ? "Supplier" : "Buyer (Bill to)",
@@ -7376,15 +7462,18 @@ function renderInvoicePdfPageHeader(pdf, details, layout, continued, includeTabl
   let y = margin;
   pdf.setFillColor(245, 248, 248);
   pdf.rect(margin, y, contentWidth, continued ? 30 : 34, "F");
+  const logoSize = continued ? 16 : 20;
+  const hasLogo = drawFirmPdfLogo(pdf, details, margin + 3, y + 3, logoSize, logoSize);
+  const sellerTextX = margin + (hasLogo ? logoSize + 7 : 3);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(15);
-  pdf.text(pdfClean(details.sellerName), margin + 3, y + 7);
+  pdf.text(pdfClean(details.sellerName), sellerTextX, y + 7);
   pdf.setFontSize(13);
   pdf.text(details.documentTitle, pageWidth - margin - 3, y + 7, { align: "right" });
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7.5);
-  const addressLines = pdfWrap(pdf, details.sellerAddress, 95, 2);
-  pdf.text(addressLines, margin + 3, y + 13);
+  const addressLines = pdfWrap(pdf, details.sellerAddress, hasLogo ? 70 : 95, 2);
+  pdf.text(addressLines, sellerTextX, y + 13);
   pdf.text(`GSTIN/UIN: ${pdfClean(details.settings.gstin || "-")}`, margin + 3, y + 24);
   pdf.text(`State: ${pdfClean(details.sellerState || "-")} | Code: ${pdfClean(stateCodeFromGstin(details.settings.gstin) || "-")}`, margin + 3, y + 28);
   drawInvoicePdfMeta(pdf, details, pageWidth - margin - 64, y + 11, 61);
