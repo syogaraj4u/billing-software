@@ -228,7 +228,7 @@
         </div>
         <div class="table-wrap panel">
           <table>
-            <thead><tr><th>Name</th><th>HSN</th><th>GST</th><th class="num">Sale Rate</th><th class="num">Purchase Rate</th><th class="num">Stock</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>HSN</th><th>GST</th><th class="num">Sale Rate/Qty</th><th class="num">Purchase Rate/Qty</th><th class="num">Stock</th><th></th></tr></thead>
             <tbody id="itemRows"></tbody>
           </table>
         </div>
@@ -370,7 +370,6 @@
               <input name="shipToSame" type="checkbox" checked>
               <span>Ship to same as Bill To</span>
             </label>
-            <input name="rateIncludesGst" type="checkbox" checked hidden aria-hidden="true" tabindex="-1">
             <label id="shipToSavedLabel">Saved Ship To<select name="shipToAddressId"></select></label>
             <div class="ship-to-custom" id="shipToCustomFields" hidden>
               <label>Name<input name="shipToName"></label>
@@ -464,8 +463,8 @@
         <label class="span-2">Name<input name="name" required></label>
         <label>HSN/SAC<input name="hsn"></label>
         <label>GST %<input name="gstRate" type="number" min="0" step="0.01"></label>
-        <label>Sale Rate<input name="saleRate" type="number" min="0" step="0.01"></label>
-        <label>Purchase Rate<input name="purchaseRate" type="number" min="0" step="0.01"></label>
+        <label>Sale Rate per quantity<input name="saleRate" type="number" min="0" step="0.01"></label>
+        <label>Purchase Rate per quantity<input name="purchaseRate" type="number" min="0" step="0.01"></label>
         <label>Opening Stock<input name="openingStock" type="number" step="0.01"></label>
         <label>Minimum Stock<input name="minStock" type="number" step="0.01"></label>
       </div>
@@ -624,6 +623,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=20260714-hsn-policy"></script>
+  <script src="app.js?v=20260716-inclusive-unit-rates"></script>
 </body>
 </html>

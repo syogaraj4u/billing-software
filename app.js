@@ -1000,7 +1000,7 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
   entry.reviewMessages = Array.isArray(entry.reviewMessages) ? entry.reviewMessages : [];
   entry.reviewStatus = entry.reviewStatus || (entry.reviewMessages.length ? "Needs Review" : "Ready");
   entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
-  entry.rateIncludesGst = Boolean(entry.rateIncludesGst);
+  entry.rateIncludesGst = true;
   entry.internalTransfer = normalizeInternalTransfer(entry.internalTransfer);
   entry.lines.forEach(line => {
     const item = items.find(row => row.id === line.itemId);
@@ -1677,7 +1677,7 @@ function syncInternalPurchaseForSale(saleEntry = {}, previousSaleEntry = null) {
     attachments: clone(saleEntry.attachments || []),
     extractedTaxes: null,
     source: "internal-sale",
-    rateIncludesGst: false,
+    rateIncludesGst: true,
     sellerGstin: normalizeGstin(sellerProfile.gstin),
     buyerGstin: normalizeGstin(buyerProfile.gstin),
     ewayDetails: internalPurchaseEwayDetailsFromSale(saleEntry, sellerProfile, buyerProfile),
@@ -1731,18 +1731,21 @@ function lineTaxableAmount(line = {}) {
   return round2(num(line.qty) * num(line.rate));
 }
 
-function lineGrossAmount(line = {}) {
+function lineInclusiveUnitRate(line = {}) {
+  const taxableRate = num(line.rate);
   const grossRate = num(line.grossRate);
-  if (grossRate && grossRate >= num(line.rate)) return round2(num(line.qty) * grossRate);
-  const taxable = lineTaxableAmount(line);
-  return round2(taxable + lineGstAmount(line));
+  const gstRate = num(line.gstRate);
+  if (grossRate > 0 && (gstRate <= 0 || grossRate > taxableRate)) return round2(grossRate);
+  return inclusiveRateFromTaxable(taxableRate, gstRate);
+}
+
+function lineGrossAmount(line = {}) {
+  return round2(num(line.qty) * lineInclusiveUnitRate(line));
 }
 
 function lineGstAmount(line = {}) {
   const taxable = lineTaxableAmount(line);
-  const grossRate = num(line.grossRate);
-  if (grossRate && grossRate >= num(line.rate)) return round2((num(line.qty) * grossRate) - taxable);
-  return round2(taxable * num(line.gstRate) / 100);
+  return round2(lineGrossAmount(line) - taxable);
 }
 
 function basicTotals(lines) {
@@ -1940,7 +1943,6 @@ function bindEvents() {
   $("#entryForm").addEventListener("submit", saveEntry);
   $("#entryForm").elements.shipToSame.addEventListener("change", updateSalesAddressPanel);
   $("#entryForm").elements.shipToAddressId.addEventListener("change", updateSalesAddressPanel);
-  $("#entryForm").elements.rateIncludesGst.addEventListener("change", updateEntryTotals);
   ["shipToName", "shipToGstin", "shipToPlace", "shipToAddress"].forEach(name => {
     $("#entryForm").elements[name].addEventListener("input", updateSalesAddressPanel);
   });
@@ -4552,7 +4554,7 @@ function openEntry(kind, id = null, draft = null) {
   $("#entryMetaTitle").textContent = isSale ? "Check the basic details" : isPo ? "Select supplier and required items" : "Correct supplier, buyer GST, invoice number and date";
   $("#entryProfileLabelText").textContent = isSale ? "Business GST" : "Buyer GST";
   $("#lineEditorTitle").textContent = isSale ? "Items" : isPo ? "Items for PO" : "Items from invoice";
-  $("#lineEditorHint").textContent = isSale ? "" : isPo ? "Items in this PO do not change stock until purchase entry is made." : "Edit item, quantity, rate, GST or IMEI before saving.";
+  $("#lineEditorHint").textContent = isSale ? "" : isPo ? "Items in this PO do not change stock until purchase entry is made." : "Edit item, quantity, rate per quantity, GST or IMEI before saving.";
   $("#saveEntryBtn span").textContent = isSale ? "Save Entry" : isPo ? "Save PO" : "Save Purchase";
   form.elements.date.value = source?.date || today();
   form.elements.date.oninput = updateEntryTotals;
@@ -4617,7 +4619,6 @@ function setupSalesAddressPanel(kind, source = null) {
   const shipTo = normalizeAddressSnapshot(source?.shipToSnapshot || billTo);
   const same = source?.shipToSameAsBillTo ?? sameAddressSnapshot(billTo, shipTo);
   form.elements.shipToSame.checked = same;
-  form.elements.rateIncludesGst.checked = source ? Boolean(source.rateIncludesGst) : true;
   form.elements.shipToAddressId.innerHTML = shipToAddressOptions(party, source?.shipToAddressId || "", shipTo, same);
   const useCustom = !same && form.elements.shipToAddressId.value === "custom";
   form.elements.shipToName.value = useCustom ? shipTo.name : "";
@@ -5421,7 +5422,7 @@ function renderPurchaseItemReview(lines = []) {
       <td data-label="Item">${escapeHtml(item.name || itemName(line.itemId))}</td>
       <td data-label="HSN/SAC">${escapeHtml(hsn)}</td>
       <td data-label="Qty" class="num">${num(line.qty)}</td>
-      <td data-label="Rate" class="num">${money(line.rate)}</td>
+      <td data-label="Rate per quantity" class="num">${money(lineGrossRate(line))}</td>
       <td data-label="GST" class="num">${num(line.gstRate)}%</td>
       <td data-label="Taxable" class="num">${money(lineTaxableAmount(line))}</td>
     </tr>`;
@@ -5429,7 +5430,7 @@ function renderPurchaseItemReview(lines = []) {
   return `<div class="purchase-review-items">
     <span>Items detected from invoice</span>
     <table>
-      <thead><tr><th>Item</th><th>HSN/SAC</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Taxable</th></tr></thead>
+      <thead><tr><th>Item</th><th>HSN/SAC</th><th class="num">Qty</th><th class="num">Rate per quantity</th><th class="num">GST</th><th class="num">Taxable</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
@@ -5445,12 +5446,15 @@ function renderPurchaseAttachmentReview(attachments = []) {
 
 function blankLine(kind) {
   const item = state.items[0];
+  const gstRate = item && item.gstRate !== undefined ? num(item.gstRate) : DEFAULT_SALE_GST_RATE;
+  const inclusiveRate = kind === "sale" ? num(item?.saleRate) : num(item?.purchaseRate);
   return {
     itemId: item?.id || "",
     itemName: item?.name || "",
     qty: 1,
-    rate: kind === "sale" ? num(item?.saleRate) : num(item?.purchaseRate),
-    gstRate: num(item?.gstRate),
+    rate: taxableRateFromInclusive(inclusiveRate, gstRate),
+    grossRate: inclusiveRate,
+    gstRate,
     imeiNumbers: ""
   };
 }
@@ -5473,17 +5477,8 @@ function invoiceImeiMarkup(value) {
   return `<small class="invoice-imei-list"><span>IMEI:</span> ${escapeHtml([...new Set(numbers)].join(", "))}</small>`;
 }
 
-function salesRatesIncludeGst() {
-  return entryMode === "sale" && Boolean($("#entryForm")?.elements?.rateIncludesGst?.checked);
-}
-
-function entryRatesIncludeGst() {
-  return entryMode === "po" || salesRatesIncludeGst();
-}
-
 function lineInputRate(line = {}) {
-  if ((entryMode === "sale" || entryMode === "po") && entryRatesIncludeGst() && num(line.grossRate)) return num(line.grossRate);
-  return num(line.rate);
+  return lineInclusiveUnitRate(line);
 }
 
 function lineInputHsn(line = {}) {
@@ -5492,33 +5487,22 @@ function lineInputHsn(line = {}) {
 }
 
 function normalizeLineRateForEntry(line = {}) {
-  const rawRate = num(line.rate);
-  if (entryRatesIncludeGst()) {
-    return {
-      ...line,
-      grossRate: rawRate,
-      rate: taxableRateFromInclusive(rawRate, line.gstRate)
-    };
-  }
-  if (entryMode === "sale") {
-    return {
-      ...line,
-      grossRate: rawRate
-    };
-  }
-  return line;
+  const inclusiveRate = num(line.rate);
+  return {
+    ...line,
+    grossRate: inclusiveRate,
+    rate: taxableRateFromInclusive(inclusiveRate, line.gstRate)
+  };
 }
 
 function addLineRow(line = blankLine(entryMode)) {
   const row = document.createElement("div");
   row.className = "line-row";
-  row.dataset.grossRate = num(line.grossRate) ? String(num(line.grossRate)) : "";
-  row.dataset.taxableRate = num(line.rate) ? String(num(line.rate)) : "";
   row.innerHTML = `
     <label>Item<select class="line-item">${itemOptions(line.itemId, line.itemName || line.name)}</select></label>
     <label class="line-hsn-field">HSN/SAC<input class="line-hsn" inputmode="numeric" maxlength="8" value="${escapeHtml(lineInputHsn(line))}" placeholder="85171300"></label>
     <label>Qty<input class="line-qty" type="number" min="0" step="0.01" value="${num(line.qty)}"></label>
-    <label>Rate<input class="line-rate" type="number" min="0" step="0.01" value="${lineInputRate(line)}"></label>
+    <label>Rate per quantity<input class="line-rate" type="number" min="0" step="0.01" value="${lineInputRate(line)}"></label>
     <label>GST %<input class="line-gst" type="number" min="0" step="0.01" value="${num(line.gstRate)}"></label>
     <label>Amount<input class="line-amount" disabled></label>
     <button type="button" class="mini-btn" title="Remove"><i data-lucide="x"></i></button>
@@ -5526,18 +5510,10 @@ function addLineRow(line = blankLine(entryMode)) {
   `;
   row.querySelector(".line-item").addEventListener("change", event => {
     const item = state.items.find(candidate => candidate.id === event.target.value);
-    row.dataset.grossRate = "";
-    row.dataset.taxableRate = "";
     row.querySelector(".line-hsn").value = lineHsn({}, item || {});
     row.querySelector(".line-rate").value = entryMode === "sale" ? num(item?.saleRate) : num(item?.purchaseRate);
-    row.querySelector(".line-gst").value = num(item?.gstRate);
+    row.querySelector(".line-gst").value = item && item.gstRate !== undefined ? num(item.gstRate) : DEFAULT_SALE_GST_RATE;
     updateEntryTotals();
-  });
-  row.querySelector(".line-rate").addEventListener("input", () => {
-    if (row.dataset.taxableRate && !amountsClose(row.querySelector(".line-rate").value, row.dataset.taxableRate, 0.001)) {
-      row.dataset.grossRate = "";
-      row.dataset.taxableRate = "";
-    }
   });
   row.querySelectorAll("input, select, textarea").forEach(input => input.addEventListener("input", updateEntryTotals));
   row.querySelector("button").addEventListener("click", () => {
@@ -5562,7 +5538,7 @@ function collectLines(options = {}) {
       hsn: lineHsn({ hsn: row.querySelector(".line-hsn")?.value }, item),
       qty: num(row.querySelector(".line-qty").value),
       rate: num(row.querySelector(".line-rate").value),
-      grossRate: purchaseGrossRateFromRow(row),
+      grossRate: num(row.querySelector(".line-rate").value),
       gstRate: num(row.querySelector(".line-gst").value),
       imeiNumbers: normalizeImeiNumbers(row.querySelector(".line-imei")?.value || "")
     };
@@ -5591,29 +5567,15 @@ function applyLineHsnToItems(lines = []) {
   });
 }
 
-function purchaseGrossRateFromRow(row) {
-  if (entryMode !== "purchase") return 0;
-  const grossRate = num(row.dataset.grossRate);
-  if (!grossRate) return 0;
-  const taxableRate = num(row.dataset.taxableRate);
-  const currentRate = num(row.querySelector(".line-rate").value);
-  return taxableRate && amountsClose(currentRate, taxableRate, 0.001) ? grossRate : 0;
-}
-
 function updateEntryTotals() {
-  const includeGst = entryRatesIncludeGst();
   $$(".line-row").forEach(row => {
     const qty = num(row.querySelector(".line-qty").value);
-    const rawRate = num(row.querySelector(".line-rate").value);
-    const gstRate = num(row.querySelector(".line-gst").value);
-    const taxableRate = includeGst ? taxableRateFromInclusive(rawRate, gstRate) : rawRate;
-    const taxable = qty * taxableRate;
-    const grossRate = purchaseGrossRateFromRow(row);
-    const amount = grossRate ? qty * grossRate : taxable + (taxable * gstRate / 100);
-    row.querySelector(".line-amount").value = money(amount);
+    const inclusiveRate = num(row.querySelector(".line-rate").value);
+    row.querySelector(".line-amount").value = money(qty * inclusiveRate);
   });
-  const calculated = totals(collectLines());
-  const purchaseSource = entryMode === "purchase" ? currentPurchaseReviewSource(collectLines()) : null;
+  const lines = collectLines();
+  const calculated = totals(lines);
+  const purchaseSource = entryMode === "purchase" ? currentPurchaseReviewSource(lines) : null;
   const purchaseRoundOff = entryMode === "purchase" ? purchaseRoundOffForSource(purchaseSource, calculated) : 0;
   const payableTotal = entryMode === "purchase" ? purchaseTotalWithRoundOff(calculated, purchaseRoundOff) : calculated.total;
   $("#entryTaxable").textContent = money(calculated.taxable);
@@ -5671,7 +5633,7 @@ function updateLineRequiredHighlights() {
     setRequiredAttention(itemSelect, itemNeedsReview, "Review item name");
     setRequiredAttention(hsnInput, !lineHsn({ hsn: hsnInput?.value, itemId: itemSelect?.value }, item), "HSN/SAC required");
     setRequiredAttention(qtyInput, num(qtyInput?.value) <= 0, "Quantity required");
-    setRequiredAttention(rateInput, num(rateInput?.value) <= 0, "Rate required");
+    setRequiredAttention(rateInput, num(rateInput?.value) <= 0, "Rate per quantity required");
   });
 }
 
@@ -5898,7 +5860,7 @@ async function saveEntry(event) {
     attachments: clone(entryDraftMeta.attachments || []),
     extractedTaxes: clone(entryDraftMeta.extractedTaxes || null),
     source: entryDraftMeta.source || "manual",
-    rateIncludesGst: entryMode === "purchase" ? false : entryRatesIncludeGst(),
+    rateIncludesGst: true,
     sellerGstin: normalizeGstin(entryMode !== "sale" ? (party?.gstin || entryDraftMeta.sellerGstin) : profile?.gstin),
     buyerGstin: normalizeGstin(entryMode !== "sale" ? profile?.gstin : (party?.gstin || entryDraftMeta.buyerGstin)),
     billToSnapshot: saleAddress?.billToSnapshot || null,
@@ -6394,7 +6356,7 @@ function showInvoice(id, kind) {
             <th>Description of Goods</th>
             <th>HSN/SAC</th>
             <th class="num">Quantity</th>
-            <th class="num">Rate</th>
+            <th class="num">Rate per<br>quantity</th>
             <th class="num">Taxable</th>
             <th class="num">GST %</th>
             <th class="num">GST Amt</th>
@@ -6412,7 +6374,7 @@ function showInvoice(id, kind) {
               <td class="item-name">${escapeHtml(item.name || itemName(line.itemId))}${invoiceImeiMarkup(line.imeiNumbers)}</td>
               <td>${escapeHtml(lineHsn(line, item))}</td>
               <td class="num strong">${formatQty(line.qty)}</td>
-              <td class="num">${formatInvoiceMoney(line.rate)}</td>
+              <td class="num">${formatInvoiceMoney(lineGrossRate(line))}</td>
               <td class="num strong">${formatInvoiceMoney(taxable)}</td>
               <td class="num">${num(line.gstRate)}%</td>
               <td class="num">${formatInvoiceMoney(gstAmount)}</td>
@@ -6638,7 +6600,7 @@ function formatDateDots(dateValue) {
 }
 
 function lineGrossRate(line) {
-  return num(line.qty) ? round2(lineGrossAmount(line) / num(line.qty)) : lineGrossAmount(line);
+  return lineInclusiveUnitRate(line);
 }
 
 function formatPoQty(value) {
@@ -7502,7 +7464,7 @@ function invoicePdfLayout(pdf) {
     { key: "desc", label: "Description of Goods", x: margin + 8, w: 50, align: "left" },
     { key: "hsn", label: "HSN/SAC", x: margin + 58, w: 17, align: "left" },
     { key: "qty", label: "Qty", x: margin + 75, w: 15, align: "right" },
-    { key: "rate", label: "Rate", x: margin + 90, w: 20, align: "right" },
+    { key: "rate", label: "Rate/Qty", x: margin + 90, w: 20, align: "right" },
     { key: "taxable", label: "Taxable", x: margin + 110, w: 20, align: "right" },
     { key: "gstRate", label: "GST %", x: margin + 130, w: 12, align: "right" },
     { key: "gst", label: "GST Amt", x: margin + 142, w: 20, align: "right" },
@@ -7644,7 +7606,7 @@ function invoicePdfLineRow(line, item, index, documentKind = "invoice") {
     description,
     hsn: lineHsn(line, item),
     qty: formatQty(line.qty),
-    rate: formatInvoiceMoney(documentKind === "po" ? lineGrossRate(line) : line.rate),
+    rate: formatInvoiceMoney(lineGrossRate(line)),
     taxable: formatInvoiceMoney(lineTaxableAmount(line)),
     gstRate: `${num(line.gstRate)}%`,
     gst: formatInvoiceMoney(lineGstAmount(line)),
@@ -9140,10 +9102,12 @@ function applySaleChatDefaults(parsed, sourceMessage) {
     reviewMessages,
     lines: lines.map(line => {
       const gstRate = resolveSaleLineGstRate(line, explicitGstRate);
+      const taxableRate = ratesIncludeGst ? taxableRateFromInclusive(line.rate, gstRate) : num(line.rate);
       return {
         ...line,
         hsn: resolveSaleLineHsn(line, explicitHsn),
-        rate: ratesIncludeGst ? taxableRateFromInclusive(line.rate, gstRate) : num(line.rate),
+        rate: taxableRate,
+        grossRate: ratesIncludeGst ? num(line.rate) : inclusiveRateFromTaxable(taxableRate, gstRate),
         gstRate
       };
     })
@@ -9209,7 +9173,14 @@ function taxableRateFromInclusive(rate, gstRate) {
   const inclusiveRate = num(rate);
   const taxRate = num(gstRate);
   if (!inclusiveRate || !taxRate) return inclusiveRate;
-  return round2(inclusiveRate / (1 + taxRate / 100));
+  return Number((inclusiveRate / (1 + taxRate / 100)).toFixed(6));
+}
+
+function inclusiveRateFromTaxable(rate, gstRate) {
+  const taxableRate = num(rate);
+  const taxRate = num(gstRate);
+  if (!taxableRate || !taxRate) return taxableRate;
+  return round2(taxableRate * (1 + taxRate / 100));
 }
 
 function resolveSaleLineHsn(line, explicitHsn = "") {
@@ -9379,6 +9350,7 @@ function buildChatSaleDraft(parsed, sourceMessage) {
       itemName: item.name || line.name || "",
       qty: num(line.qty) || 1,
       rate: num(line.rate),
+      grossRate: lineInclusiveUnitRate(line),
       gstRate: num(line.gstRate)
     };
   });
@@ -9437,7 +9409,7 @@ function ensureChatItem(line) {
     name: line.name || "Smart Bill Item",
     hsn: lineHsn(line, {}),
     gstRate: num(line.gstRate) || 18,
-    saleRate: num(line.rate),
+    saleRate: lineInclusiveUnitRate(line),
     purchaseRate: 0,
     openingStock: 0,
     minStock: 0
@@ -9509,17 +9481,17 @@ function renderSmartBillReview(parsed) {
       </div>
       <div class="smart-review-items">
         <table>
-          <thead><tr><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Amount</th></tr></thead>
+          <thead><tr><th>Item</th><th>HSN</th><th class="num">Qty</th><th class="num">Rate per quantity</th><th class="num">GST</th><th class="num">Amount</th></tr></thead>
           <tbody>
             ${lines.map(line => {
-              const taxable = lineTaxableAmount(line);
+              const lineTotal = lineGrossAmount(line);
               return `<tr>
                 <td>${escapeHtml(line.name || "Item")}</td>
                 <td>${escapeHtml(lineHsn(line, {}))}</td>
                 <td class="num">${formatQty(line.qty)}</td>
-                <td class="num">${money(line.rate)}</td>
+                <td class="num">${money(lineGrossRate(line))}</td>
                 <td class="num">${num(line.gstRate)}%</td>
-                <td class="num">${money(taxable)}</td>
+                <td class="num">${money(lineTotal)}</td>
               </tr>`;
             }).join("")}
           </tbody>
@@ -9557,6 +9529,7 @@ function smartBillReviewLines(parsed) {
     hsn: lineHsn(line, {}),
     qty: num(line.qty) || 1,
     rate: num(line.rate),
+    grossRate: lineInclusiveUnitRate(line),
     gstRate: num(line.gstRate) || DEFAULT_SALE_GST_RATE
   }));
 }
@@ -10313,13 +10286,16 @@ function buildPurchaseDraft(parsed) {
   const supplierInvoicePincode = normalizePincode(extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace));
   const lines = parsed.lines.map(line => {
     const item = ensureImportedItem(line);
+    const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
+    const inclusiveRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
+    const taxableRate = num(line.rate) || taxableRateFromInclusive(inclusiveRate, gstRate);
     return {
       itemId: item.id,
       itemName: item.name || line.name || "",
       qty: num(line.qty) || 1,
-      rate: num(line.rate),
-      grossRate: num(line.grossRate),
-      gstRate: num(line.gstRate),
+      rate: taxableRate,
+      grossRate: inclusiveRate,
+      gstRate,
       imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
     };
   });
@@ -10403,13 +10379,15 @@ function ensureImportedItem(line) {
     if (shouldRenameImportedItem(existing, name, hsn)) existing.name = name;
     return existing;
   }
+  const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
+  const inclusiveRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
   const item = {
     id: uid(),
     name,
     hsn,
-    gstRate: num(line.gstRate),
-    saleRate: num(line.rate),
-    purchaseRate: num(line.rate),
+    gstRate,
+    saleRate: inclusiveRate,
+    purchaseRate: inclusiveRate,
     openingStock: 0,
     minStock: 0
   };
