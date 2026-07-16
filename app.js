@@ -1420,6 +1420,18 @@ function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "
       imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
     };
   });
+  const parsedEwayDetails = parsed.ewayDetails && typeof parsed.ewayDetails === "object"
+    ? parsed.ewayDetails
+    : {};
+  const ewayDetails = normalizePurchaseEwayDetails({
+    ...parsedEwayDetails,
+    fromPincode: parsedEwayDetails.fromPincode
+      || extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace),
+    toPincode: parsedEwayDetails.toPincode
+      || extractPreferredPincode(parsed.buyerAddress || parsed.buyerPlace),
+    destinationPreset: parsedEwayDetails.destinationPreset || "buyer",
+    dispatchFromAddress: parsedEwayDetails.dispatchFromAddress || parsed.supplierAddress || ""
+  });
   return {
     fileName: String(parsed.fileName || fallbackFileName || "Invoice").trim(),
     profileId: String(parsed.profileId || ""),
@@ -1443,6 +1455,7 @@ function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "
     extractedTaxes: parsed.extractedTaxes && typeof parsed.extractedTaxes === "object" ? clone(parsed.extractedTaxes) : null,
     reviewMessages: uniqueMessages(parsed.reviewMessages || []),
     attachments: Array.isArray(parsed.attachments) ? clone(parsed.attachments) : [],
+    ewayDetails,
     lines
   };
 }
@@ -12343,6 +12356,7 @@ function renderPurchaseImportReview(document) {
   const totals = purchaseImportCalculatedTotals(parsed);
   const supplierPin = extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace);
   const supplierMemory = resolveSupplierLocationMemory(parsed);
+  const ewayDetails = purchaseImportEwayDetails(parsed);
   const errors = document.validationErrors || [];
   const warnings = document.validationWarnings || [];
   const attachment = parsed.attachments?.[0] || {};
@@ -12362,12 +12376,79 @@ function renderPurchaseImportReview(document) {
       <label>Round Off / Adjustment<input name="roundOff" type="number" step="0.01" value="${escapeHtml(round2(parsed.roundOff))}"></label>
       <label class="span-2">Supplier Address<textarea name="supplierAddress" rows="3">${escapeHtml(parsed.supplierAddress)}</textarea></label>
     </div>
+    ${renderPurchaseImportEwayFields(ewayDetails)}
     <div class="purchase-import-section-head"><h5>Items</h5><button class="secondary-btn" type="button" data-import-add-line><i data-lucide="plus"></i><span>Add Item</span></button></div>
     <div class="purchase-import-line-table">${(parsed.lines?.length ? parsed.lines : [purchaseImportBlankLine()]).map((line, index) => renderPurchaseImportLine(line, index, errors)).join("")}</div>
     ${renderPurchaseImportTotals(totals)}
     ${renderPurchaseImportMessages(errors, warnings)}
     <div class="purchase-import-review-actions"><button class="primary-btn" type="submit"><i data-lucide="check"></i><span>Save Review</span></button></div>
   </form>`;
+}
+
+function purchaseImportEwayDetails(parsed = {}, overrides = {}) {
+  const profile = profileByImportParsed(parsed) || profileById(parsed.profileId || activeProfileId()) || {};
+  const supplier = {
+    name: parsed.supplierName || "Supplier",
+    address: parsed.supplierAddress || "",
+    place: parsed.supplierPlace || ""
+  };
+  const existing = normalizePurchaseEwayDetails({
+    ...(parsed.ewayDetails || {}),
+    fromPincode: parsed.ewayDetails?.fromPincode
+      || extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace),
+    toPincode: parsed.ewayDetails?.toPincode
+      || extractPreferredPincode(parsed.buyerAddress || profile.address || parsed.buyerPlace),
+    destinationPreset: parsed.ewayDetails?.destinationPreset || "buyer",
+    dispatchFromAddress: parsed.ewayDetails?.dispatchFromAddress || parsed.supplierAddress || ""
+  });
+  const details = normalizePurchaseEwayDetails({ ...existing, ...overrides });
+  const route = purchaseEwayRouteFromValues(profile, supplier, details);
+  let distanceKm = details.distanceKm;
+  let distanceSource = details.distanceSource;
+  if (!distanceKm) {
+    const samePinDistance = samePincodeDistanceKm(route);
+    const fixedDistance = fixedEwayRouteDistance(route.fromPincode, route.toPincode);
+    distanceKm = samePinDistance || fixedDistance || route.savedDistance || 0;
+    distanceSource = samePinDistance
+      ? "same-pincode"
+      : fixedDistance
+        ? "configured-route"
+        : route.savedDistance
+          ? "shared-cache"
+          : "";
+  }
+  return normalizePurchaseEwayDetails({
+    ...details,
+    fromPincode: route.fromPincode,
+    toPincode: route.toPincode,
+    routeKey: route.routeKey,
+    distanceKm,
+    distanceSource,
+    distanceConfirmed: Boolean(distanceKm) && distanceSource !== "local-estimate"
+  });
+}
+
+function renderPurchaseImportEwayFields(details = {}) {
+  const transType = details.transType || "1";
+  const destinationPreset = details.destinationPreset || "buyer";
+  const usesShipTo = ewayUsesShipTo(transType);
+  const usesDispatchFrom = ewayUsesDispatchFrom(transType);
+  return `<section class="purchase-import-eway">
+    <div class="purchase-import-section-head"><h5>E-Way Details</h5></div>
+    <div class="purchase-import-fields">
+      <label>Transaction Type<select name="ewayTransType">
+        <option value="1" ${transType === "1" ? "selected" : ""}>Regular</option>
+        <option value="2" ${transType === "2" ? "selected" : ""}>Bill To - Ship To</option>
+        <option value="3" ${transType === "3" ? "selected" : ""}>Bill From - Dispatch From</option>
+        <option value="4" ${transType === "4" ? "selected" : ""}>Bill From/To - Dispatch/Ship</option>
+      </select></label>
+      <label>Vehicle No.<input name="ewayVehicleNo" value="${escapeHtml(details.vehicleNo || "")}" placeholder="AP03AB1234" autocapitalize="characters"></label>
+      <label>Transport Distance KM<input name="ewayDistanceKm" type="number" min="0" step="1" value="${escapeHtml(details.distanceKm || "")}" placeholder="Auto"></label>
+      <label data-import-eway-ship-to ${usesShipTo ? "" : "hidden"}>Destination Address<select name="ewayDestinationPreset">${ewayDestinationPresetOptions(destinationPreset)}</select></label>
+      <label class="span-2" data-import-eway-dispatch-from ${usesDispatchFrom ? "" : "hidden"}>Dispatch From Address<textarea name="ewayDispatchFromAddress" rows="2">${escapeHtml(details.dispatchFromAddress || "")}</textarea></label>
+      <label class="span-2" data-import-eway-custom-ship-to ${usesShipTo && destinationPreset === "custom" ? "" : "hidden"}>Custom Ship To Address<textarea name="ewayShipToAddress" rows="2">${escapeHtml(details.shipToAddress || "")}</textarea></label>
+    </div>
+  </section>`;
 }
 
 function renderPurchaseImportSupplierMemory(parsed = {}, memory = resolveSupplierLocationMemory(parsed)) {
@@ -12488,10 +12569,12 @@ function savePurchaseImportReview(event) {
 function collectPurchaseImportReviewForm(form, currentParsed = {}) {
   const profile = state.settings.profiles.find(row => row.id === form.elements.profileId?.value) || activeProfile();
   const supplierGstin = normalizeGstin(form.elements.supplierGstin?.value || "");
+  const supplierName = form.elements.supplierName?.value.trim() || "";
   const supplierLocationId = form.elements.supplierLocationId?.value || "";
   const selectedSupplierLocation = supplierLocationsByGstin(supplierGstin).find(location => location.id === supplierLocationId) || null;
   const supplierPincode = normalizePincode(form.elements.supplierPincode?.value || "");
   const supplierAddress = addressWithUpdatedPincode(form.elements.supplierAddress?.value || "", supplierPincode);
+  const supplierPlace = selectedSupplierLocation?.place || currentParsed.supplierPlace || stateNameFromGstin(supplierGstin) || "";
   const currentSupplierPincode = extractPreferredPincode(currentParsed.supplierAddress || currentParsed.supplierPlace);
   const supplierPincodeSource = selectedSupplierLocation
     ? "supplier-master"
@@ -12511,6 +12594,44 @@ function collectPurchaseImportReviewForm(form, currentParsed = {}) {
       imeiNumbers: normalizeImeiNumbers($("[name='lineImeiNumbers']", row)?.value || "")
     };
   });
+  const currentEwayDetails = purchaseImportEwayDetails({
+    ...currentParsed,
+    profileId: profile.id,
+    buyerAddress: profile.address || "",
+    buyerPlace: profile.state || "",
+    supplierName,
+    supplierAddress,
+    supplierPlace
+  }, {
+    ...(currentParsed.ewayDetails || {}),
+    fromPincode: supplierPincode,
+    toPincode: ""
+  });
+  const enteredDistance = Math.max(0, num(form.elements.ewayDistanceKm?.value));
+  const distanceChanged = enteredDistance > 0 && enteredDistance !== num(currentEwayDetails.distanceKm);
+  const ewayDetails = purchaseImportEwayDetails({
+    ...currentParsed,
+    profileId: profile.id,
+    buyerAddress: profile.address || "",
+    buyerPlace: profile.state || "",
+    supplierName,
+    supplierAddress,
+    supplierPlace
+  }, {
+    ...currentEwayDetails,
+    transType: form.elements.ewayTransType?.value || "1",
+    vehicleNo: normalizeVehicleNumber(form.elements.ewayVehicleNo?.value || ""),
+    distanceKm: enteredDistance,
+    distanceSource: enteredDistance
+      ? (distanceChanged ? "manual-confirmed" : currentEwayDetails.distanceSource)
+      : "",
+    distanceConfirmed: Boolean(enteredDistance),
+    destinationPreset: form.elements.ewayDestinationPreset?.value || "buyer",
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress?.value.trim() || supplierAddress,
+    shipToAddress: form.elements.ewayShipToAddress?.value.trim() || "",
+    fromPincode: supplierPincode,
+    toPincode: ""
+  });
   return {
     ...currentParsed,
     profileId: profile.id,
@@ -12518,16 +12639,17 @@ function collectPurchaseImportReviewForm(form, currentParsed = {}) {
     buyerGstin: normalizeGstin(profile.gstin),
     buyerAddress: profile.address || "",
     buyerPlace: profile.state || "",
-    supplierName: form.elements.supplierName?.value.trim() || "",
+    supplierName,
     supplierGstin,
     supplierAddress,
-    supplierPlace: selectedSupplierLocation?.place || currentParsed.supplierPlace || stateNameFromGstin(supplierGstin) || "",
+    supplierPlace,
     supplierLocationId,
     supplierPincodeSource,
     supplierLocationAmbiguous: Boolean(!supplierPincode && supplierLocationsByGstin(supplierGstin).length > 1),
     invoiceNumber: form.elements.invoiceNumber?.value.trim() || "",
     invoiceDate: form.elements.invoiceDate?.value || "",
     roundOff: round2(form.elements.roundOff?.value),
+    ewayDetails,
     lines
   };
 }
@@ -12545,17 +12667,37 @@ function updatePurchaseImportReviewTotals(event) {
 }
 
 function handlePurchaseImportReviewChange(event) {
-  if (event.target.name !== "supplierLocationId") return;
   const form = event.target.closest("#purchaseImportReviewForm");
   const document = purchaseImportDocumentById(form?.dataset.importReviewId);
   if (!form || !document) return;
+  if (["ewayTransType", "ewayDestinationPreset"].includes(event.target.name)) {
+    updatePurchaseImportEwayVisibility(form);
+    return;
+  }
+  if (event.target.name !== "supplierLocationId") return;
   const gstin = normalizeGstin(form.elements.supplierGstin?.value || document.parsed?.supplierGstin);
   const location = supplierLocationsByGstin(gstin).find(row => row.id === event.target.value);
   if (!location) return;
+  const previousSupplierAddress = form.elements.supplierAddress.value.trim();
+  const dispatchFromInput = form.elements.ewayDispatchFromAddress;
   form.elements.supplierPincode.value = location.pincode;
   form.elements.supplierAddress.value = location.address;
+  if (dispatchFromInput && (!dispatchFromInput.value.trim() || dispatchFromInput.value.trim() === previousSupplierAddress)) {
+    dispatchFromInput.value = location.address;
+  }
   const note = $(".purchase-import-memory-note span", form);
   if (note) note.textContent = "PIN restored from the shared supplier master.";
+}
+
+function updatePurchaseImportEwayVisibility(form) {
+  const transType = form.elements.ewayTransType?.value || "1";
+  const destinationPreset = form.elements.ewayDestinationPreset?.value || "buyer";
+  const shipToField = $("[data-import-eway-ship-to]", form);
+  const dispatchFromField = $("[data-import-eway-dispatch-from]", form);
+  const customShipToField = $("[data-import-eway-custom-ship-to]", form);
+  if (shipToField) shipToField.hidden = !ewayUsesShipTo(transType);
+  if (dispatchFromField) dispatchFromField.hidden = !ewayUsesDispatchFrom(transType);
+  if (customShipToField) customShipToField.hidden = !ewayUsesShipTo(transType) || destinationPreset !== "custom";
 }
 
 function handlePurchaseImportReviewClick(event) {
@@ -13542,9 +13684,15 @@ function buildPurchaseDraft(parsed, selectedProfileOverride = null) {
     lines,
     attachments: clone(parsed.attachments || []),
     extractedTaxes: clone(parsed.extractedTaxes || null),
-    ewayDetails: normalizePurchaseEwayDetails({
-      fromPincode: supplierInvoicePincode,
-      dispatchFromAddress: parsed.supplierAddress || ""
+    ewayDetails: purchaseImportEwayDetails({
+      ...parsed,
+      profileId: buyerProfile.id,
+      buyerAddress: buyerProfile.address || parsed.buyerAddress || "",
+      buyerPlace: buyerProfile.state || parsed.buyerPlace || ""
+    }, {
+      ...(parsed.ewayDetails || {}),
+      fromPincode: supplierInvoicePincode || parsed.ewayDetails?.fromPincode,
+      dispatchFromAddress: parsed.ewayDetails?.dispatchFromAddress || parsed.supplierAddress || ""
     }),
     roundOff: round2(num(parsed.roundOff)),
     sellerGstin: parsed.supplierGstin || "",

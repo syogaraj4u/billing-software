@@ -4677,6 +4677,23 @@ body.invoice-pdf-capture .invoice-preview-frame {
   font-size: 13px;
 }
 
+.purchase-import-eway {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.purchase-import-eway [hidden] {
+  display: none !important;
+}
+
+.purchase-import-eway input[name="ewayVehicleNo"] {
+  text-transform: uppercase;
+}
+
 .purchase-import-line-table {
   display: grid;
   gap: 8px;
@@ -4845,15 +4862,19 @@ body.invoice-pdf-capture .invoice-preview-frame {
   }
 
   .purchase-import-workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(126px, 30vh) minmax(0, 1fr);
+    display: block;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .purchase-import-list {
     display: flex;
     gap: 8px;
+    min-height: 0;
+    height: auto;
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: visible;
     padding: 9px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -4862,7 +4883,7 @@ body.invoice-pdf-capture .invoice-preview-frame {
 
   .purchase-import-document {
     min-width: min(82vw, 330px);
-    height: 100%;
+    height: auto;
     min-height: 108px;
     margin: 0;
     scroll-snap-align: start;
@@ -4871,6 +4892,11 @@ body.invoice-pdf-capture .invoice-preview-frame {
   .purchase-import-review-form {
     gap: 12px;
     padding: 12px;
+  }
+
+  .purchase-import-review {
+    min-height: auto;
+    overflow: visible;
   }
 
   .purchase-import-review-title {
