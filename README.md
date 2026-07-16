@@ -24,6 +24,7 @@ Browser-based cloud billing software for purchase entry, sales entry, purchase o
 - Supabase login and cloud workspace sync
 - Share a workspace with staff by email
 - Bank/card statement import and purchase/sale reconciliation
+- Tally XML master import plus duplicate-safe master and voucher exports
 - Supabase Edge Function scaffolds for OpenAI extraction and month-end email
 
 ## GitHub Pages
@@ -94,6 +95,14 @@ The app automatically matches a unique debit to a purchase and a unique credit t
 Run `supabase/migrations/20260716120000_credit_notes.sql` once, or rerun the complete `supabase-schema.sql`. The migration creates normalized credit-note, credit-note-item, purchase-return, and purchase-return-item tables and backfills any existing documents from workspace JSON.
 
 Each firm has its own non-reusable credit-note sequence, such as `NS/CN/26-27/001` and `KN/CN/26-27/001`. A credit note can return all or part of an original sales invoice. Goods-return notes add the credited quantity back to seller stock; financial-only adjustments do not affect stock. When the buyer is one of the other group firms, the app creates and links the corresponding purchase return automatically.
+
+## Tally Sync
+
+Run `supabase/migrations/20260716163000_tally_sync.sql` once, or rerun the complete `supabase-schema.sql`. This adds workspace-secured Tally export/import history so duplicate protection is shared by all users and devices.
+
+Open Tally Sync for the selected GST company. Export Masters XML first, then export Vouchers XML for the required date range. Voucher files contain sales, purchases, credit notes, purchase returns, round-off entries and previously exported voucher cancellations. The app omits an already exported document unless Include previously exported is selected. Mark a download as Imported after Tally accepts it.
+
+The company name, unit, godown, ledger names and voucher types are configurable separately for each GST profile. Tally-exported XML containing party ledgers and stock items can be reviewed before applying it to the shared party and item masters.
 
 ## Month-End Reports
 

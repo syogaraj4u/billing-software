@@ -1,4 +1,4 @@
-const CACHE_NAME = "billing-software-v156";
+const CACHE_NAME = "billing-software-v157";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const APP_ASSETS = [
   "./desktop-view.css",
   "./mobile-view.css",
   "./app.js",
+  "./tally-sync.js",
   "./cloud-config.js",
   "./manifest.webmanifest",
   "./icon.svg",

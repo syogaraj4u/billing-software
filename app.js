@@ -17,6 +17,7 @@ const CLOUD_ROW_TABLES = {
   purchaseOrderItems: "billing_purchase_order_items",
   paymentSources: "billing_payment_sources",
   bankTransactions: "billing_bank_transactions",
+  tallySyncRuns: "billing_tally_sync_runs",
   auditLogs: "billing_audit_logs",
   backups: "billing_cloud_backups"
 };
@@ -481,7 +482,8 @@ const defaultState = {
   purchaseReturns: [],
   purchaseOrders: [],
   paymentSources: createDefaultPaymentSources(),
-  bankTransactions: []
+  bankTransactions: [],
+  tallySyncRuns: []
 };
 
 let state = loadState();
@@ -528,6 +530,7 @@ let reconciliationMonth = "";
 let reconciliationSourceFilterId = "";
 let editingPaymentSourceId = null;
 let reconciliationMatchTransactionId = null;
+let pendingTallyImport = null;
 
 const COMPANY_PAGE_TRANSITION_MS = 460;
 
@@ -603,6 +606,11 @@ function normalizeState(value) {
     },
     ewayRouteDistances: normalizeEwayRouteDistances(existingEwayRouteDistances)
   };
+  value.settings.profiles.forEach(profile => {
+    profile.tallySettings = window.TallySync
+      ? window.TallySync.normalizeSettings(profile.tallySettings || {}, profile)
+      : (profile.tallySettings || {});
+  });
   if (!profiles.some(profile => profile.id === value.settings.activeProfileId)) {
     value.settings.activeProfileId = profiles[0].id;
   }
@@ -624,6 +632,9 @@ function normalizeState(value) {
     : createDefaultPaymentSources().map(normalizePaymentSourceForState);
   value.bankTransactions = Array.isArray(value.bankTransactions)
     ? value.bankTransactions.map(normalizeBankTransactionForState)
+    : [];
+  value.tallySyncRuns = Array.isArray(value.tallySyncRuns)
+    ? value.tallySyncRuns.map(normalizeTallySyncRunForState)
     : [];
   [...value.sales, ...value.creditNotes, ...value.purchases, ...value.purchaseReturns, ...value.purchaseOrders].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
@@ -674,6 +685,7 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
     changed = mergeByIdentity(merged.purchaseOrders, local.purchaseOrders, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.paymentSources, local.paymentSources, paymentSourceMergeKey) || changed;
     changed = mergeByIdentity(merged.bankTransactions, local.bankTransactions, bankTransactionMergeKey) || changed;
+    changed = mergeByIdentity(merged.tallySyncRuns, local.tallySyncRuns, tallySyncRunMergeKey, mergeExistingTallySyncRun) || changed;
     mergeProfileCounters(merged.settings.profiles, local.settings.profiles);
   });
   return { state: normalizeState(merged), changed };
@@ -767,6 +779,18 @@ function bankTransactionMergeKey(transaction = {}) {
   ].join("|");
 }
 
+function tallySyncRunMergeKey(run = {}) {
+  return run.id || [run.profileId || "", run.runType || "", run.fileName || "", run.createdAt || ""].join("|");
+}
+
+function mergeExistingTallySyncRun(target, source) {
+  const targetUpdated = new Date(target?.updatedAt || target?.createdAt || 0).getTime() || 0;
+  const sourceUpdated = new Date(source?.updatedAt || source?.createdAt || 0).getTime() || 0;
+  if (sourceUpdated <= targetUpdated || cloudAuditComparable(target) === cloudAuditComparable(source)) return false;
+  Object.assign(target, clone(source));
+  return true;
+}
+
 function mergeProfileCounters(targetProfiles = [], sourceProfiles = []) {
   sourceProfiles.forEach(source => {
     const target = targetProfiles.find(profile => profile.id === source.id);
@@ -774,6 +798,12 @@ function mergeProfileCounters(targetProfiles = [], sourceProfiles = []) {
     target.nextSaleNo = Math.max(num(target.nextSaleNo), num(source.nextSaleNo));
     target.nextPurchaseNo = Math.max(num(target.nextPurchaseNo), num(source.nextPurchaseNo));
     target.nextPoNo = Math.max(num(target.nextPoNo), num(source.nextPoNo));
+    const targetTallyUpdated = new Date(target.tallySettingsUpdatedAt || 0).getTime() || 0;
+    const sourceTallyUpdated = new Date(source.tallySettingsUpdatedAt || 0).getTime() || 0;
+    if (sourceTallyUpdated > targetTallyUpdated && source.tallySettings) {
+      target.tallySettings = clone(source.tallySettings);
+      target.tallySettingsUpdatedAt = source.tallySettingsUpdatedAt;
+    }
   });
 }
 
@@ -1093,6 +1123,27 @@ function normalizeBankTransactionForState(transaction = {}) {
     importedAt: String(transaction.importedAt || "")
   };
   normalizeCloudEntityMeta(normalized, transaction);
+  return normalized;
+}
+
+function normalizeTallySyncRunForState(run = {}) {
+  const normalized = {
+    id: String(run.id || uid()),
+    profileId: String(run.profileId || "gst-1"),
+    runType: ["masters-export", "vouchers-export", "masters-import"].includes(run.runType)
+      ? run.runType
+      : "vouchers-export",
+    status: ["Exported", "Imported", "Applied", "Failed"].includes(run.status) ? run.status : "Exported",
+    fileName: String(run.fileName || "").trim(),
+    sourceFile: String(run.sourceFile || "").trim(),
+    fromDate: /^\d{4}-\d{2}-\d{2}$/.test(String(run.fromDate || "")) ? run.fromDate : "",
+    toDate: /^\d{4}-\d{2}-\d{2}$/.test(String(run.toDate || "")) ? run.toDate : "",
+    documentCount: Math.max(0, Math.round(num(run.documentCount))),
+    entryRefs: Array.isArray(run.entryRefs) ? [...new Set(run.entryRefs.map(value => String(value || "").trim()).filter(Boolean))] : [],
+    counts: run.counts && typeof run.counts === "object" ? clone(run.counts) : {},
+    message: String(run.message || "").trim()
+  };
+  normalizeCloudEntityMeta(normalized, run);
   return normalized;
 }
 
@@ -2145,6 +2196,13 @@ function bindEvents() {
   }));
   bindIf("#reconciliationMatchForm", "submit", saveManualReconciliationMatch);
   bindIf("#reconciliationBookEntrySelect", "change", updateReconciliationMatchDifference);
+  bindIf("#tallySettingsForm", "submit", saveTallySettings);
+  bindIf("#tallyExportMastersBtn", "click", exportTallyMasters);
+  bindIf("#tallyExportVouchersBtn", "click", exportTallyVouchers);
+  bindIf("#tallyMasterImportInput", "change", handleTallyMasterImport);
+  bindIf("#tallyApplyImportBtn", "click", applyTallyMasterImport);
+  bindIf("#tallyDiscardImportBtn", "click", discardTallyMasterImport);
+  bindIf("#tallyHistory", "click", handleTallyHistoryAction);
   bindIf("#poMonthFilter", "change", event => {
     entryMonthFilters.po = event.target.value;
     renderEntries("po");
@@ -2250,6 +2308,7 @@ function showView(view) {
     items: "Items",
     parties: "Party Master",
     reconciliation: "Banking",
+    tallySync: "Tally Sync",
     reports: "Reports",
     settings: "Settings"
   }[view];
@@ -2268,6 +2327,7 @@ function renderAll() {
   renderItems();
   renderParties();
   renderReconciliation();
+  renderTallySync();
   renderSettings();
   renderReport();
   renderCloudUi();
@@ -2783,7 +2843,7 @@ async function enrichCloudWorkspaceWithRows(workspace = {}) {
 
 async function readNormalizedCloudState(workspaceId) {
   if (!cloudClient || !workspaceId) return null;
-  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions] = await Promise.all([
+  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions, tallySyncRuns] = await Promise.all([
     readCloudTableRows(CLOUD_ROW_TABLES.parties, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.items, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.sales, workspaceId),
@@ -2792,10 +2852,11 @@ async function readNormalizedCloudState(workspaceId) {
     readCloudTableRows(CLOUD_ROW_TABLES.purchaseReturns, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.purchaseOrders, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.paymentSources, workspaceId),
-    readCloudTableRows(CLOUD_ROW_TABLES.bankTransactions, workspaceId)
+    readCloudTableRows(CLOUD_ROW_TABLES.bankTransactions, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.tallySyncRuns, workspaceId)
   ]);
   if ([parties, items, sales, purchases, purchaseOrders].some(result => result === null)) return null;
-  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || []].some(rows => rows.length);
+  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || [], tallySyncRuns || []].some(rows => rows.length);
   if (!hasRows) return null;
   return normalizeState({
     ...clone(defaultState),
@@ -2857,6 +2918,20 @@ async function readNormalizedCloudState(workspaceId) {
       importBatchId: row.import_batch_id,
       sourceFile: row.source_file,
       importedAt: row.imported_at
+    })),
+    tallySyncRuns: (tallySyncRuns || []).map(row => cloudRowData(row, {
+      id: row.id,
+      profileId: row.profile_id,
+      runType: row.run_type,
+      status: row.status,
+      fileName: row.file_name,
+      sourceFile: row.source_file,
+      fromDate: row.from_date,
+      toDate: row.to_date,
+      documentCount: row.document_count,
+      entryRefs: row.entry_refs,
+      counts: row.counts,
+      message: row.message
     }))
   });
 }
@@ -3061,7 +3136,8 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.creditNotes, "id", nextState.creditNotes, previousState.creditNotes, row => cloudEntryRow(workspaceId, row, "creditNote", syncedAt, userId)),
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.purchaseReturns, "id", nextState.purchaseReturns, previousState.purchaseReturns, row => cloudEntryRow(workspaceId, row, "purchaseReturn", syncedAt, userId)),
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.paymentSources, "id", nextState.paymentSources, previousState.paymentSources, row => cloudPaymentSourceRow(workspaceId, row, syncedAt, userId)),
-    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.bankTransactions, "id", nextState.bankTransactions, previousState.bankTransactions, row => cloudBankTransactionRow(workspaceId, row, syncedAt, userId))
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.bankTransactions, "id", nextState.bankTransactions, previousState.bankTransactions, row => cloudBankTransactionRow(workspaceId, row, syncedAt, userId)),
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.tallySyncRuns, "id", nextState.tallySyncRuns, previousState.tallySyncRuns, row => cloudTallySyncRunRow(workspaceId, row, syncedAt, userId))
   ]);
   await Promise.all([
     replaceCloudLineRows(CLOUD_ROW_TABLES.saleItems, nextState.sales.flatMap(entry => cloudLineRows(workspaceId, entry, "sale", syncedAt, userId))),
@@ -3305,6 +3381,26 @@ function cloudBankTransactionRow(workspaceId, transaction, syncedAt, userId) {
   };
 }
 
+function cloudTallySyncRunRow(workspaceId, run, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    id: run.id,
+    profile_id: run.profileId || "",
+    run_type: run.runType || "vouchers-export",
+    status: run.status || "Exported",
+    file_name: run.fileName || "",
+    source_file: run.sourceFile || "",
+    from_date: cloudDate(run.fromDate),
+    to_date: cloudDate(run.toDate),
+    document_count: Math.max(0, Math.round(num(run.documentCount))),
+    entry_refs: Array.isArray(run.entryRefs) ? run.entryRefs : [],
+    counts: run.counts && typeof run.counts === "object" ? clone(run.counts) : {},
+    message: run.message || "",
+    data: clone(run),
+    ...cloudSyncColumns(run, syncedAt, userId)
+  };
+}
+
 function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
   const base = {
     workspace_id: workspaceId,
@@ -3427,7 +3523,7 @@ function cloudTimestamp(value) {
 
 function markStateSyncStatus(sourceState, status, syncedAt = "") {
   const nextState = normalizeState(clone(sourceState || defaultState));
-  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions]
+  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions, ...nextState.tallySyncRuns]
     .forEach(entity => markEntitySyncStatus(entity, status, syncedAt));
   return nextState;
 }
@@ -3457,7 +3553,8 @@ function buildCloudAuditRows(previousState, nextState, syncedAt, userId) {
     ["purchase_return", previousState.purchaseReturns, nextState.purchaseReturns],
     ["purchase_order", previousState.purchaseOrders, nextState.purchaseOrders],
     ["payment_source", previousState.paymentSources, nextState.paymentSources],
-    ["bank_transaction", previousState.bankTransactions, nextState.bankTransactions]
+    ["bank_transaction", previousState.bankTransactions, nextState.bankTransactions],
+    ["tally_sync_run", previousState.tallySyncRuns, nextState.tallySyncRuns]
   ];
   return groups.flatMap(([entityType, beforeRows, afterRows]) => buildCloudAuditRowsForGroup(entityType, beforeRows, afterRows, syncedAt, userId));
 }
@@ -6911,6 +7008,511 @@ function deleteParty(id) {
   saveState();
   renderAll();
   toast("Party deleted");
+}
+
+function renderTallySync() {
+  const view = $("#tallySyncView");
+  if (!view || !window.TallySync) return;
+  const profile = activeProfile();
+  const settings = window.TallySync.normalizeSettings(profile.tallySettings || {}, profile);
+  const companyLabel = $("#tallyCompanyLabel");
+  if (companyLabel) companyLabel.textContent = `${profile.businessName || profile.label} - ${profile.gstin || "GSTIN not entered"}`;
+  const form = $("#tallySettingsForm");
+  if (form && !form.contains(document.activeElement)) {
+    Object.entries(settings).forEach(([name, value]) => {
+      if (form.elements[name]) form.elements[name].value = value;
+    });
+  }
+  const fromInput = $("#tallyFromDate");
+  const toInput = $("#tallyToDate");
+  if (fromInput && !fromInput.value) fromInput.value = `${currentMonthKey()}-01`;
+  if (toInput && !toInput.value) toInput.value = today();
+  renderTallySummary();
+  renderTallyImportReview();
+  renderTallyHistory();
+}
+
+function renderTallySummary() {
+  const summary = $("#tallySyncSummary");
+  if (!summary) return;
+  const profileId = activeProfileId();
+  const pending = tallyVoucherCandidates(profileId, "", "", false).length;
+  const runs = state.tallySyncRuns
+    .filter(run => run.profileId === profileId)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const lastExport = runs.find(run => /-export$/.test(run.runType));
+  const imported = runs.filter(run => run.status === "Imported" || run.status === "Applied").length;
+  summary.innerHTML = `
+    <div><span>Ready to Export</span><strong>${pending}</strong><small>new documents</small></div>
+    <div><span>Last Export</span><strong>${lastExport ? formatTallyRunDate(lastExport.createdAt) : "-"}</strong><small>${lastExport ? escapeHtml(tallyRunTypeLabel(lastExport.runType)) : "No export yet"}</small></div>
+    <div><span>Completed</span><strong>${imported}</strong><small>imports confirmed</small></div>
+  `;
+}
+
+function tallySettingsFromForm() {
+  const form = $("#tallySettingsForm");
+  const profile = activeProfile();
+  if (!form || !window.TallySync) return profile.tallySettings || {};
+  const values = {};
+  Object.keys(window.TallySync.defaultSettings(profile)).forEach(name => {
+    values[name] = form.elements[name]?.value?.trim() || "";
+  });
+  return window.TallySync.normalizeSettings(values, profile);
+}
+
+function saveTallySettings(event) {
+  event?.preventDefault();
+  const profile = activeProfile();
+  profile.tallySettings = tallySettingsFromForm();
+  profile.tallySettingsUpdatedAt = new Date().toISOString();
+  saveState();
+  renderTallySync();
+  toast("Tally settings saved");
+}
+
+function persistTallySettingsFromForm() {
+  const profile = activeProfile();
+  profile.tallySettings = tallySettingsFromForm();
+  profile.tallySettingsUpdatedAt = new Date().toISOString();
+  return profile.tallySettings;
+}
+
+function tallyPartyRoles(profileId) {
+  const roles = new Map();
+  const add = (entries, role) => entries.filter(entry => entry.profileId === profileId).forEach(entry => {
+    const current = roles.get(entry.partyId) || { customer: false, supplier: false };
+    current[role] = true;
+    roles.set(entry.partyId, current);
+  });
+  add(state.sales, "customer");
+  add(state.creditNotes, "customer");
+  add(state.purchases, "supplier");
+  add(state.purchaseReturns, "supplier");
+  return roles;
+}
+
+function tallyMasterParties(profileId = activeProfileId()) {
+  const roles = tallyPartyRoles(profileId);
+  return state.parties.map(party => {
+    const role = roles.get(party.id) || {};
+    const supplierOnly = role.supplier && !role.customer;
+    return {
+      ...party,
+      state: stateNameFromGstin(party.gstin) || party.place || "",
+      tallyParent: supplierOnly ? "Sundry Creditors" : "Sundry Debtors"
+    };
+  });
+}
+
+function tallyMasterItems() {
+  return state.items.map(item => ({
+    ...item,
+    hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
+    gstRate: num(item.gstRate) || DEFAULT_SALE_GST_RATE
+  }));
+}
+
+function exportTallyMasters() {
+  if (!window.TallySync) return toast("Tally XML module is not ready");
+  const profile = activeProfile();
+  const settings = persistTallySettingsFromForm();
+  const parties = tallyMasterParties(profile.id);
+  const items = tallyMasterItems();
+  const xmlText = window.TallySync.buildMastersXml({ profile, settings, parties, items });
+  const fileName = `TALLY_${tallyFileSlug(profile.businessName)}_MASTERS_${today().replaceAll("-", "")}.xml`;
+  const run = createTallySyncRun({
+    profileId: profile.id,
+    runType: "masters-export",
+    status: "Exported",
+    fileName,
+    documentCount: parties.length + items.length + 7,
+    counts: { parties: parties.length, items: items.length, ledgers: 6, units: 1 },
+    message: "Party, item, unit and accounting masters"
+  });
+  state.tallySyncRuns.unshift(run);
+  saveState();
+  downloadTallyXml(xmlText, fileName);
+  renderTallySync();
+  toast(`Tally masters exported: ${parties.length} parties, ${items.length} items`);
+}
+
+function tallyDocumentGroups() {
+  return [
+    ["sale", state.sales],
+    ["purchase", state.purchases],
+    ["creditNote", state.creditNotes],
+    ["purchaseReturn", state.purchaseReturns]
+  ];
+}
+
+function tallyEntryRef(kind, entry, operation = "create") {
+  return `${kind}:${entry.id}${operation === "cancel" ? ":cancel" : ""}`;
+}
+
+function exportedTallyEntryRefs(profileId) {
+  return new Set(state.tallySyncRuns
+    .filter(run => run.profileId === profileId && run.runType === "vouchers-export" && run.status !== "Failed")
+    .flatMap(run => run.entryRefs || []));
+}
+
+function tallyVoucherCandidates(profileId, fromDate = "", toDate = "", includeExported = false) {
+  const exported = exportedTallyEntryRefs(profileId);
+  const records = [];
+  tallyDocumentGroups().forEach(([kind, entries]) => entries.forEach(entry => {
+    if (entry.profileId !== profileId) return;
+    if (fromDate && String(entry.date || "") < fromDate) return;
+    if (toDate && String(entry.date || "") > toDate) return;
+    const originalRef = tallyEntryRef(kind, entry);
+    if (isCancelledEntry(entry)) {
+      const cancelRef = tallyEntryRef(kind, entry, "cancel");
+      if (exported.has(originalRef) && (includeExported || !exported.has(cancelRef))) {
+        records.push({ kind, entry, operation: "cancel", ref: cancelRef });
+      }
+      return;
+    }
+    if (includeExported || !exported.has(originalRef)) {
+      records.push({ kind, entry, operation: "create", ref: originalRef });
+    }
+  }));
+  return records.sort((a, b) => String(a.entry.date || "").localeCompare(String(b.entry.date || "")) || String(a.entry.number || "").localeCompare(String(b.entry.number || "")));
+}
+
+function prepareTallyVoucherRecord(record) {
+  const entry = record.entry || {};
+  const party = state.parties.find(row => row.id === entry.partyId) || {};
+  return {
+    ...record,
+    party: {
+      ...party,
+      state: stateNameFromGstin(party.gstin) || party.place || ""
+    },
+    entry: {
+      ...entry,
+      cancelled: record.operation === "cancel" || isCancelledEntry(entry),
+      lines: (entry.lines || []).map((line, index) => {
+        const item = state.items.find(row => row.id === line.itemId) || {};
+        return {
+          ...line,
+          name: itemNameByLine(line, item, index + 1),
+          hsn: lineHsn(line, item),
+          taxable: lineTaxableAmount(line)
+        };
+      })
+    }
+  };
+}
+
+function tallyVoucherRecordsForExport(profileId, fromDate, toDate, includeExported) {
+  return tallyVoucherCandidates(profileId, fromDate, toDate, includeExported)
+    .map(prepareTallyVoucherRecord)
+    .filter(record => record.operation === "cancel" || (record.party.name && record.entry.lines.length));
+}
+
+function exportTallyVouchers() {
+  if (!window.TallySync) return toast("Tally XML module is not ready");
+  const profile = activeProfile();
+  const settings = persistTallySettingsFromForm();
+  const fromDate = $("#tallyFromDate")?.value || "";
+  const toDate = $("#tallyToDate")?.value || "";
+  const includeExported = Boolean($("#tallyReexportDocuments")?.checked);
+  if (!fromDate || !toDate) return toast("Select From and To dates");
+  if (fromDate > toDate) return toast("From date cannot be after To date");
+  const records = tallyVoucherRecordsForExport(profile.id, fromDate, toDate, includeExported);
+  if (!records.length) return toast("No new Tally vouchers in this date range");
+  const xmlText = window.TallySync.buildVouchersXml({ profile, settings, entries: records });
+  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
+  const fileName = `TALLY_${tallyFileSlug(profile.businessName)}_VOUCHERS_${fromDate.replaceAll("-", "")}_${toDate.replaceAll("-", "")}_${stamp}.xml`;
+  const counts = tallyVoucherCounts(records);
+  state.tallySyncRuns.unshift(createTallySyncRun({
+    profileId: profile.id,
+    runType: "vouchers-export",
+    status: "Exported",
+    fileName,
+    fromDate,
+    toDate,
+    documentCount: records.length,
+    entryRefs: records.map(record => record.ref),
+    counts,
+    message: tallyRunCountText(counts)
+  }));
+  saveState();
+  downloadTallyXml(xmlText, fileName);
+  renderTallySync();
+  toast(`${records.length} Tally voucher${records.length === 1 ? "" : "s"} exported`);
+}
+
+function createTallySyncRun(values = {}) {
+  return normalizeTallySyncRunForState(entityWithLocalMeta({
+    id: uid(),
+    profileId: activeProfileId(),
+    runType: "vouchers-export",
+    status: "Exported",
+    fileName: "",
+    sourceFile: "",
+    fromDate: "",
+    toDate: "",
+    documentCount: 0,
+    entryRefs: [],
+    counts: {},
+    message: "",
+    ...values
+  }));
+}
+
+function tallyVoucherCounts(records = []) {
+  return records.reduce((counts, record) => {
+    const key = record.operation === "cancel" ? "cancellations" : ({
+      sale: "sales",
+      purchase: "purchases",
+      creditNote: "creditNotes",
+      purchaseReturn: "purchaseReturns"
+    }[record.kind] || "other");
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function tallyRunCountText(counts = {}) {
+  const labels = {
+    sales: "sales",
+    purchases: "purchases",
+    creditNotes: "credit notes",
+    purchaseReturns: "purchase returns",
+    cancellations: "cancellations",
+    parties: "parties",
+    items: "items",
+    ledgers: "ledgers",
+    units: "units",
+    added: "added",
+    updated: "updated"
+  };
+  return Object.entries(counts)
+    .filter(([, count]) => num(count) > 0)
+    .map(([key, count]) => `${count} ${labels[key] || key}`)
+    .join(" | ");
+}
+
+function downloadTallyXml(xmlText, fileName) {
+  downloadBlob(new Blob([xmlText], { type: "application/xml;charset=utf-8" }), fileName);
+}
+
+function tallyFileSlug(value) {
+  return String(value || "COMPANY")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 28) || "COMPANY";
+}
+
+async function handleTallyMasterImport(event) {
+  const file = event.target.files?.[0];
+  if (!file || !window.TallySync) return;
+  try {
+    const text = await file.text();
+    const result = window.TallySync.parseMastersXml(text);
+    pendingTallyImport = { ...result, fileName: file.name };
+    renderTallyImportReview();
+    if (result.errors?.length) toast(result.errors[0]);
+    else toast(`${result.parties.length} parties and ${result.items.length} items ready to review`);
+  } catch (error) {
+    pendingTallyImport = { parties: [], items: [], errors: [error.message || "Unable to read Tally XML"], fileName: file.name };
+    renderTallyImportReview();
+    toast("Unable to read Tally XML");
+  }
+}
+
+function renderTallyImportReview() {
+  const panel = $("#tallyImportReview");
+  const applyButton = $("#tallyApplyImportBtn");
+  const discardButton = $("#tallyDiscardImportBtn");
+  if (!panel || !applyButton || !discardButton) return;
+  if (!pendingTallyImport) {
+    panel.hidden = true;
+    applyButton.hidden = true;
+    discardButton.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  const errors = pendingTallyImport.errors || [];
+  const parties = pendingTallyImport.parties || [];
+  const items = pendingTallyImport.items || [];
+  panel.hidden = false;
+  applyButton.hidden = Boolean(errors.length || (!parties.length && !items.length));
+  discardButton.hidden = false;
+  panel.innerHTML = errors.length ? `
+    <div class="tally-import-error"><i data-lucide="circle-alert"></i><strong>${escapeHtml(errors[0])}</strong></div>
+  ` : `
+    <div class="tally-import-review-head">
+      <div><span>File</span><strong>${escapeHtml(pendingTallyImport.fileName || "Tally XML")}</strong></div>
+      <div><span>Parties</span><strong>${parties.length}</strong></div>
+      <div><span>Items</span><strong>${items.length}</strong></div>
+    </div>
+    <div class="tally-import-preview-list">
+      ${parties.slice(0, 4).map(party => `<div><i data-lucide="building-2"></i><span><strong>${escapeHtml(party.name)}</strong><small>${escapeHtml(party.gstin || party.type)}</small></span></div>`).join("")}
+      ${items.slice(0, 4).map(item => `<div><i data-lucide="box"></i><span><strong>${escapeHtml(item.name)}</strong><small>HSN ${escapeHtml(item.hsn || DEFAULT_SALE_HSN)} | GST ${num(item.gstRate) || DEFAULT_SALE_GST_RATE}%</small></span></div>`).join("")}
+    </div>
+  `;
+  if (window.lucide) lucide.createIcons();
+}
+
+function applyTallyMasterImport() {
+  if (!pendingTallyImport || pendingTallyImport.errors?.length) return;
+  let added = 0;
+  let updated = 0;
+  (pendingTallyImport.parties || []).forEach(imported => {
+    const existing = state.parties.find(party => (
+      normalizeGstin(imported.gstin) && normalizeGstin(party.gstin) === normalizeGstin(imported.gstin)
+    ) || normalizeMergeText(party.name) === normalizeMergeText(imported.name));
+    const source = {
+      ...imported,
+      aliases: imported.name,
+      address: imported.address || (imported.pincode ? imported.pincode : "")
+    };
+    if (existing) {
+      const before = cloudAuditComparable(existing);
+      mergeExistingParty(existing, source);
+      if (cloudAuditComparable(existing) !== before) {
+        Object.assign(existing, entityWithLocalMeta(existing, existing));
+        updated += 1;
+      }
+      return;
+    }
+    state.parties.push(normalizePartyForState(entityWithLocalMeta({ id: uid(), ...source })));
+    added += 1;
+  });
+  (pendingTallyImport.items || []).forEach(imported => {
+    const existing = state.items.find(item => normalizeMergeText(item.name) === normalizeMergeText(imported.name));
+    const importedHsn = normalizeLineHsn(imported.hsn) || DEFAULT_SALE_HSN;
+    if (existing) {
+      const before = cloudAuditComparable(existing);
+      if ((!normalizeLineHsn(existing.hsn) || normalizeLineHsn(existing.hsn) === DEFAULT_SALE_HSN) && importedHsn !== DEFAULT_SALE_HSN) {
+        existing.hsn = importedHsn;
+      }
+      if (!num(existing.gstRate) && num(imported.gstRate)) existing.gstRate = num(imported.gstRate);
+      if (cloudAuditComparable(existing) !== before) {
+        Object.assign(existing, entityWithLocalMeta(existing, existing));
+        updated += 1;
+      }
+      return;
+    }
+    state.items.push(entityWithLocalMeta({
+      id: uid(),
+      name: imported.name,
+      hsn: importedHsn,
+      gstRate: num(imported.gstRate) || DEFAULT_SALE_GST_RATE,
+      saleRate: 0,
+      purchaseRate: 0,
+      openingStock: 0
+    }));
+    added += 1;
+  });
+  state.tallySyncRuns.unshift(createTallySyncRun({
+    runType: "masters-import",
+    status: "Applied",
+    sourceFile: pendingTallyImport.fileName || "",
+    documentCount: added + updated,
+    counts: { added, updated },
+    message: `${added} added | ${updated} updated`
+  }));
+  pendingTallyImport = null;
+  const input = $("#tallyMasterImportInput");
+  if (input) input.value = "";
+  saveState();
+  renderAll();
+  toast(`Tally masters applied: ${added} added, ${updated} updated`);
+}
+
+function discardTallyMasterImport() {
+  pendingTallyImport = null;
+  const input = $("#tallyMasterImportInput");
+  if (input) input.value = "";
+  renderTallyImportReview();
+}
+
+function renderTallyHistory() {
+  const container = $("#tallyHistory");
+  if (!container) return;
+  const runs = state.tallySyncRuns
+    .filter(run => run.profileId === activeProfileId())
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  if (!runs.length) {
+    container.innerHTML = `<div class="tally-empty"><i data-lucide="history"></i><strong>No Tally activity yet</strong></div>`;
+    if (window.lucide) lucide.createIcons();
+    return;
+  }
+  container.innerHTML = runs.map(run => `
+    <div class="tally-history-row">
+      <div class="tally-history-icon"><i data-lucide="${run.runType === "masters-import" ? "file-input" : "file-output"}"></i></div>
+      <div class="tally-history-main">
+        <strong>${escapeHtml(tallyRunTypeLabel(run.runType))}</strong>
+        <small>${escapeHtml(run.fileName || run.sourceFile || "Tally XML")}</small>
+        <span>${escapeHtml(run.message || tallyRunCountText(run.counts))}</span>
+      </div>
+      <div class="tally-history-meta">
+        <time>${escapeHtml(formatTallyRunDate(run.createdAt))}</time>
+        <span class="tally-status ${run.status.toLowerCase()}">${escapeHtml(run.status)}</span>
+      </div>
+      <div class="tally-history-actions">
+        ${run.runType !== "masters-import" ? `<button class="icon-btn" type="button" data-tally-action="download" data-run-id="${escapeHtml(run.id)}" title="Download again"><i data-lucide="download"></i></button>` : ""}
+        ${run.status === "Exported" ? `<button class="secondary-btn compact-btn" type="button" data-tally-action="confirm" data-run-id="${escapeHtml(run.id)}"><i data-lucide="check"></i><span>Imported</span></button>` : ""}
+      </div>
+    </div>
+  `).join("");
+  if (window.lucide) lucide.createIcons();
+}
+
+function tallyRunTypeLabel(runType) {
+  if (runType === "masters-export") return "Masters Export";
+  if (runType === "masters-import") return "Masters Import";
+  return "Voucher Export";
+}
+
+function formatTallyRunDate(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function handleTallyHistoryAction(event) {
+  const button = event.target.closest("[data-tally-action]");
+  if (!button) return;
+  const run = state.tallySyncRuns.find(row => row.id === button.dataset.runId);
+  if (!run) return toast("Tally history entry not found");
+  if (button.dataset.tallyAction === "confirm") {
+    Object.assign(run, entityWithLocalMeta({ ...run, status: "Imported" }, run));
+    saveState();
+    renderTallySync();
+    toast("Tally import confirmed");
+    return;
+  }
+  redownloadTallyRun(run);
+}
+
+function redownloadTallyRun(run) {
+  if (!window.TallySync) return;
+  const profile = profileById(run.profileId);
+  const settings = window.TallySync.normalizeSettings(profile.tallySettings || {}, profile);
+  if (run.runType === "masters-export") {
+    const xmlText = window.TallySync.buildMastersXml({
+      profile,
+      settings,
+      parties: tallyMasterParties(profile.id),
+      items: tallyMasterItems()
+    });
+    downloadTallyXml(xmlText, run.fileName || `TALLY_${tallyFileSlug(profile.businessName)}_MASTERS.xml`);
+    return;
+  }
+  const records = (run.entryRefs || []).map(tallyRecordFromRef).filter(Boolean).map(prepareTallyVoucherRecord);
+  if (!records.length) return toast("The vouchers in this export are no longer available");
+  const xmlText = window.TallySync.buildVouchersXml({ profile, settings, entries: records });
+  downloadTallyXml(xmlText, run.fileName || `TALLY_${tallyFileSlug(profile.businessName)}_VOUCHERS.xml`);
+}
+
+function tallyRecordFromRef(reference) {
+  const [kind, id, action] = String(reference || "").split(":");
+  const entry = entryList(kind).find(row => row.id === id);
+  if (!entry) return null;
+  return { kind, entry, operation: action === "cancel" ? "cancel" : "create", ref: reference };
 }
 
 function saveSettings(event) {
