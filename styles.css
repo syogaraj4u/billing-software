@@ -4533,7 +4533,7 @@ body.invoice-pdf-capture .invoice-preview-frame {
 
 .tally-action-grid {
   display: grid;
-  grid-template-columns: .85fr 1.2fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: stretch;
 }
@@ -4558,12 +4558,12 @@ body.invoice-pdf-capture .invoice-preview-frame {
   color: var(--primary);
 }
 
-.tally-action-panel:nth-child(2) .tally-panel-icon {
+.tally-action-panel:nth-child(3) .tally-panel-icon {
   background: #fff6df;
   color: #9a6500;
 }
 
-.tally-action-panel:nth-child(3) .tally-panel-icon {
+.tally-action-panel:nth-child(1) .tally-panel-icon {
   background: #eef3fb;
   color: #285f9f;
 }
@@ -4621,7 +4621,28 @@ body.invoice-pdf-capture .invoice-preview-frame {
 }
 
 .tally-import-panel {
-  grid-template-rows: auto auto auto auto auto;
+  grid-column: 1 / -1;
+  min-height: 0;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(220px, .42fr);
+  grid-template-rows: auto auto auto;
+  align-items: center;
+}
+
+.tally-import-panel > .tally-panel-icon {
+  grid-column: 1;
+}
+
+.tally-import-panel > .tally-panel-copy {
+  grid-column: 2;
+}
+
+.tally-import-panel > .tally-upload-btn {
+  grid-column: 3;
+}
+
+.tally-import-panel > .tally-import-review,
+.tally-import-panel > .tally-import-actions {
+  grid-column: 1 / -1;
 }
 
 .tally-import-review {
@@ -4634,7 +4655,7 @@ body.invoice-pdf-capture .invoice-preview-frame {
 
 .tally-import-review-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   gap: 12px;
 }
 
@@ -4661,6 +4682,104 @@ body.invoice-pdf-capture .invoice-preview-frame {
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
+}
+
+.tally-import-count-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tally-import-count-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--line);
+  background: #f8fbfa;
+}
+
+.tally-import-count-grid > div:last-child {
+  border-right: 0;
+}
+
+.tally-import-count-grid span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.tally-import-count-grid strong {
+  font-size: 17px;
+}
+
+.tally-import-count-grid .tally-count-muted {
+  background: #f6f7f7;
+}
+
+.tally-import-count-grid .tally-count-warn {
+  background: #fff7e3;
+  color: #8b5b00;
+}
+
+.tally-import-preview-list > .tally-voucher-preview {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  min-height: 36px;
+}
+
+.tally-import-state {
+  min-width: 56px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #e8f6ed;
+  color: #0f7042;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.tally-import-state.duplicate,
+.tally-import-state.skip {
+  background: #f1f3f3;
+  color: var(--muted);
+}
+
+.tally-import-state.cancel {
+  background: #fdecea;
+  color: var(--warn);
+}
+
+.tally-import-warning-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #ead7a4;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.tally-import-warning-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  color: #7c590f;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tally-import-warning-list svg {
+  width: 15px;
+  height: 15px;
 }
 
 .tally-import-preview-list svg {
@@ -4851,10 +4970,6 @@ body.invoice-pdf-capture .invoice-preview-frame {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .tally-import-panel {
-    grid-column: 1 / -1;
-  }
-
   .tally-settings-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4882,6 +4997,17 @@ body.invoice-pdf-capture .invoice-preview-frame {
 
   .tally-import-panel {
     grid-column: auto;
+    grid-template-columns: 42px minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+  }
+
+  .tally-import-panel > .tally-upload-btn {
+    grid-column: 1 / -1;
+  }
+
+  .tally-import-panel > .tally-import-review,
+  .tally-import-panel > .tally-import-actions {
+    grid-column: 1 / -1;
   }
 
   .tally-action-panel {
@@ -4933,5 +5059,21 @@ body.invoice-pdf-capture .invoice-preview-frame {
 
   .tally-history-main span {
     white-space: normal;
+  }
+
+  .tally-import-review-head {
+    grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  }
+
+  .tally-import-count-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tally-import-count-grid > div:nth-child(3) {
+    border-right: 0;
+  }
+
+  .tally-import-count-grid > div:nth-child(-n + 3) {
+    border-bottom: 1px solid var(--line);
   }
 }

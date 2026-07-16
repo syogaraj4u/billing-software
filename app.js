@@ -1130,7 +1130,7 @@ function normalizeTallySyncRunForState(run = {}) {
   const normalized = {
     id: String(run.id || uid()),
     profileId: String(run.profileId || "gst-1"),
-    runType: ["masters-export", "vouchers-export", "masters-import"].includes(run.runType)
+    runType: ["masters-export", "vouchers-export", "masters-import", "data-import"].includes(run.runType)
       ? run.runType
       : "vouchers-export",
     status: ["Exported", "Imported", "Applied", "Failed"].includes(run.status) ? run.status : "Exported",
@@ -2199,9 +2199,9 @@ function bindEvents() {
   bindIf("#tallySettingsForm", "submit", saveTallySettings);
   bindIf("#tallyExportMastersBtn", "click", exportTallyMasters);
   bindIf("#tallyExportVouchersBtn", "click", exportTallyVouchers);
-  bindIf("#tallyMasterImportInput", "change", handleTallyMasterImport);
-  bindIf("#tallyApplyImportBtn", "click", applyTallyMasterImport);
-  bindIf("#tallyDiscardImportBtn", "click", discardTallyMasterImport);
+  bindIf("#tallyMasterImportInput", "change", handleTallyDataImport);
+  bindIf("#tallyApplyImportBtn", "click", applyTallyDataImport);
+  bindIf("#tallyDiscardImportBtn", "click", discardTallyDataImport);
   bindIf("#tallyHistory", "click", handleTallyHistoryAction);
   bindIf("#poMonthFilter", "change", event => {
     entryMonthFilters.po = event.target.value;
@@ -7040,12 +7040,12 @@ function renderTallySummary() {
   const runs = state.tallySyncRuns
     .filter(run => run.profileId === profileId)
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  const lastExport = runs.find(run => /-export$/.test(run.runType));
+  const lastImport = runs.find(run => /-import$/.test(run.runType));
   const imported = runs.filter(run => run.status === "Imported" || run.status === "Applied").length;
   summary.innerHTML = `
+    <div><span>Last Import</span><strong>${lastImport ? formatTallyRunDate(lastImport.createdAt) : "-"}</strong><small>${lastImport ? `${num(lastImport.documentCount)} documents` : "No import yet"}</small></div>
     <div><span>Ready to Export</span><strong>${pending}</strong><small>new documents</small></div>
-    <div><span>Last Export</span><strong>${lastExport ? formatTallyRunDate(lastExport.createdAt) : "-"}</strong><small>${lastExport ? escapeHtml(tallyRunTypeLabel(lastExport.runType)) : "No export yet"}</small></div>
-    <div><span>Completed</span><strong>${imported}</strong><small>imports confirmed</small></div>
+    <div><span>Completed</span><strong>${imported}</strong><small>sync runs</small></div>
   `;
 }
 
@@ -7284,7 +7284,15 @@ function tallyRunCountText(counts = {}) {
     ledgers: "ledgers",
     units: "units",
     added: "added",
-    updated: "updated"
+    updated: "updated",
+    partiesAdded: "parties added",
+    partiesUpdated: "parties updated",
+    itemsAdded: "items added",
+    itemsUpdated: "items updated",
+    duplicates: "duplicates skipped",
+    skipped: "vouchers skipped",
+    internalPurchases: "internal purchases created",
+    internalPurchaseReturns: "internal purchase returns created"
   };
   return Object.entries(counts)
     .filter(([, count]) => num(count) > 0)
@@ -7304,21 +7312,175 @@ function tallyFileSlug(value) {
     .slice(0, 28) || "COMPANY";
 }
 
-async function handleTallyMasterImport(event) {
+async function handleTallyDataImport(event) {
   const file = event.target.files?.[0];
   if (!file || !window.TallySync) return;
   try {
     const text = await file.text();
-    const result = window.TallySync.parseMastersXml(text);
-    pendingTallyImport = { ...result, fileName: file.name };
+    const profile = activeProfile();
+    const result = window.TallySync.parseDataXml(text, {
+      profile,
+      settings: window.TallySync.normalizeSettings(profile.tallySettings || {}, profile)
+    });
+    pendingTallyImport = prepareTallyImportReview(result, file.name, profile.id);
     renderTallyImportReview();
     if (result.errors?.length) toast(result.errors[0]);
-    else toast(`${result.parties.length} parties and ${result.items.length} items ready to review`);
+    else toast(`${result.vouchers.length} vouchers and ${result.parties.length + result.items.length} masters ready to review`);
   } catch (error) {
-    pendingTallyImport = { parties: [], items: [], errors: [error.message || "Unable to read Tally XML"], fileName: file.name };
+    pendingTallyImport = {
+      parties: [],
+      items: [],
+      vouchers: [],
+      warnings: [],
+      errors: [error.message || "Unable to read Tally XML"],
+      fileName: file.name,
+      profileId: activeProfileId()
+    };
     renderTallyImportReview();
     toast("Unable to read Tally XML");
   }
+}
+
+function prepareTallyImportReview(result, fileName, profileId) {
+  const parties = result.parties || [];
+  const profile = profileById(profileId);
+  const companyMismatch = result.companyName && !tallyCompanyMatchesProfile(result.companyName, profile);
+  return {
+    ...result,
+    errors: uniqueMessages([
+      ...(result.errors || []),
+      companyMismatch
+        ? `This XML belongs to ${result.companyName}. Select that GST company or update its Tally Company Name mapping before importing.`
+        : ""
+    ]),
+    fileName,
+    profileId,
+    profileName: profileName(profileId),
+    vouchers: (result.vouchers || []).map(voucher => reviewTallyImportVoucher(voucher, parties, profileId))
+  };
+}
+
+function tallyCompanyMatchesProfile(companyName, profile = {}) {
+  const actual = normalizeMergeText(companyName);
+  if (!actual) return true;
+  return [
+    profile.tallySettings?.companyName,
+    profile.businessName,
+    profile.legalName,
+    profile.label
+  ].filter(Boolean).some(value => {
+    const expected = normalizeMergeText(value);
+    return actual === expected || actual.startsWith(`${expected} `);
+  });
+}
+
+function reviewTallyImportVoucher(voucher, importedParties, profileId) {
+  const party = tallyImportPartySource(voucher, importedParties);
+  const existing = findExistingTallyVoucher(voucher, party, profileId);
+  const messages = [...(voucher.warnings || [])];
+  const saleSide = voucher.kind === "sale" || voucher.kind === "creditNote";
+  if (!saleSide && !isValidGstin(party.gstin)) messages.push("Supplier GSTIN is missing; review the supplier master after import.");
+  if (!saleSide && !String(party.address || "").trim()) messages.push("Supplier address is missing; review the supplier master after import.");
+  let importAction = "add";
+  if (voucher.cancelled) {
+    if (!existing) {
+      importAction = "skip";
+      messages.push("The cancelled voucher is not already in the billing app.");
+    } else if (isCancelledEntry(existing)) {
+      importAction = "duplicate";
+      messages.push("This voucher is already cancelled in the billing app.");
+    } else {
+      importAction = "cancel";
+    }
+  } else if (existing) {
+    importAction = "duplicate";
+    messages.push("This voucher already exists and will not be imported again.");
+  } else if (!party?.name) {
+    importAction = "skip";
+    messages.push("Party ledger is missing.");
+  } else if (saleSide && !isValidGstin(party.gstin)) {
+    importAction = "skip";
+    messages.push("Buyer GSTIN is required for B2B sales and credit notes.");
+  } else if (saleSide && !String(party.address || "").trim()) {
+    importAction = "skip";
+    messages.push("Buyer address is required for B2B sales and credit notes.");
+  } else if (!(voucher.lines || []).length) {
+    importAction = "skip";
+    messages.push("Inventory item lines are missing.");
+  } else if (!num(voucher.total)) {
+    importAction = "skip";
+    messages.push("Voucher total is missing.");
+  }
+  return {
+    ...voucher,
+    resolvedParty: party,
+    existingId: existing?.id || "",
+    importAction,
+    importMessages: uniqueMessages(messages)
+  };
+}
+
+function tallyImportPartySource(voucher, importedParties = []) {
+  const gstin = normalizeGstin(voucher.partyGstin);
+  const master = importedParties.find(party => gstin && normalizeGstin(party.gstin) === gstin)
+    || importedParties.find(party => normalizeMergeText(party.name) === normalizeMergeText(voucher.partyName))
+    || state.parties.find(party => gstin && normalizeGstin(party.gstin) === gstin)
+    || state.parties.find(party => normalizeMergeText(party.name) === normalizeMergeText(voucher.partyName));
+  return {
+    ...(master || {}),
+    name: voucher.partyName || master?.name || "",
+    gstin: gstin || normalizeGstin(master?.gstin),
+    address: voucher.partyAddress || master?.address || "",
+    place: voucher.partyState || master?.place || stateNameFromGstin(gstin || master?.gstin) || "",
+    pincode: voucher.partyPincode || master?.pincode || ""
+  };
+}
+
+function tallyVoucherImportKey(voucher) {
+  const identity = voucher.tallyId || [voucher.number, voucher.date, voucher.partyGstin || voucher.partyName].join("|");
+  return `${voucher.kind}|${normalizeMergeText(identity)}`;
+}
+
+function findExistingTallyVoucher(voucher, party, profileId = activeProfileId()) {
+  const list = entryList(voucher.kind);
+  const importKey = tallyVoucherImportKey(voucher);
+  const number = normalizePurchaseInvoiceNumber(voucher.number);
+  const partyKey = tallyImportPartyKey(party);
+  return list.find(entry => entry.profileId === profileId && entry.tallyImportKey === importKey)
+    || list.find(entry => {
+      if (entry.profileId !== profileId || normalizePurchaseInvoiceNumber(entry.number) !== number) return false;
+      if (voucher.kind === "sale" || voucher.kind === "creditNote") return true;
+      return partyKey && tallyImportPartyKey(partyById(entry.partyId) || {}) === partyKey;
+    })
+    || null;
+}
+
+function tallyImportPartyKey(party = {}) {
+  const gstin = normalizeGstin(party.gstin);
+  return gstin ? `gstin:${gstin}` : (party.name ? `name:${normalizeMergeText(party.name)}` : "");
+}
+
+function tallyPendingImportCounts() {
+  const counts = {
+    sales: 0,
+    purchases: 0,
+    creditNotes: 0,
+    purchaseReturns: 0,
+    cancellations: 0,
+    duplicates: 0,
+    skipped: num(pendingTallyImport?.skippedVoucherCount)
+  };
+  (pendingTallyImport?.vouchers || []).forEach(voucher => {
+    if (voucher.importAction === "cancel") counts.cancellations += 1;
+    else if (voucher.importAction === "duplicate") counts.duplicates += 1;
+    else if (voucher.importAction === "skip") counts.skipped += 1;
+    else {
+      const countKey = ({ sale: "sales", purchase: "purchases", creditNote: "creditNotes", purchaseReturn: "purchaseReturns" })[voucher.kind];
+      if (countKey) counts[countKey] += 1;
+      else counts.skipped += 1;
+    }
+  });
+  return counts;
 }
 
 function renderTallyImportReview() {
@@ -7336,9 +7498,15 @@ function renderTallyImportReview() {
   const errors = pendingTallyImport.errors || [];
   const parties = pendingTallyImport.parties || [];
   const items = pendingTallyImport.items || [];
+  const vouchers = pendingTallyImport.vouchers || [];
+  const warnings = pendingTallyImport.warnings || [];
+  const counts = tallyPendingImportCounts();
+  const actionable = counts.sales + counts.purchases + counts.creditNotes + counts.purchaseReturns + counts.cancellations;
   panel.hidden = false;
-  applyButton.hidden = Boolean(errors.length || (!parties.length && !items.length));
+  applyButton.hidden = Boolean(errors.length || (!parties.length && !items.length && !actionable));
   discardButton.hidden = false;
+  const applyLabel = applyButton.querySelector("span");
+  if (applyLabel) applyLabel.textContent = "Apply Tally Data";
   panel.innerHTML = errors.length ? `
     <div class="tally-import-error"><i data-lucide="circle-alert"></i><strong>${escapeHtml(errors[0])}</strong></div>
   ` : `
@@ -7346,83 +7514,310 @@ function renderTallyImportReview() {
       <div><span>File</span><strong>${escapeHtml(pendingTallyImport.fileName || "Tally XML")}</strong></div>
       <div><span>Parties</span><strong>${parties.length}</strong></div>
       <div><span>Items</span><strong>${items.length}</strong></div>
+      <div><span>Vouchers</span><strong>${vouchers.length}</strong></div>
+    </div>
+    <div class="tally-import-count-grid">
+      <div><span>Sales</span><strong>${counts.sales}</strong></div>
+      <div><span>Purchases</span><strong>${counts.purchases}</strong></div>
+      <div><span>Credit Notes</span><strong>${counts.creditNotes}</strong></div>
+      <div><span>Debit Notes</span><strong>${counts.purchaseReturns}</strong></div>
+      <div class="tally-count-muted"><span>Duplicates</span><strong>${counts.duplicates}</strong></div>
+      <div class="${counts.skipped ? "tally-count-warn" : "tally-count-muted"}"><span>Skipped</span><strong>${counts.skipped}</strong></div>
     </div>
     <div class="tally-import-preview-list">
-      ${parties.slice(0, 4).map(party => `<div><i data-lucide="building-2"></i><span><strong>${escapeHtml(party.name)}</strong><small>${escapeHtml(party.gstin || party.type)}</small></span></div>`).join("")}
-      ${items.slice(0, 4).map(item => `<div><i data-lucide="box"></i><span><strong>${escapeHtml(item.name)}</strong><small>HSN ${escapeHtml(item.hsn || DEFAULT_SALE_HSN)} | GST ${num(item.gstRate) || DEFAULT_SALE_GST_RATE}%</small></span></div>`).join("")}
+      ${vouchers.slice(0, 8).map(voucher => `
+        <div class="tally-voucher-preview">
+          <i data-lucide="${tallyVoucherImportIcon(voucher.kind)}"></i>
+          <span><strong>${escapeHtml(voucher.number)} | ${escapeHtml(voucher.partyName || "Party missing")}</strong><small>${escapeHtml(tallyVoucherKindLabel(voucher.kind))} | ${escapeHtml(voucher.date)} | ${money(voucher.total)}</small></span>
+          <em class="tally-import-state ${escapeHtml(voucher.importAction)}">${escapeHtml(tallyImportActionLabel(voucher.importAction))}</em>
+        </div>
+      `).join("")}
     </div>
+    ${(warnings.length || vouchers.some(voucher => voucher.importMessages?.length)) ? `
+      <div class="tally-import-warning-list">
+        ${uniqueMessages([
+          ...warnings,
+          ...vouchers.flatMap(voucher => (voucher.importMessages || []).map(message => `${voucher.number}: ${message}`))
+        ]).slice(0, 8).map(message => `<div><i data-lucide="triangle-alert"></i><span>${escapeHtml(message)}</span></div>`).join("")}
+      </div>
+    ` : ""}
   `;
   if (window.lucide) lucide.createIcons();
 }
 
-function applyTallyMasterImport() {
+function tallyVoucherImportIcon(kind) {
+  if (kind === "purchase") return "shopping-cart";
+  if (kind === "creditNote") return "rotate-ccw";
+  if (kind === "purchaseReturn") return "undo-2";
+  return "receipt-text";
+}
+
+function tallyVoucherKindLabel(kind) {
+  if (kind === "purchase") return "Purchase";
+  if (kind === "creditNote") return "Credit Note";
+  if (kind === "purchaseReturn") return "Debit Note";
+  return "Sale";
+}
+
+function tallyImportActionLabel(action) {
+  if (action === "cancel") return "Cancel";
+  if (action === "duplicate") return "Exists";
+  if (action === "skip") return "Skipped";
+  return "Import";
+}
+
+async function applyTallyDataImport() {
   if (!pendingTallyImport || pendingTallyImport.errors?.length) return;
-  let added = 0;
-  let updated = 0;
+  if (pendingTallyImport.profileId !== activeProfileId()) {
+    toast(`Select ${pendingTallyImport.profileName || "the original company"} before applying this file`);
+    return;
+  }
+  const counts = {
+    partiesAdded: 0,
+    partiesUpdated: 0,
+    itemsAdded: 0,
+    itemsUpdated: 0,
+    sales: 0,
+    purchases: 0,
+    creditNotes: 0,
+    purchaseReturns: 0,
+    cancellations: 0,
+    duplicates: 0,
+    skipped: num(pendingTallyImport.skippedVoucherCount),
+    internalPurchases: 0,
+    internalPurchaseReturns: 0
+  };
   (pendingTallyImport.parties || []).forEach(imported => {
-    const existing = state.parties.find(party => (
-      normalizeGstin(imported.gstin) && normalizeGstin(party.gstin) === normalizeGstin(imported.gstin)
-    ) || normalizeMergeText(party.name) === normalizeMergeText(imported.name));
-    const source = {
-      ...imported,
-      aliases: imported.name,
-      address: imported.address || (imported.pincode ? imported.pincode : "")
-    };
-    if (existing) {
-      const before = cloudAuditComparable(existing);
-      mergeExistingParty(existing, source);
-      if (cloudAuditComparable(existing) !== before) {
-        Object.assign(existing, entityWithLocalMeta(existing, existing));
-        updated += 1;
-      }
-      return;
-    }
-    state.parties.push(normalizePartyForState(entityWithLocalMeta({ id: uid(), ...source })));
-    added += 1;
+    upsertTallyImportedParty(imported, imported.type || "Customer", counts);
   });
   (pendingTallyImport.items || []).forEach(imported => {
-    const existing = state.items.find(item => normalizeMergeText(item.name) === normalizeMergeText(imported.name));
-    const importedHsn = normalizeLineHsn(imported.hsn) || DEFAULT_SALE_HSN;
-    if (existing) {
-      const before = cloudAuditComparable(existing);
-      if ((!normalizeLineHsn(existing.hsn) || normalizeLineHsn(existing.hsn) === DEFAULT_SALE_HSN) && importedHsn !== DEFAULT_SALE_HSN) {
-        existing.hsn = importedHsn;
-      }
-      if (!num(existing.gstRate) && num(imported.gstRate)) existing.gstRate = num(imported.gstRate);
-      if (cloudAuditComparable(existing) !== before) {
-        Object.assign(existing, entityWithLocalMeta(existing, existing));
-        updated += 1;
+    upsertTallyImportedItem(imported, "", counts);
+  });
+
+  (pendingTallyImport.vouchers || []).forEach(reviewedVoucher => {
+    const partySource = tallyImportPartySource(reviewedVoucher, pendingTallyImport.parties || []);
+    const existing = findExistingTallyVoucher(reviewedVoucher, partySource, pendingTallyImport.profileId);
+    if (reviewedVoucher.importAction === "skip") {
+      counts.skipped += 1;
+      return;
+    }
+    if (reviewedVoucher.importAction === "duplicate" || (existing && reviewedVoucher.importAction !== "cancel")) {
+      counts.duplicates += 1;
+      return;
+    }
+    if (reviewedVoucher.importAction === "cancel") {
+      if (existing && !isCancelledEntry(existing)) {
+        applyTallyVoucherCancellation(reviewedVoucher, existing);
+        counts.cancellations += 1;
+      } else {
+        counts.duplicates += 1;
       }
       return;
     }
-    state.items.push(entityWithLocalMeta({
-      id: uid(),
-      name: imported.name,
-      hsn: importedHsn,
-      gstRate: num(imported.gstRate) || DEFAULT_SALE_GST_RATE,
-      saleRate: 0,
-      purchaseRate: 0,
-      openingStock: 0
-    }));
-    added += 1;
+    const role = reviewedVoucher.kind === "sale" || reviewedVoucher.kind === "creditNote" ? "Customer" : "Supplier";
+    const party = upsertTallyImportedParty(partySource, role, counts);
+    if (!party) {
+      counts.skipped += 1;
+      return;
+    }
+    const entry = tallyVoucherToEntry(reviewedVoucher, party, counts);
+    if (!entry) {
+      counts.skipped += 1;
+      return;
+    }
+    entryList(reviewedVoucher.kind).push(entry);
+    const countKey = ({ sale: "sales", purchase: "purchases", creditNote: "creditNotes", purchaseReturn: "purchaseReturns" })[reviewedVoucher.kind];
+    if (countKey) counts[countKey] += 1;
+    if (reviewedVoucher.kind === "sale") {
+      const result = syncInternalPurchaseForSale(entry);
+      if (result.action === "created") counts.internalPurchases += 1;
+    } else if (reviewedVoucher.kind === "creditNote") {
+      const result = syncInternalPurchaseReturnForCreditNote(entry);
+      if (result.action === "created") counts.internalPurchaseReturns += 1;
+    }
   });
+
+  syncSaleNumberingForProfiles([profileById(pendingTallyImport.profileId)], state.sales);
+  const importedDocuments = counts.sales + counts.purchases + counts.creditNotes + counts.purchaseReturns + counts.cancellations;
   state.tallySyncRuns.unshift(createTallySyncRun({
-    runType: "masters-import",
+    profileId: pendingTallyImport.profileId,
+    runType: "data-import",
     status: "Applied",
     sourceFile: pendingTallyImport.fileName || "",
-    documentCount: added + updated,
-    counts: { added, updated },
-    message: `${added} added | ${updated} updated`
+    documentCount: importedDocuments,
+    counts,
+    message: tallyInboundRunMessage(counts)
   }));
   pendingTallyImport = null;
   const input = $("#tallyMasterImportInput");
   if (input) input.value = "";
   saveState();
   renderAll();
-  toast(`Tally masters applied: ${added} added, ${updated} updated`);
+  const canSync = cloudReadyForSync();
+  const synced = canSync ? await syncCloudNow(false) : false;
+  if (canSync && !synced) toast(`Tally data saved locally; cloud sync failed: ${lastCloudSyncError || "try Sync Now"}`);
+  else if (synced) toast(`${importedDocuments} Tally document${importedDocuments === 1 ? "" : "s"} imported and synced`);
+  else toast(`${importedDocuments} Tally document${importedDocuments === 1 ? "" : "s"} imported locally`);
 }
 
-function discardTallyMasterImport() {
+function upsertTallyImportedParty(imported, role, counts) {
+  if (!String(imported?.name || "").trim()) return null;
+  const gstin = normalizeGstin(imported.gstin);
+  const existing = state.parties.find(party => gstin && normalizeGstin(party.gstin) === gstin)
+    || state.parties.find(party => normalizeMergeText(party.name) === normalizeMergeText(imported.name));
+  const source = {
+    ...imported,
+    type: mergePartyTypes(imported.type || role, role),
+    aliases: cleanPartyAliasList([...(partyAliasList(imported)), imported.name]).join("\n"),
+    address: imported.address || imported.pincode || ""
+  };
+  if (existing) {
+    const before = cloudAuditComparable(existing);
+    mergeExistingParty(existing, source);
+    if (cloudAuditComparable(existing) !== before) {
+      Object.assign(existing, entityWithLocalMeta(existing, existing));
+      counts.partiesUpdated += 1;
+    }
+    return existing;
+  }
+  const party = normalizePartyForState(entityWithLocalMeta({ id: uid(), ...source }));
+  state.parties.push(party);
+  counts.partiesAdded += 1;
+  return party;
+}
+
+function upsertTallyImportedItem(imported, voucherKind, counts) {
+  if (!String(imported?.name || imported?.itemName || "").trim()) return null;
+  const name = imported.name || imported.itemName;
+  const existing = state.items.find(item => normalizeMergeText(item.name) === normalizeMergeText(name));
+  const importedHsn = normalizeLineHsn(imported.hsn) || DEFAULT_SALE_HSN;
+  const inclusiveRate = num(imported.grossRate);
+  const saleSide = voucherKind === "sale" || voucherKind === "creditNote";
+  const purchaseSide = voucherKind === "purchase" || voucherKind === "purchaseReturn";
+  if (existing) {
+    const before = cloudAuditComparable(existing);
+    if ((!normalizeLineHsn(existing.hsn) || normalizeLineHsn(existing.hsn) === DEFAULT_SALE_HSN) && importedHsn !== DEFAULT_SALE_HSN) existing.hsn = importedHsn;
+    if (!num(existing.gstRate) && num(imported.gstRate)) existing.gstRate = num(imported.gstRate);
+    if (saleSide && !num(existing.saleRate) && inclusiveRate) existing.saleRate = inclusiveRate;
+    if (purchaseSide && !num(existing.purchaseRate) && inclusiveRate) existing.purchaseRate = inclusiveRate;
+    if (cloudAuditComparable(existing) !== before) {
+      Object.assign(existing, entityWithLocalMeta(existing, existing));
+      counts.itemsUpdated += 1;
+    }
+    return existing;
+  }
+  const item = entityWithLocalMeta({
+    id: uid(),
+    name,
+    hsn: importedHsn,
+    gstRate: num(imported.gstRate) || DEFAULT_SALE_GST_RATE,
+    saleRate: saleSide ? inclusiveRate : 0,
+    purchaseRate: purchaseSide ? inclusiveRate : 0,
+    openingStock: 0,
+    minStock: 0
+  });
+  state.items.push(item);
+  counts.itemsAdded += 1;
+  return item;
+}
+
+function tallyVoucherToEntry(voucher, party, counts) {
+  const profile = profileById(pendingTallyImport.profileId);
+  const lines = (voucher.lines || []).map(line => {
+    const item = upsertTallyImportedItem(line, voucher.kind, counts);
+    if (!item) return null;
+    const qty = Math.abs(num(line.qty));
+    const rate = qty ? round2(num(line.taxable) / qty) : num(line.rate);
+    const gstRate = num(line.gstRate) || num(item.gstRate) || DEFAULT_SALE_GST_RATE;
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      hsn: normalizeLineHsn(line.hsn) || normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
+      qty,
+      rate,
+      grossRate: num(line.grossRate) || inclusiveRateFromTaxable(rate, gstRate),
+      gstRate,
+      imeiNumbers: []
+    };
+  }).filter(Boolean);
+  if (!lines.length) return null;
+  const saleSide = voucher.kind === "sale" || voucher.kind === "creditNote";
+  const address = normalizeAddressSnapshot({
+    name: party.name,
+    gstin: party.gstin,
+    address: voucher.partyAddress || party.address,
+    place: voucher.partyState || party.place,
+    state: voucher.partyState || stateNameFromGstin(party.gstin) || party.place
+  });
+  const entry = entityWithLocalMeta({
+    id: uid(),
+    date: voucher.date,
+    number: voucher.number,
+    profileId: profile.id,
+    partyId: party.id,
+    status: "Active",
+    paymentSourceId: "",
+    paymentDate: "",
+    paymentReference: "",
+    notes: "",
+    lines,
+    taxable: num(voucher.taxable),
+    cgst: num(voucher.cgst),
+    sgst: num(voucher.sgst),
+    igst: num(voucher.igst),
+    gst: num(voucher.gst),
+    roundOff: num(voucher.roundOff),
+    total: num(voucher.total),
+    taxMode: num(voucher.igst) > 0 ? "IGST" : "CGST_SGST",
+    attachments: [],
+    source: "tally-import",
+    rateIncludesGst: true,
+    sellerGstin: normalizeGstin(saleSide ? profile.gstin : party.gstin),
+    buyerGstin: normalizeGstin(saleSide ? party.gstin : profile.gstin),
+    billToSnapshot: saleSide ? address : null,
+    shipToSnapshot: saleSide ? address : null,
+    shipToSameAsBillTo: true,
+    shipToAddressId: "",
+    reviewMessages: [],
+    reviewStatus: "Ready",
+    tallyImportKey: tallyVoucherImportKey(voucher),
+    tallyId: voucher.tallyId || "",
+    tallyVoucherType: voucher.voucherType || "",
+    tallySourceFile: pendingTallyImport.fileName || "",
+    tallyNarration: voucher.narration || "",
+    originalSaleId: "",
+    originalInvoiceNumber: "",
+    originalInvoiceDate: "",
+    reason: voucher.narration || "Imported from Tally",
+    restock: true,
+    cancelled: false,
+    cancelledAt: ""
+  });
+  normalizeEntryForState(entry, voucher.kind, state.parties, state.items);
+  return entry;
+}
+
+function applyTallyVoucherCancellation(voucher, existing) {
+  const previous = clone(existing);
+  existing.cancelled = true;
+  existing.cancelledAt = new Date().toISOString();
+  existing.status = "Cancelled";
+  existing.reviewStatus = "Cancelled";
+  existing.tallyImportKey = tallyVoucherImportKey(voucher);
+  existing.tallyId = voucher.tallyId || existing.tallyId || "";
+  existing.tallySourceFile = pendingTallyImport.fileName || existing.tallySourceFile || "";
+  existing.reviewMessages = uniqueMessages([...(existing.reviewMessages || []), "Cancelled in Tally and synced to the billing app."]);
+  Object.assign(existing, entityWithLocalMeta(existing, existing));
+  if (voucher.kind === "sale") syncInternalPurchaseForSale(existing, previous);
+  if (voucher.kind === "creditNote") syncInternalPurchaseReturnForCreditNote(existing, previous);
+}
+
+function tallyInboundRunMessage(counts) {
+  const documents = tallyRunCountText(counts);
+  return documents || "Tally data reviewed; no new documents were added";
+}
+
+function discardTallyDataImport() {
   pendingTallyImport = null;
   const input = $("#tallyMasterImportInput");
   if (input) input.value = "";
@@ -7442,7 +7837,7 @@ function renderTallyHistory() {
   }
   container.innerHTML = runs.map(run => `
     <div class="tally-history-row">
-      <div class="tally-history-icon"><i data-lucide="${run.runType === "masters-import" ? "file-input" : "file-output"}"></i></div>
+      <div class="tally-history-icon"><i data-lucide="${tallyRunIsImport(run) ? "file-input" : "file-output"}"></i></div>
       <div class="tally-history-main">
         <strong>${escapeHtml(tallyRunTypeLabel(run.runType))}</strong>
         <small>${escapeHtml(run.fileName || run.sourceFile || "Tally XML")}</small>
@@ -7453,7 +7848,7 @@ function renderTallyHistory() {
         <span class="tally-status ${run.status.toLowerCase()}">${escapeHtml(run.status)}</span>
       </div>
       <div class="tally-history-actions">
-        ${run.runType !== "masters-import" ? `<button class="icon-btn" type="button" data-tally-action="download" data-run-id="${escapeHtml(run.id)}" title="Download again"><i data-lucide="download"></i></button>` : ""}
+        ${!tallyRunIsImport(run) ? `<button class="icon-btn" type="button" data-tally-action="download" data-run-id="${escapeHtml(run.id)}" title="Download again"><i data-lucide="download"></i></button>` : ""}
         ${run.status === "Exported" ? `<button class="secondary-btn compact-btn" type="button" data-tally-action="confirm" data-run-id="${escapeHtml(run.id)}"><i data-lucide="check"></i><span>Imported</span></button>` : ""}
       </div>
     </div>
@@ -7461,9 +7856,14 @@ function renderTallyHistory() {
   if (window.lucide) lucide.createIcons();
 }
 
+function tallyRunIsImport(run = {}) {
+  return /-import$/.test(run.runType || "");
+}
+
 function tallyRunTypeLabel(runType) {
   if (runType === "masters-export") return "Masters Export";
   if (runType === "masters-import") return "Masters Import";
+  if (runType === "data-import") return "Tally Data Import";
   return "Voucher Export";
 }
 
@@ -7490,6 +7890,7 @@ function handleTallyHistoryAction(event) {
 
 function redownloadTallyRun(run) {
   if (!window.TallySync) return;
+  if (tallyRunIsImport(run)) return toast("Imported source files are not stored for re-download");
   const profile = profileById(run.profileId);
   const settings = window.TallySync.normalizeSettings(profile.tallySettings || {}, profile);
   if (run.runType === "masters-export") {

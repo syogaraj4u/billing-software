@@ -24,7 +24,8 @@ Browser-based cloud billing software for purchase entry, sales entry, purchase o
 - Supabase login and cloud workspace sync
 - Share a workspace with staff by email
 - Bank/card statement import and purchase/sale reconciliation
-- Tally XML master import plus duplicate-safe master and voucher exports
+- Reviewed Tally XML import for masters, sales, purchases, credit notes, debit notes and cancellations
+- Duplicate-safe Tally master and voucher exports
 - Supabase Edge Function scaffolds for OpenAI extraction and month-end email
 
 ## GitHub Pages
@@ -99,6 +100,20 @@ Each firm has its own non-reusable credit-note sequence, such as `NS/CN/26-27/00
 ## Tally Sync
 
 Run `supabase/migrations/20260716163000_tally_sync.sql` once, or rerun the complete `supabase-schema.sql`. This adds workspace-secured Tally export/import history so duplicate protection is shared by all users and devices.
+
+### From Tally to Billing
+
+1. In Tally, export the required company masters and vouchers as XML.
+2. In the billing app, select the matching GST company and open Tally Sync.
+3. Under From Tally, select the XML file.
+4. Review the party/item counts, sales, purchases, credit notes, debit notes, duplicates, skipped vouchers and warnings.
+5. Apply Tally Data only after the review is correct.
+
+The importer supports party and stock-item masters, sales, purchases, credit notes, debit notes/purchase returns and voucher cancellations. It preserves the Tally voucher number and date, prevents duplicate imports, enforces GSTIN and address requirements for B2B sales, applies the default `85171300` HSN rule, and creates linked internal purchases or purchase returns when a voucher is between two of the eight group firms. If the XML clearly identifies a different Tally company, the app blocks the import into the selected GST profile.
+
+Imported entries, masters and sync history are saved through the normal local/cloud sync flow. The source XML file itself is not stored in Supabase; only its file name and the imported document metadata are retained.
+
+### From Billing to Tally
 
 Open Tally Sync for the selected GST company. Export Masters XML first, then export Vouchers XML for the required date range. Voucher files contain sales, purchases, credit notes, purchase returns, round-off entries and previously exported voucher cancellations. The app omits an already exported document unless Include previously exported is selected. Mark a download as Imported after Tally accepts it.
 

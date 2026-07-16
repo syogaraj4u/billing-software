@@ -323,10 +323,28 @@
         <div class="tally-sync-summary" id="tallySyncSummary"></div>
 
         <div class="tally-action-grid">
+          <section class="panel tally-action-panel tally-import-panel">
+            <div class="tally-panel-icon"><i data-lucide="file-input"></i></div>
+            <div class="tally-panel-copy">
+              <span>From Tally</span>
+              <h4>Import Tally Data</h4>
+              <p>Review masters and vouchers before saving them to this GST company.</p>
+            </div>
+            <label class="primary-btn upload-btn tally-upload-btn">
+              <i data-lucide="upload"></i><span>Select Tally XML</span>
+              <input id="tallyMasterImportInput" type="file" accept=".xml,text/xml,application/xml">
+            </label>
+            <div class="tally-import-review" id="tallyImportReview" hidden></div>
+            <div class="tally-import-actions">
+              <button class="secondary-btn" id="tallyDiscardImportBtn" type="button" hidden>Discard</button>
+              <button class="primary-btn" id="tallyApplyImportBtn" type="button" hidden><i data-lucide="check"></i><span>Apply Tally Data</span></button>
+            </div>
+          </section>
+
           <section class="panel tally-action-panel">
             <div class="tally-panel-icon"><i data-lucide="database"></i></div>
             <div class="tally-panel-copy">
-              <span>Step 1</span>
+              <span>To Tally</span>
               <h4>Masters XML</h4>
               <p>Parties, items, units and GST ledgers.</p>
             </div>
@@ -336,7 +354,7 @@
           <section class="panel tally-action-panel tally-voucher-panel">
             <div class="tally-panel-icon"><i data-lucide="receipt-text"></i></div>
             <div class="tally-panel-copy">
-              <span>Step 2</span>
+              <span>To Tally</span>
               <h4>Voucher XML</h4>
               <p>Sales, purchases, credit notes and purchase returns.</p>
             </div>
@@ -348,23 +366,6 @@
             <button class="primary-btn" id="tallyExportVouchersBtn" type="button"><i data-lucide="download"></i><span>Export Vouchers</span></button>
           </section>
 
-          <section class="panel tally-action-panel tally-import-panel">
-            <div class="tally-panel-icon"><i data-lucide="file-input"></i></div>
-            <div class="tally-panel-copy">
-              <span>From Tally</span>
-              <h4>Import Masters</h4>
-              <p>Review party ledgers and stock items before applying.</p>
-            </div>
-            <label class="secondary-btn upload-btn tally-upload-btn">
-              <i data-lucide="upload"></i><span>Select Tally XML</span>
-              <input id="tallyMasterImportInput" type="file" accept=".xml,text/xml,application/xml">
-            </label>
-            <div class="tally-import-review" id="tallyImportReview" hidden></div>
-            <div class="tally-import-actions">
-              <button class="secondary-btn" id="tallyDiscardImportBtn" type="button" hidden>Discard</button>
-              <button class="primary-btn" id="tallyApplyImportBtn" type="button" hidden><i data-lucide="check"></i><span>Apply Masters</span></button>
-            </div>
-          </section>
         </div>
 
         <section class="panel tally-settings-panel">
@@ -797,7 +798,7 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="tally-sync.js?v=20260716-tally-sync"></script>
-  <script src="app.js?v=20260716-tally-sync"></script>
+  <script src="tally-sync.js?v=20260716-tally-inbound"></script>
+  <script src="app.js?v=20260716-tally-inbound"></script>
 </body>
 </html>

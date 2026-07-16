@@ -381,21 +381,292 @@
     return values;
   }
 
-  function parseMastersXml(text) {
+  function parseDataXml(text, options = {}) {
     if (typeof global.DOMParser !== "function") {
-      return { parties: [], items: [], errors: ["XML parsing is not available in this browser."] };
+      return emptyImportResult("XML parsing is not available in this browser.");
     }
     const documentNode = new global.DOMParser().parseFromString(String(text || ""), "application/xml");
     const parserError = elementsNamed(documentNode, "PARSERERROR")[0];
     if (parserError) {
-      return { parties: [], items: [], errors: [cleanText(parserError.textContent) || "Invalid Tally XML file."] };
+      return emptyImportResult(cleanText(parserError.textContent) || "Invalid Tally XML file.");
     }
     const parties = elementsNamed(documentNode, "LEDGER").map(parseLedgerElement).filter(Boolean);
     const items = elementsNamed(documentNode, "STOCKITEM").map(parseStockItemElement).filter(Boolean);
-    if (!parties.length && !items.length) {
-      return { parties: [], items: [], errors: ["No party ledgers or stock items were found in this Tally XML file."] };
+    const warnings = [];
+    const config = normalizeSettings(options.settings || {}, options.profile || {});
+    const voucherElements = elementsNamed(documentNode, "VOUCHER");
+    const parsedVouchers = voucherElements
+      .map(element => parseVoucherElement(element, config, options.profile || {}, warnings))
+      .filter(Boolean);
+    const vouchers = uniqueImportedVouchers(parsedVouchers);
+    if (!parties.length && !items.length && !vouchers.length) {
+      return {
+        ...emptyImportResult("No supported masters or vouchers were found in this Tally XML file."),
+        warnings
+      };
     }
-    return { parties: uniqueImportedParties(parties), items: uniqueByName(items), errors: [] };
+    return {
+      companyName: cleanText(firstText(documentNode, ["SVCURRENTCOMPANY", "CMPNAME"])),
+      parties: uniqueImportedParties(parties),
+      items: uniqueByName(items),
+      vouchers,
+      skippedVoucherCount: Math.max(0, voucherElements.length - vouchers.length),
+      warnings: uniqueText(warnings),
+      errors: []
+    };
+  }
+
+  function parseMastersXml(text) {
+    const result = parseDataXml(text);
+    return {
+      parties: result.parties,
+      items: result.items,
+      errors: result.errors
+    };
+  }
+
+  function emptyImportResult(error = "") {
+    return {
+      companyName: "",
+      parties: [],
+      items: [],
+      vouchers: [],
+      skippedVoucherCount: 0,
+      warnings: [],
+      errors: error ? [error] : []
+    };
+  }
+
+  function parseVoucherElement(element, settings, profile, warnings) {
+    const voucherType = cleanText(directFirstText(element, ["VOUCHERTYPENAME"]) || element.getAttribute("VCHTYPE"));
+    const kind = voucherKind(voucherType, settings);
+    const number = cleanText(directFirstText(element, ["VOUCHERNUMBER", "REFERENCE", "REFERENCENO"]));
+    const date = parseTallyDate(directFirstText(element, ["DATE", "EFFECTIVEDATE"]));
+    if (!kind) {
+      if (voucherType && number) warnings.push(`${voucherType} voucher ${number} is not mapped and will be skipped.`);
+      return null;
+    }
+    if (!number || !date) {
+      warnings.push(`${voucherType || "Tally"} voucher is missing its number or date and will be skipped.`);
+      return null;
+    }
+
+    const ledgerRows = directChildrenMatching(element, ["ALLLEDGERENTRIES.LIST", "LEDGERENTRIES.LIST"])
+      .map(parseVoucherLedgerRow);
+    const partyLedger = ledgerRows.find(row => row.isParty)
+      || ledgerRows.find(row => normalizeName(row.name) === normalizeName(directFirstText(element, ["PARTYLEDGERNAME", "BASICBASEPARTYNAME"])));
+    const partyName = cleanText(directFirstText(element, ["PARTYLEDGERNAME", "BASICBASEPARTYNAME"]) || partyLedger?.name);
+    const partyGstin = normalizeGstin(directFirstText(element, ["PARTYGSTIN", "CONSIGNEEGSTIN", "BUYERGSTIN", "GSTIN"]));
+    const partyAddress = voucherPartyAddress(element);
+    const partyPincode = normalizePincode(directFirstText(element, ["BASICBUYERPINNUMBER", "CONSIGNEEPINNUMBER", "PINCODE"]) || pincodeFromText(partyAddress));
+    const partyState = cleanText(directFirstText(element, ["PLACEOFSUPPLY", "STATENAME", "LEDSTATENAME"])) || stateFromGstin(partyGstin);
+    const inventoryRows = voucherInventoryRows(element).map(parseVoucherInventoryRow).filter(Boolean);
+    const taxRows = voucherTaxAmounts(ledgerRows, settings);
+    let taxable = roundNumber(inventoryRows.reduce((sum, row) => sum + row.taxable, 0));
+    if (!taxable) taxable = voucherTaxableFromLedgers(ledgerRows, settings, kind);
+    const partyTotal = Math.abs(roundNumber(partyLedger?.amount));
+    let cgst = taxRows.cgst;
+    let sgst = taxRows.sgst;
+    let igst = taxRows.igst;
+    let gst = roundNumber(cgst + sgst + igst);
+    let total = partyTotal || roundNumber(taxable + gst + taxRows.roundOff);
+    if (!gst && total > taxable) {
+      gst = Math.max(0, roundNumber(total - taxable - taxRows.roundOff));
+      const sameState = String(profile?.gstin || "").slice(0, 2) && String(profile.gstin).slice(0, 2) === partyGstin.slice(0, 2);
+      if (sameState) {
+        cgst = roundNumber(gst / 2);
+        sgst = roundNumber(gst - cgst);
+      } else {
+        igst = gst;
+      }
+    }
+    if (!total) total = roundNumber(taxable + gst);
+    const roundOff = roundNumber(total - taxable - gst);
+    const lines = allocateVoucherTax(inventoryRows, gst);
+    const cancelled = /^(yes|true|1)$/i.test(directFirstText(element, ["ISCANCELLED", "ISDELETED"]))
+      || /cancel/i.test(element.getAttribute("ACTION") || "");
+    const voucherWarnings = [];
+    if (!partyName && !cancelled) voucherWarnings.push("Party ledger is missing.");
+    if (!lines.length && !cancelled) voucherWarnings.push("Inventory item lines are missing.");
+    if (!taxable && !cancelled) voucherWarnings.push("Taxable value is missing.");
+    if (voucherWarnings.length) warnings.push(`${voucherType} ${number}: ${voucherWarnings.join(" ")}`);
+    return {
+      tallyId: cleanText(element.getAttribute("REMOTEID") || directFirstText(element, ["GUID", "MASTERID", "ALTERID"])),
+      kind,
+      voucherType,
+      number,
+      date,
+      cancelled,
+      partyName,
+      partyGstin,
+      partyAddress: appendPincode(partyAddress, partyPincode),
+      partyPincode,
+      partyState,
+      lines,
+      taxable,
+      cgst,
+      sgst,
+      igst,
+      gst,
+      roundOff,
+      total,
+      narration: cleanText(directFirstText(element, ["NARRATION"])),
+      warnings: voucherWarnings
+    };
+  }
+
+  function voucherKind(voucherType, settings) {
+    const value = normalizeName(voucherType);
+    if (!value) return "";
+    const configured = [
+      ["creditNote", settings.creditNoteVoucherType],
+      ["purchaseReturn", settings.debitNoteVoucherType],
+      ["purchase", settings.purchaseVoucherType],
+      ["sale", settings.salesVoucherType]
+    ].find(([, name]) => normalizeName(name) === value);
+    if (configured) return configured[0];
+    if (/credit note|sales? return/.test(value)) return "creditNote";
+    if (/debit note|purchase return/.test(value)) return "purchaseReturn";
+    if (/purchase/.test(value)) return "purchase";
+    if (/sales?/.test(value)) return "sale";
+    return "";
+  }
+
+  function parseVoucherLedgerRow(element) {
+    return {
+      name: cleanText(directFirstText(element, ["LEDGERNAME"])),
+      amount: parseTallyNumber(directFirstText(element, ["AMOUNT"])),
+      isParty: /^(yes|true|1)$/i.test(directFirstText(element, ["ISPARTYLEDGER"]))
+    };
+  }
+
+  function voucherInventoryRows(voucher) {
+    for (const names of [
+      ["ALLINVENTORYENTRIES.LIST"],
+      ["INVENTORYENTRIES.LIST"],
+      ["INVENTORYALLOCATIONS.LIST"]
+    ]) {
+      const rows = elementsMatching(voucher, names);
+      if (rows.length) return rows;
+    }
+    return [];
+  }
+
+  function parseVoucherInventoryRow(element) {
+    const name = cleanText(directFirstText(element, ["STOCKITEMNAME"]));
+    const quantityText = directFirstText(element, ["BILLEDQTY", "ACTUALQTY"]);
+    const qty = Math.abs(parseTallyNumber(quantityText));
+    const taxable = Math.abs(roundNumber(parseTallyNumber(directFirstText(element, ["AMOUNT"]))));
+    if (!name || !qty) return null;
+    const directRates = elementsMatching(element, ["GSTRATE", "BASICRATEOFINVOICETAX"])
+      .map(node => Math.abs(parseTallyNumber(node.textContent)))
+      .filter(value => value > 0 && value <= 100);
+    let gstRate = directRates.length ? Math.max(...directRates) : 0;
+    if (gstRate > 0 && gstRate <= 14 && directRates.length >= 2) gstRate *= 2;
+    return {
+      itemName: name,
+      hsn: normalizeHsn(firstText(element, ["HSNCODE", "GSTHSNCODE", "HSN"])),
+      qty,
+      unit: tallyUnit(quantityText) || tallyUnit(directFirstText(element, ["RATE"])) || "Pcs",
+      taxable,
+      rate: roundNumber(taxable / qty),
+      grossRate: 0,
+      gstRate: clampRate(gstRate)
+    };
+  }
+
+  function voucherTaxAmounts(rows, settings) {
+    const totals = { cgst: 0, sgst: 0, igst: 0, roundOff: 0 };
+    rows.forEach(row => {
+      const name = normalizeName(row.name);
+      const value = Math.abs(roundNumber(row.amount));
+      if (!name || !value) return;
+      if (name === normalizeName(settings.cgstLedger) || /(^| )cgst( |$)|central tax/.test(name)) totals.cgst += value;
+      else if (name === normalizeName(settings.sgstLedger) || /(^| )sgst( |$)|state tax/.test(name)) totals.sgst += value;
+      else if (name === normalizeName(settings.igstLedger) || /(^| )igst( |$)|integrated tax/.test(name)) totals.igst += value;
+      else if (name === normalizeName(settings.roundOffLedger) || /round(ing)? off/.test(name)) totals.roundOff += row.amount;
+    });
+    totals.cgst = roundNumber(totals.cgst);
+    totals.sgst = roundNumber(totals.sgst);
+    totals.igst = roundNumber(totals.igst);
+    totals.roundOff = roundNumber(totals.roundOff);
+    return totals;
+  }
+
+  function voucherTaxableFromLedgers(rows, settings, kind) {
+    const configuredName = normalizeName(kind === "sale" || kind === "creditNote" ? settings.salesLedger : settings.purchaseLedger);
+    const matched = rows.filter(row => {
+      const name = normalizeName(row.name);
+      if (configuredName && name === configuredName) return true;
+      return kind === "sale" || kind === "creditNote" ? /(^| )sales?( |$)/.test(name) : /(^| )purchase( |$)/.test(name);
+    });
+    return roundNumber(matched.reduce((sum, row) => sum + Math.abs(row.amount), 0));
+  }
+
+  function allocateVoucherTax(rows, gstTotal) {
+    const taxableTotal = rows.reduce((sum, row) => sum + row.taxable, 0);
+    let allocated = 0;
+    return rows.map((row, index) => {
+      const lineGst = index === rows.length - 1
+        ? roundNumber(gstTotal - allocated)
+        : roundNumber(taxableTotal ? gstTotal * row.taxable / taxableTotal : 0);
+      allocated = roundNumber(allocated + lineGst);
+      const derivedRate = row.taxable ? roundNumber(lineGst * 100 / row.taxable) : 0;
+      const gstRate = row.gstRate || nearestGstRate(derivedRate);
+      return {
+        ...row,
+        gstRate,
+        grossRate: roundNumber((row.taxable + lineGst) / row.qty)
+      };
+    });
+  }
+
+  function nearestGstRate(value) {
+    const rates = [0, 0.1, 0.25, 1, 1.5, 3, 5, 7.5, 12, 18, 28];
+    const number = clampRate(value);
+    return rates.reduce((closest, rate) => Math.abs(rate - number) < Math.abs(closest - number) ? rate : closest, rates[0]);
+  }
+
+  function voucherPartyAddress(element) {
+    const values = ["BASICBUYERADDRESS", "ADDRESS", "CONSIGNEEADDRESS"]
+      .flatMap(name => elementsNamed(element, name))
+      .map(node => cleanText(node.textContent))
+      .filter(Boolean);
+    return uniqueText(values).slice(0, 6).join(", ");
+  }
+
+  function parseTallyDate(value) {
+    const text = cleanText(value);
+    const compact = text.replace(/\D/g, "");
+    if (/^(19|20)\d{6}$/.test(compact)) return `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`;
+    if (/^\d{8}$/.test(compact)) return `${compact.slice(4, 8)}-${compact.slice(2, 4)}-${compact.slice(0, 2)}`;
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return "";
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function parseTallyNumber(value) {
+    const match = String(value || "").replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : 0;
+  }
+
+  function tallyUnit(value) {
+    return cleanText(String(value || "").replace(/-?[\d,.]+/g, "").replace(/^\s*\/\s*/, ""))
+      .split(/\s+/)[0]
+      ?.replace(/[^A-Za-z]/g, "") || "";
+  }
+
+  function uniqueImportedVouchers(vouchers = []) {
+    const seen = new Set();
+    return vouchers.filter(voucher => {
+      const key = [voucher.kind, normalizeName(voucher.number), voucher.date, voucher.tallyId].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   function parseLedgerElement(element) {
@@ -445,10 +716,32 @@
     return Array.from(root?.getElementsByTagName?.("*") || []).filter(node => String(node.localName || node.nodeName || "").toUpperCase() === wanted);
   }
 
+  function elementsMatching(root, names = []) {
+    const wanted = new Set(names.map(name => String(name || "").toUpperCase()));
+    return Array.from(root?.getElementsByTagName?.("*") || []).filter(node => wanted.has(elementName(node)));
+  }
+
+  function directChildrenMatching(element, names = []) {
+    const wanted = new Set(names.map(name => String(name || "").toUpperCase()));
+    return Array.from(element?.children || []).filter(node => wanted.has(elementName(node)));
+  }
+
+  function elementName(node) {
+    return String(node?.localName || node?.nodeName || "").toUpperCase();
+  }
+
   function directChildText(element, name) {
     const wanted = String(name || "").toUpperCase();
-    const child = Array.from(element?.children || []).find(node => String(node.localName || node.nodeName || "").toUpperCase() === wanted);
+    const child = Array.from(element?.children || []).find(node => elementName(node) === wanted);
     return cleanText(child?.textContent);
+  }
+
+  function directFirstText(element, names = []) {
+    for (const name of names) {
+      const value = directChildText(element, name);
+      if (value) return value;
+    }
+    return "";
   }
 
   function firstText(element, names = []) {
@@ -484,6 +777,20 @@
       seen.add(key);
       return true;
     });
+  }
+
+  function uniqueText(values = []) {
+    const seen = new Set();
+    return values.filter(value => {
+      const key = cleanText(value).toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function normalizeName(value) {
+    return cleanText(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   }
 
   function addressLines(value) {
@@ -577,6 +884,7 @@
     normalizeSettings,
     buildMastersXml,
     buildVouchersXml,
+    parseDataXml,
     parseMastersXml,
     tallyDate
   });
