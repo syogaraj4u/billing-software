@@ -13,7 +13,7 @@
   <script>
     document.documentElement.dataset.deviceView = window.matchMedia("(max-width: 820px)").matches ? "mobile" : "desktop";
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260716-tally-sync">
+  <link rel="stylesheet" href="styles.css?v=20260716-purchase-import">
   <link rel="stylesheet" href="desktop-view.css?v=20260629-dashboard-actions" media="(min-width: 821px)">
   <link rel="stylesheet" href="mobile-view.css?v=20260629-dashboard-actions" media="(max-width: 820px)">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -183,8 +183,9 @@
           <div class="section-actions">
             <label class="month-filter">Month<select id="purchaseMonthFilter" aria-label="Purchase month"></select></label>
             <button class="secondary-btn" id="ewayJsonBtn"><i data-lucide="file-json"></i><span>E-way JSON</span></button>
+            <button class="secondary-btn purchase-inbox-btn" id="purchaseImportInboxBtn" type="button"><i data-lucide="inbox"></i><span>Inbox</span><b id="purchaseImportInboxCount" hidden>0</b></button>
             <label class="secondary-btn upload-btn" title="Upload purchase invoice PDF or image">
-              <i data-lucide="file-up"></i><span>Upload Invoice</span>
+              <i data-lucide="file-up"></i><span>Upload Invoices</span>
               <input id="purchaseInvoiceInput" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,image/tiff,image/bmp,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp" multiple>
             </label>
             <button class="primary-btn" id="newPurchaseBtn"><i data-lucide="plus"></i><span>New Purchase</span></button>
@@ -575,6 +576,45 @@
     </form>
   </dialog>
 
+  <dialog id="purchaseImportDialog" class="purchase-import-dialog">
+    <div class="purchase-import-shell">
+      <div class="dialog-head purchase-import-head">
+        <div>
+          <p class="eyebrow">Purchase Import</p>
+          <h3>Invoice Inbox</h3>
+        </div>
+        <button class="icon-btn" type="button" data-close-dialog="purchaseImportDialog" title="Close"><i data-lucide="x"></i></button>
+      </div>
+
+      <div class="purchase-import-toolbar">
+        <label>Batch<select id="purchaseImportBatchSelect" aria-label="Purchase import batch"></select></label>
+        <label class="secondary-btn upload-btn purchase-import-add-btn" title="Add invoices to this batch">
+          <i data-lucide="plus"></i><span>Add Invoices</span>
+          <input id="purchaseImportAddInput" data-purchase-import-append="true" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,image/tiff,image/bmp,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp" multiple>
+        </label>
+      </div>
+
+      <div class="purchase-import-stages" aria-label="Import progress">
+        <span data-import-stage="upload"><b>1</b>Upload</span>
+        <span data-import-stage="review"><b>2</b>Review</span>
+        <span data-import-stage="approve"><b>3</b>Approve</span>
+      </div>
+      <div class="purchase-import-stats" id="purchaseImportStats"></div>
+
+      <div class="purchase-import-workspace">
+        <aside class="purchase-import-list" id="purchaseImportDocumentList"></aside>
+        <main class="purchase-import-review" id="purchaseImportReviewPanel"></main>
+      </div>
+
+      <menu class="dialog-actions purchase-import-actions">
+        <label class="checkbox-row purchase-import-select-all"><input id="purchaseImportSelectAll" type="checkbox"><span>Select all ready</span></label>
+        <span class="purchase-import-selection" id="purchaseImportSelection"></span>
+        <button class="secondary-btn" id="purchaseImportDiscardBtn" type="button"><i data-lucide="trash-2"></i><span>Discard Batch</span></button>
+        <button class="primary-btn" id="purchaseImportApproveBtn" type="button"><i data-lucide="check-check"></i><span>Approve &amp; Save</span></button>
+      </menu>
+    </div>
+  </dialog>
+
   <dialog id="creditNoteDialog" class="wide-dialog credit-note-dialog">
     <form method="dialog" id="creditNoteForm">
       <div class="dialog-head">
@@ -799,6 +839,6 @@
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="tally-sync.js?v=20260716-tally-inbound"></script>
-  <script src="app.js?v=20260716-tally-inbound"></script>
+  <script src="app.js?v=20260716-purchase-import"></script>
 </body>
 </html>

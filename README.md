@@ -15,7 +15,7 @@ Browser-based cloud billing software for purchase entry, sales entry, purchase o
 - Party master
 - Stock updates
 - CGST, SGST and IGST split calculation
-- Purchase invoice PDF/image upload with buyer/seller GST review
+- Multi-invoice purchase inbox with concurrent extraction, buyer/seller GST review and bulk approval
 - Purchase bill selection and e-way JSON export
 - Purchase register CSV download for Excel
 - GST reports
@@ -82,6 +82,12 @@ The `estimate-eway-distance` function uses only Google Routes API for road dista
 Run `supabase/migrations/20260713161000_google_routes_safeguards.sql` before deploying the distance function. It adds a shared unordered PIN-pair cache, duplicate-request locks, and hard Google call limits of 60,000 per year, 5,000 per month, and 150 per day in the `Asia/Kolkata` timezone. Failed Google requests count because Google may still treat them as billable events, and the same PIN pair is not retried automatically after a failed attempt. Cached, same-PIN, configured, and manually confirmed distances do not count.
 
 As a second protection layer, restrict the server key to Routes API in Google Cloud, configure the lowest practical Routes API quota, and add billing-budget alerts. The database hard limits remain authoritative because Google Cloud does not provide the app's calendar-year counter.
+
+## Purchase Import Inbox
+
+Run `supabase/migrations/20260716193000_purchase_import_inbox.sql` once, or rerun the complete `supabase-schema.sql`. This creates workspace-secured import batch and document tables so extracted invoice reviews are shared by every signed-in device.
+
+Upload one or more purchase PDFs/images from Purchases. The app extracts two files at a time and keeps each result in the Invoice Inbox without changing purchases, stock, parties or items. The review stage checks the buyer against the eight GST firms, requires supplier GSTIN and PIN, applies the default `85171300` HSN, highlights tax differences, and blocks saved or same-batch duplicates. Ready invoices can be selected across different buyer companies and saved together; failed, incomplete and duplicate documents remain in the inbox for correction.
 
 ## Bank Reconciliation
 

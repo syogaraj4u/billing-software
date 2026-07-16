@@ -18,6 +18,8 @@ const CLOUD_ROW_TABLES = {
   paymentSources: "billing_payment_sources",
   bankTransactions: "billing_bank_transactions",
   tallySyncRuns: "billing_tally_sync_runs",
+  purchaseImportBatches: "billing_purchase_import_batches",
+  purchaseImportDocuments: "billing_purchase_import_documents",
   auditLogs: "billing_audit_logs",
   backups: "billing_cloud_backups"
 };
@@ -483,7 +485,9 @@ const defaultState = {
   purchaseOrders: [],
   paymentSources: createDefaultPaymentSources(),
   bankTransactions: [],
-  tallySyncRuns: []
+  tallySyncRuns: [],
+  purchaseImportBatches: [],
+  purchaseImportDocuments: []
 };
 
 let state = loadState();
@@ -509,7 +513,13 @@ let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
 let entryMonthFilters = {};
 let purchaseUploadQueue = [];
-let purchaseUploadBusy = false;
+let purchaseUploadWorkers = 0;
+let activePurchaseImportBatchId = "";
+let activePurchaseImportDocumentId = "";
+let purchaseImportApproving = false;
+const purchaseImportFiles = new Map();
+const PURCHASE_IMPORT_CONCURRENCY = 2;
+let purchaseImportCloudSyncChain = Promise.resolve();
 let entryDraftMeta = {};
 let partyDialogContext = null;
 let chatBillMessages = [];
@@ -636,6 +646,12 @@ function normalizeState(value) {
   value.tallySyncRuns = Array.isArray(value.tallySyncRuns)
     ? value.tallySyncRuns.map(normalizeTallySyncRunForState)
     : [];
+  value.purchaseImportBatches = Array.isArray(value.purchaseImportBatches)
+    ? value.purchaseImportBatches.map(normalizePurchaseImportBatchForState)
+    : [];
+  value.purchaseImportDocuments = Array.isArray(value.purchaseImportDocuments)
+    ? value.purchaseImportDocuments.map(normalizePurchaseImportDocumentForState)
+    : [];
   [...value.sales, ...value.creditNotes, ...value.purchases, ...value.purchaseReturns, ...value.purchaseOrders].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
@@ -686,6 +702,8 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
     changed = mergeByIdentity(merged.paymentSources, local.paymentSources, paymentSourceMergeKey) || changed;
     changed = mergeByIdentity(merged.bankTransactions, local.bankTransactions, bankTransactionMergeKey) || changed;
     changed = mergeByIdentity(merged.tallySyncRuns, local.tallySyncRuns, tallySyncRunMergeKey, mergeExistingTallySyncRun) || changed;
+    changed = mergeByIdentity(merged.purchaseImportBatches, local.purchaseImportBatches, purchaseImportBatchMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.purchaseImportDocuments, local.purchaseImportDocuments, purchaseImportDocumentMergeKey, mergeNewestCloudEntity) || changed;
     mergeProfileCounters(merged.settings.profiles, local.settings.profiles);
   });
   return { state: normalizeState(merged), changed };
@@ -783,7 +801,19 @@ function tallySyncRunMergeKey(run = {}) {
   return run.id || [run.profileId || "", run.runType || "", run.fileName || "", run.createdAt || ""].join("|");
 }
 
+function purchaseImportBatchMergeKey(batch = {}) {
+  return batch.id || "";
+}
+
+function purchaseImportDocumentMergeKey(document = {}) {
+  return document.id || "";
+}
+
 function mergeExistingTallySyncRun(target, source) {
+  return mergeNewestCloudEntity(target, source);
+}
+
+function mergeNewestCloudEntity(target, source) {
   const targetUpdated = new Date(target?.updatedAt || target?.createdAt || 0).getTime() || 0;
   const sourceUpdated = new Date(source?.updatedAt || source?.createdAt || 0).getTime() || 0;
   if (sourceUpdated <= targetUpdated || cloudAuditComparable(target) === cloudAuditComparable(source)) return false;
@@ -1145,6 +1175,80 @@ function normalizeTallySyncRunForState(run = {}) {
   };
   normalizeCloudEntityMeta(normalized, run);
   return normalized;
+}
+
+function normalizePurchaseImportBatchForState(batch = {}) {
+  const allowedStatuses = new Set(["extracting", "review", "partial", "completed"]);
+  const normalized = {
+    id: String(batch.id || uid()),
+    status: allowedStatuses.has(batch.status) ? batch.status : "review",
+    fileCount: Math.max(0, Math.round(num(batch.fileCount))),
+    approvedCount: Math.max(0, Math.round(num(batch.approvedCount))),
+    completedAt: String(batch.completedAt || ""),
+    label: String(batch.label || "").trim()
+  };
+  normalizeCloudEntityMeta(normalized, batch);
+  return normalized;
+}
+
+function normalizePurchaseImportDocumentForState(document = {}) {
+  const allowedStatuses = new Set(["queued", "extracting", "ready", "needs-review", "duplicate", "failed", "approving", "approved"]);
+  const normalized = {
+    id: String(document.id || uid()),
+    batchId: String(document.batchId || ""),
+    fileName: String(document.fileName || document.parsed?.fileName || "Invoice").trim(),
+    mimeType: String(document.mimeType || "application/octet-stream"),
+    size: Math.max(0, num(document.size)),
+    fileHash: String(document.fileHash || ""),
+    status: allowedStatuses.has(document.status) ? document.status : "queued",
+    selected: Boolean(document.selected),
+    parsed: normalizePurchaseImportParsedForState(document.parsed || {}, document.fileName),
+    validationErrors: uniqueMessages(document.validationErrors || []),
+    validationWarnings: uniqueMessages(document.validationWarnings || []),
+    duplicatePurchaseId: String(document.duplicatePurchaseId || ""),
+    approvedPurchaseId: String(document.approvedPurchaseId || ""),
+    error: String(document.error || "")
+  };
+  normalizeCloudEntityMeta(normalized, document);
+  return normalized;
+}
+
+function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "") {
+  const lines = (Array.isArray(parsed.lines) ? parsed.lines : []).map(line => {
+    const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
+    const grossRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
+    return {
+      name: String(line.name || line.itemName || "").trim(),
+      hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+      qty: num(line.qty),
+      rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
+      grossRate,
+      gstRate,
+      imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
+    };
+  });
+  return {
+    fileName: String(parsed.fileName || fallbackFileName || "Invoice").trim(),
+    profileId: String(parsed.profileId || ""),
+    supplierName: String(parsed.supplierName || "").trim(),
+    supplierGstin: normalizeGstin(parsed.supplierGstin),
+    supplierAddress: String(parsed.supplierAddress || "").trim(),
+    supplierPlace: String(parsed.supplierPlace || "").trim(),
+    buyerName: String(parsed.buyerName || "").trim(),
+    buyerGstin: normalizeGstin(parsed.buyerGstin),
+    buyerAddress: String(parsed.buyerAddress || "").trim(),
+    buyerPlace: String(parsed.buyerPlace || "").trim(),
+    invoiceNumber: String(parsed.invoiceNumber || "").trim(),
+    invoiceDate: String(parsed.invoiceDate || ""),
+    taxable: round2(parsed.taxable),
+    gst: round2(parsed.gst),
+    total: round2(parsed.total),
+    roundOff: round2(parsed.roundOff),
+    extractedTaxes: parsed.extractedTaxes && typeof parsed.extractedTaxes === "object" ? clone(parsed.extractedTaxes) : null,
+    reviewMessages: uniqueMessages(parsed.reviewMessages || []),
+    attachments: Array.isArray(parsed.attachments) ? clone(parsed.attachments) : [],
+    lines
+  };
 }
 
 function normalizeInternalTransfer(value = null) {
@@ -2208,6 +2312,17 @@ function bindEvents() {
     renderEntries("po");
   });
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
+  bindIf("#purchaseImportAddInput", "change", handlePurchaseInvoiceUpload);
+  bindIf("#purchaseImportInboxBtn", "click", openPurchaseImportInbox);
+  bindIf("#purchaseImportBatchSelect", "change", handlePurchaseImportBatchChange);
+  bindIf("#purchaseImportDocumentList", "click", handlePurchaseImportDocumentClick);
+  bindIf("#purchaseImportDocumentList", "change", handlePurchaseImportDocumentSelection);
+  bindIf("#purchaseImportSelectAll", "change", toggleReadyPurchaseImports);
+  bindIf("#purchaseImportApproveBtn", "click", approveSelectedPurchaseImports);
+  bindIf("#purchaseImportDiscardBtn", "click", discardActivePurchaseImportBatch);
+  bindIf("#purchaseImportReviewPanel", "submit", savePurchaseImportReview);
+  bindIf("#purchaseImportReviewPanel", "click", handlePurchaseImportReviewClick);
+  bindIf("#purchaseImportReviewPanel", "input", updatePurchaseImportReviewTotals);
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
   $("#newItemBtn").addEventListener("click", () => openItem());
@@ -2328,6 +2443,7 @@ function renderAll() {
   renderParties();
   renderReconciliation();
   renderTallySync();
+  renderPurchaseImportInbox();
   renderSettings();
   renderReport();
   renderCloudUi();
@@ -2843,7 +2959,7 @@ async function enrichCloudWorkspaceWithRows(workspace = {}) {
 
 async function readNormalizedCloudState(workspaceId) {
   if (!cloudClient || !workspaceId) return null;
-  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions, tallySyncRuns] = await Promise.all([
+  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions, tallySyncRuns, purchaseImportBatches, purchaseImportDocuments] = await Promise.all([
     readCloudTableRows(CLOUD_ROW_TABLES.parties, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.items, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.sales, workspaceId),
@@ -2853,10 +2969,12 @@ async function readNormalizedCloudState(workspaceId) {
     readCloudTableRows(CLOUD_ROW_TABLES.purchaseOrders, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.paymentSources, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.bankTransactions, workspaceId),
-    readCloudTableRows(CLOUD_ROW_TABLES.tallySyncRuns, workspaceId)
+    readCloudTableRows(CLOUD_ROW_TABLES.tallySyncRuns, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.purchaseImportBatches, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.purchaseImportDocuments, workspaceId)
   ]);
   if ([parties, items, sales, purchases, purchaseOrders].some(result => result === null)) return null;
-  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || [], tallySyncRuns || []].some(rows => rows.length);
+  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || [], tallySyncRuns || [], purchaseImportBatches || [], purchaseImportDocuments || []].some(rows => rows.length);
   if (!hasRows) return null;
   return normalizeState({
     ...clone(defaultState),
@@ -2932,6 +3050,27 @@ async function readNormalizedCloudState(workspaceId) {
       entryRefs: row.entry_refs,
       counts: row.counts,
       message: row.message
+    })),
+    purchaseImportBatches: (purchaseImportBatches || []).map(row => cloudRowData(row, {
+      id: row.id,
+      status: row.status,
+      fileCount: row.file_count,
+      approvedCount: row.approved_count,
+      completedAt: row.completed_at,
+      label: row.label
+    })),
+    purchaseImportDocuments: (purchaseImportDocuments || []).map(row => cloudRowData(row, {
+      id: row.id,
+      batchId: row.batch_id,
+      fileName: row.file_name,
+      mimeType: row.mime_type,
+      size: row.file_size,
+      fileHash: row.file_hash,
+      status: row.status,
+      selected: row.selected,
+      duplicatePurchaseId: row.duplicate_purchase_id,
+      approvedPurchaseId: row.approved_purchase_id,
+      error: row.error
     }))
   });
 }
@@ -3137,8 +3276,16 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.purchaseReturns, "id", nextState.purchaseReturns, previousState.purchaseReturns, row => cloudEntryRow(workspaceId, row, "purchaseReturn", syncedAt, userId)),
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.paymentSources, "id", nextState.paymentSources, previousState.paymentSources, row => cloudPaymentSourceRow(workspaceId, row, syncedAt, userId)),
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.bankTransactions, "id", nextState.bankTransactions, previousState.bankTransactions, row => cloudBankTransactionRow(workspaceId, row, syncedAt, userId)),
-    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.tallySyncRuns, "id", nextState.tallySyncRuns, previousState.tallySyncRuns, row => cloudTallySyncRunRow(workspaceId, row, syncedAt, userId))
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.tallySyncRuns, "id", nextState.tallySyncRuns, previousState.tallySyncRuns, row => cloudTallySyncRunRow(workspaceId, row, syncedAt, userId)),
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.purchaseImportBatches, "id", nextState.purchaseImportBatches, previousState.purchaseImportBatches, row => cloudPurchaseImportBatchRow(workspaceId, row, syncedAt, userId))
   ]);
+  await syncOptionalCloudEntityTable(
+    CLOUD_ROW_TABLES.purchaseImportDocuments,
+    "id",
+    nextState.purchaseImportDocuments,
+    previousState.purchaseImportDocuments,
+    row => cloudPurchaseImportDocumentRow(workspaceId, row, syncedAt, userId)
+  );
   await Promise.all([
     replaceCloudLineRows(CLOUD_ROW_TABLES.saleItems, nextState.sales.flatMap(entry => cloudLineRows(workspaceId, entry, "sale", syncedAt, userId))),
     replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseItems, nextState.purchases.flatMap(entry => cloudLineRows(workspaceId, entry, "purchase", syncedAt, userId))),
@@ -3401,6 +3548,45 @@ function cloudTallySyncRunRow(workspaceId, run, syncedAt, userId) {
   };
 }
 
+function cloudPurchaseImportBatchRow(workspaceId, batch, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    id: batch.id,
+    status: batch.status || "review",
+    file_count: Math.max(0, Math.round(num(batch.fileCount))),
+    approved_count: Math.max(0, Math.round(num(batch.approvedCount))),
+    completed_at: cloudTimestamp(batch.completedAt) || null,
+    label: batch.label || "",
+    data: clone(batch),
+    ...cloudSyncColumns(batch, syncedAt, userId)
+  };
+}
+
+function cloudPurchaseImportDocumentRow(workspaceId, document, syncedAt, userId) {
+  const parsed = document.parsed || {};
+  return {
+    workspace_id: workspaceId,
+    id: document.id,
+    batch_id: document.batchId || "",
+    file_name: document.fileName || "Invoice",
+    mime_type: document.mimeType || "application/octet-stream",
+    file_size: Math.max(0, Math.round(num(document.size))),
+    file_hash: document.fileHash || "",
+    status: document.status || "queued",
+    selected: Boolean(document.selected),
+    profile_id: parsed.profileId || "",
+    supplier_gstin: normalizeGstin(parsed.supplierGstin),
+    invoice_number: parsed.invoiceNumber || "",
+    invoice_date: cloudDate(parsed.invoiceDate),
+    total: round2(purchaseImportCalculatedTotals(parsed).total),
+    duplicate_purchase_id: document.duplicatePurchaseId || null,
+    approved_purchase_id: document.approvedPurchaseId || null,
+    error: document.error || "",
+    data: clone(document),
+    ...cloudSyncColumns(document, syncedAt, userId)
+  };
+}
+
 function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
   const base = {
     workspace_id: workspaceId,
@@ -3523,7 +3709,7 @@ function cloudTimestamp(value) {
 
 function markStateSyncStatus(sourceState, status, syncedAt = "") {
   const nextState = normalizeState(clone(sourceState || defaultState));
-  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions, ...nextState.tallySyncRuns]
+  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions, ...nextState.tallySyncRuns, ...nextState.purchaseImportBatches, ...nextState.purchaseImportDocuments]
     .forEach(entity => markEntitySyncStatus(entity, status, syncedAt));
   return nextState;
 }
@@ -3554,7 +3740,9 @@ function buildCloudAuditRows(previousState, nextState, syncedAt, userId) {
     ["purchase_order", previousState.purchaseOrders, nextState.purchaseOrders],
     ["payment_source", previousState.paymentSources, nextState.paymentSources],
     ["bank_transaction", previousState.bankTransactions, nextState.bankTransactions],
-    ["tally_sync_run", previousState.tallySyncRuns, nextState.tallySyncRuns]
+    ["tally_sync_run", previousState.tallySyncRuns, nextState.tallySyncRuns],
+    ["purchase_import_batch", previousState.purchaseImportBatches, nextState.purchaseImportBatches],
+    ["purchase_import_document", previousState.purchaseImportDocuments, nextState.purchaseImportDocuments]
   ];
   return groups.flatMap(([entityType, beforeRows, afterRows]) => buildCloudAuditRowsForGroup(entityType, beforeRows, afterRows, syncedAt, userId));
 }
@@ -11298,35 +11486,113 @@ function smartBillPartyCard(title, name, gstin, address) {
 async function handlePurchaseInvoiceUpload(event) {
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
-  purchaseUploadQueue.push(...files);
+  const appendToActive = event.currentTarget?.dataset?.purchaseImportAppend === "true";
+  let batch = appendToActive ? purchaseImportBatchById(activePurchaseImportBatchId) : null;
+  if (!batch || batch.status === "completed") batch = createPurchaseImportBatch();
+  activePurchaseImportBatchId = batch.id;
+  const documents = files.map(file => createPurchaseImportDocument(batch, file));
+  documents.forEach((document, index) => {
+    const file = files[index];
+    purchaseImportFiles.set(document.id, file);
+    purchaseUploadQueue.push({ batchId: batch.id, documentId: document.id, file });
+  });
+  batch.fileCount = purchaseImportDocuments(batch.id).length;
+  batch.status = "extracting";
+  touchPurchaseImportEntity(batch);
+  activePurchaseImportDocumentId = documents[0]?.id || activePurchaseImportDocumentId;
   event.target.value = "";
-  await processQueuedPurchaseInvoiceUpload();
+  saveState({ skipCloud: true });
+  queuePurchaseImportCloudSync(batch.id);
+  openPurchaseImportInbox(batch.id);
+  renderPurchaseImportInbox();
+  processQueuedPurchaseInvoiceUpload();
 }
 
-async function processQueuedPurchaseInvoiceUpload() {
-  if (purchaseUploadBusy || $("#entryDialog")?.open || !purchaseUploadQueue.length) return;
-  const file = purchaseUploadQueue.shift();
-  try {
-    purchaseUploadBusy = true;
-    toast(`Reading ${file.name}...`);
-    const draft = await buildPurchaseDraftFromFile(file);
-    if (draft.profileId !== activeProfileId()) {
-      setActiveProfileId(draft.profileId);
-    }
-    saveState();
-    renderAll();
-    openEntry("purchase", null, draft);
-    toast(purchaseUploadQueue.length ? "Invoice opened. Save it to review the next upload." : "Invoice details filled. Please review before saving.");
-  } catch (error) {
-    console.error(error);
-    toast("Could not read this invoice");
-  } finally {
-    purchaseUploadBusy = false;
-    if (!$("#entryDialog")?.open && purchaseUploadQueue.length) processQueuedPurchaseInvoiceUpload();
+function createPurchaseImportBatch() {
+  const batch = entityWithLocalMeta({
+    id: uid(),
+    status: "extracting",
+    fileCount: 0,
+    approvedCount: 0,
+    completedAt: "",
+    label: ""
+  });
+  state.purchaseImportBatches.unshift(batch);
+  return batch;
+}
+
+function createPurchaseImportDocument(batch, file) {
+  const document = entityWithLocalMeta({
+    id: uid(),
+    batchId: batch.id,
+    fileName: file.name || "Invoice",
+    mimeType: file.type || "application/octet-stream",
+    size: file.size || 0,
+    fileHash: "",
+    status: "queued",
+    selected: false,
+    parsed: normalizePurchaseImportParsedForState({ fileName: file.name }, file.name),
+    validationErrors: [],
+    validationWarnings: [],
+    duplicatePurchaseId: "",
+    approvedPurchaseId: "",
+    error: ""
+  });
+  state.purchaseImportDocuments.push(document);
+  return document;
+}
+
+function processQueuedPurchaseInvoiceUpload() {
+  while (purchaseUploadWorkers < PURCHASE_IMPORT_CONCURRENCY && purchaseUploadQueue.length) {
+    const job = purchaseUploadQueue.shift();
+    purchaseUploadWorkers += 1;
+    extractPurchaseImportDocument(job)
+      .catch(error => console.error("Purchase import failed", error))
+      .finally(() => {
+        purchaseUploadWorkers -= 1;
+        processQueuedPurchaseInvoiceUpload();
+        if (!purchaseUploadWorkers && !purchaseUploadQueue.length) saveState();
+      });
   }
 }
 
-async function buildPurchaseDraftFromFile(file) {
+async function extractPurchaseImportDocument({ batchId, documentId, file }) {
+  const document = purchaseImportDocumentById(documentId);
+  if (!document) return;
+  document.status = "extracting";
+  document.error = "";
+  touchPurchaseImportEntity(document);
+  updatePurchaseImportBatchProgress(batchId);
+  saveState({ skipCloud: true });
+  renderPurchaseImportInbox();
+  try {
+    const [fileHash, parsed] = await Promise.all([
+      purchaseImportFileHash(file),
+      extractPurchaseInvoiceParsedFromFile(file)
+    ]);
+    const currentDocument = purchaseImportDocumentById(documentId);
+    if (!currentDocument) return;
+    currentDocument.fileHash = fileHash;
+    currentDocument.parsed = normalizePurchaseImportParsedForState(parsed, file.name);
+    currentDocument.status = "ready";
+    currentDocument.selected = true;
+    currentDocument.error = "";
+  } catch (error) {
+    const currentDocument = purchaseImportDocumentById(documentId);
+    if (!currentDocument) return;
+    currentDocument.status = "failed";
+    currentDocument.selected = false;
+    currentDocument.error = String(error?.message || error || "Could not read this invoice");
+  }
+  touchPurchaseImportEntity(purchaseImportDocumentById(documentId));
+  refreshPurchaseImportBatchValidation(batchId);
+  updatePurchaseImportBatchProgress(batchId);
+  saveState({ skipCloud: true });
+  queuePurchaseImportCloudSync(batchId);
+  renderPurchaseImportInbox();
+}
+
+async function extractPurchaseInvoiceParsedFromFile(file) {
   const attachment = await createPurchaseAttachment(file);
   let pdfText = "";
   if (file.type === "application/pdf") {
@@ -11350,8 +11616,767 @@ async function buildPurchaseDraftFromFile(file) {
   }
   if (pdfText.trim()) parsed = applyPurchasePaymentAdjustments(parsed, pdfText);
   parsed = await enrichPurchasePincodes(parsed);
+  parsed.fileName = parsed.fileName || file.name;
   parsed.attachments = [attachment];
-  return buildPurchaseDraft(parsed);
+  return parsed;
+}
+
+async function purchaseImportFileHash(file) {
+  if (!crypto.subtle) return `${file.size || 0}-${file.lastModified || 0}-${file.name || "invoice"}`;
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function purchaseImportBatchById(id) {
+  return state.purchaseImportBatches.find(batch => batch.id === id) || null;
+}
+
+function purchaseImportDocumentById(id) {
+  return state.purchaseImportDocuments.find(document => document.id === id) || null;
+}
+
+function purchaseImportDocuments(batchId) {
+  return state.purchaseImportDocuments.filter(document => document.batchId === batchId);
+}
+
+function touchPurchaseImportEntity(entity) {
+  if (!entity) return;
+  entity.updatedAt = new Date().toISOString();
+  entity.syncStatus = newLocalSyncStatus();
+}
+
+function updatePurchaseImportBatchProgress(batchId) {
+  const batch = purchaseImportBatchById(batchId);
+  if (!batch) return;
+  const documents = purchaseImportDocuments(batchId);
+  const extracting = documents.some(document => ["queued", "extracting"].includes(document.status));
+  const approvedCount = documents.filter(document => document.status === "approved").length;
+  const unresolved = documents.some(document => !["approved", "duplicate"].includes(document.status));
+  batch.fileCount = documents.length;
+  batch.approvedCount = approvedCount;
+  batch.status = extracting ? "extracting" : approvedCount && unresolved ? "partial" : !unresolved && documents.length ? "completed" : "review";
+  batch.completedAt = batch.status === "completed" ? (batch.completedAt || new Date().toISOString()) : "";
+  touchPurchaseImportEntity(batch);
+}
+
+function queuePurchaseImportCloudSync(batchId) {
+  if (!cloudReadyForSync() || !batchId) return;
+  purchaseImportCloudSyncChain = purchaseImportCloudSyncChain
+    .catch(() => false)
+    .then(async () => {
+      const batch = purchaseImportBatchById(batchId);
+      if (!batch || !cloudReadyForSync()) return false;
+      const syncedAt = new Date().toISOString();
+      const userId = currentCloudUserId();
+      const { error: batchError } = await cloudClient
+        .from(CLOUD_ROW_TABLES.purchaseImportBatches)
+        .upsert(cloudPurchaseImportBatchRow(cloudWorkspace.id, batch, syncedAt, userId), { onConflict: "workspace_id,id" });
+      if (batchError) throw batchError;
+      const rows = purchaseImportDocuments(batchId).map(document => (
+        cloudPurchaseImportDocumentRow(cloudWorkspace.id, document, syncedAt, userId)
+      ));
+      if (rows.length) {
+        const { error: documentError } = await cloudClient
+          .from(CLOUD_ROW_TABLES.purchaseImportDocuments)
+          .upsert(rows, { onConflict: "workspace_id,id" });
+        if (documentError) throw documentError;
+      }
+      return true;
+    })
+    .catch(error => {
+      console.warn("Purchase inbox cloud staging failed", error);
+      return false;
+    });
+}
+
+function refreshPurchaseImportBatchValidation(batchId) {
+  const documents = purchaseImportDocuments(batchId);
+  documents.forEach(document => {
+    if (["queued", "extracting", "approving", "approved", "failed"].includes(document.status)) return;
+    const previousStatus = document.status;
+    const result = validatePurchaseImportDocument(document, documents);
+    document.validationErrors = result.errors;
+    document.validationWarnings = result.warnings;
+    document.duplicatePurchaseId = result.duplicatePurchaseId;
+    document.status = result.status;
+    if (document.status !== "ready") document.selected = false;
+    else if (previousStatus !== "ready") document.selected = true;
+  });
+}
+
+function validatePurchaseImportDocument(document, batchDocuments = purchaseImportDocuments(document.batchId)) {
+  const parsed = document.parsed || {};
+  const errors = [];
+  if (document.error) errors.push(document.error);
+  const profiles = state.settings.profiles || [];
+  const gstProfile = profiles.find(profile => normalizeGstin(profile.gstin) === normalizeGstin(parsed.buyerGstin));
+  const selectedProfile = profiles.find(profile => profile.id === parsed.profileId);
+  const profile = gstProfile || selectedProfile;
+  if (gstProfile && parsed.profileId !== gstProfile.id) parsed.profileId = gstProfile.id;
+  if (profile && !parsed.buyerGstin) parsed.buyerGstin = normalizeGstin(profile.gstin);
+  if (!profile || !isValidGstin(parsed.buyerGstin || profile?.gstin)) {
+    errors.push("Buyer GST must match one of the eight companies.");
+  } else if (normalizeGstin(profile.gstin) !== normalizeGstin(parsed.buyerGstin)) {
+    errors.push("Selected buyer company and buyer GSTIN do not match.");
+  }
+  if (!String(parsed.supplierName || "").trim() || /^imported supplier$/i.test(parsed.supplierName)) {
+    errors.push("Supplier name is required.");
+  }
+  if (!isValidGstin(parsed.supplierGstin)) errors.push("Supplier GSTIN is required for B2B purchase.");
+  if (isValidGstin(parsed.supplierGstin) && !extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace)) {
+    errors.push("Supplier PIN is required.");
+  }
+  if (!String(parsed.invoiceNumber || "").trim() || isGeneratedPurchaseNumber(parsed.invoiceNumber)) {
+    errors.push("Supplier invoice number is required.");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(parsed.invoiceDate || ""))) errors.push("Invoice date is required.");
+  if (!parsed.lines?.length) errors.push("At least one purchase item is required.");
+  (parsed.lines || []).forEach((line, index) => {
+    const label = `Item ${index + 1}`;
+    if (!String(line.name || "").trim() || /^imported purchase|imported item$/i.test(line.name)) errors.push(`${label} name is required.`);
+    if (!normalizeLineHsn(line.hsn)) line.hsn = DEFAULT_SALE_HSN;
+    if (num(line.qty) <= 0) errors.push(`${label} quantity is required.`);
+    if (num(line.grossRate) <= 0) errors.push(`${label} rate per quantity is required.`);
+  });
+  const attachments = parsed.attachments || [];
+  if (!attachments.length) errors.push("Invoice soft copy is required.");
+  if (cloudReadyForSync() && attachments.some(attachment => attachment.status === "Cloud upload failed")) {
+    errors.push("Invoice file cloud upload failed.");
+  }
+
+  const duplicate = purchaseImportExistingDuplicate(parsed);
+  const documentIndex = batchDocuments.findIndex(row => row.id === document.id);
+  const duplicateInBatch = batchDocuments.slice(0, Math.max(0, documentIndex)).find(candidate => (
+    !["failed", "duplicate"].includes(candidate.status)
+    && purchaseImportDuplicateKey(candidate.parsed) === purchaseImportDuplicateKey(parsed)
+    && purchaseImportDuplicateKey(parsed)
+  ) || (
+    document.fileHash && candidate.fileHash && document.fileHash === candidate.fileHash
+  ));
+  const duplicatePurchaseId = duplicate?.id || "";
+  if (duplicate || duplicateInBatch) {
+    return {
+      status: "duplicate",
+      errors: uniqueMessages([
+        ...errors,
+        duplicate
+          ? `Duplicate invoice: ${parsed.invoiceNumber} is already saved.`
+          : `Duplicate invoice in this batch: ${duplicateInBatch.fileName}.`
+      ]),
+      warnings: [],
+      duplicatePurchaseId
+    };
+  }
+
+  const totals = purchaseImportCalculatedTotals(parsed);
+  const warnings = uniqueMessages([
+    ...purchaseImportCurrentExtractionWarnings(parsed),
+    ...purchaseTaxReviewMessages(parsed.extractedTaxes, totals),
+    ...attachments.filter(attachment => attachment.status === "Local only").map(() => "Invoice file is local only and is not available on another device.")
+  ]);
+  return {
+    status: errors.length ? "needs-review" : "ready",
+    errors: uniqueMessages(errors),
+    warnings,
+    duplicatePurchaseId: ""
+  };
+}
+
+function purchaseImportCurrentExtractionWarnings(parsed = {}) {
+  const invoiceNumberReady = parsed.invoiceNumber && !isGeneratedPurchaseNumber(parsed.invoiceNumber);
+  return (parsed.reviewMessages || []).filter(message => {
+    const text = String(message || "");
+    if (/buyer gstin did not match/i.test(text) && profileByImportParsed(parsed)) return false;
+    if (/supplier gstin (?:was not found|is required)/i.test(text) && isValidGstin(parsed.supplierGstin)) return false;
+    if (/supplier invoice number (?:was not detected|is required)/i.test(text) && invoiceNumberReady) return false;
+    return true;
+  });
+}
+
+function profileByImportParsed(parsed = {}) {
+  return state.settings.profiles.find(profile => (
+    profile.id === parsed.profileId
+    || normalizeGstin(profile.gstin) === normalizeGstin(parsed.buyerGstin)
+  )) || null;
+}
+
+function purchaseImportDuplicateKey(parsed = {}) {
+  const supplierGstin = normalizeGstin(parsed.supplierGstin);
+  const invoiceNumber = normalizePurchaseInvoiceNumber(parsed.invoiceNumber);
+  return supplierGstin && invoiceNumber ? `${supplierGstin}|${invoiceNumber}` : "";
+}
+
+function purchaseImportExistingDuplicate(parsed = {}) {
+  const key = purchaseImportDuplicateKey(parsed);
+  if (!key) return null;
+  return state.purchases.find(purchase => {
+    const party = partyById(purchase.partyId) || {};
+    return `${normalizeGstin(purchase.sellerGstin || party.gstin)}|${normalizePurchaseInvoiceNumber(purchase.number)}` === key;
+  }) || null;
+}
+
+function purchaseImportPreviewLines(parsed = {}) {
+  return (parsed.lines || []).map(line => {
+    const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
+    const grossRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
+    return {
+      itemId: "",
+      itemName: line.name || "",
+      hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+      qty: num(line.qty),
+      grossRate,
+      rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
+      gstRate,
+      imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
+    };
+  });
+}
+
+function purchaseImportCalculatedTotals(parsed = {}) {
+  const profile = profileByImportParsed(parsed) || { gstin: parsed.buyerGstin || "" };
+  const supplier = { gstin: parsed.supplierGstin || "" };
+  const calculated = calculateEntryTotals(purchaseImportPreviewLines(parsed), profile, supplier, "purchase");
+  const roundOff = purchaseRoundOffForSource({
+    roundOff: parsed.roundOff,
+    extractedTaxes: parsed.extractedTaxes
+  }, calculated);
+  return {
+    ...calculated,
+    taxable: round2(calculated.taxable),
+    cgst: round2(calculated.cgst),
+    sgst: round2(calculated.sgst),
+    igst: round2(calculated.igst),
+    gst: round2(calculated.gst),
+    roundOff,
+    total: purchaseTotalWithRoundOff(calculated, roundOff)
+  };
+}
+
+function openPurchaseImportInbox(batchId = "") {
+  const batches = sortedPurchaseImportBatches();
+  if (batchId && purchaseImportBatchById(batchId)) activePurchaseImportBatchId = batchId;
+  if (!purchaseImportBatchById(activePurchaseImportBatchId)) {
+    activePurchaseImportBatchId = batches.find(batch => batch.status !== "completed")?.id || batches[0]?.id || "";
+  }
+  const documents = purchaseImportDocuments(activePurchaseImportBatchId);
+  if (!documents.some(document => document.id === activePurchaseImportDocumentId)) {
+    activePurchaseImportDocumentId = documents.find(document => document.status !== "approved")?.id || documents[0]?.id || "";
+  }
+  renderPurchaseImportInbox();
+  const dialog = $("#purchaseImportDialog");
+  if (dialog && !dialog.open) dialog.showModal();
+  if (window.lucide) lucide.createIcons();
+}
+
+function sortedPurchaseImportBatches() {
+  return [...state.purchaseImportBatches].sort((left, right) => {
+    const statusOrder = Number(left.status === "completed") - Number(right.status === "completed");
+    if (statusOrder) return statusOrder;
+    return new Date(right.updatedAt || right.createdAt || 0) - new Date(left.updatedAt || left.createdAt || 0);
+  });
+}
+
+function purchaseImportBatchLabel(batch, documents = purchaseImportDocuments(batch.id)) {
+  if (batch.label) return batch.label;
+  const date = new Date(batch.createdAt || Date.now());
+  const stamp = Number.isNaN(date.getTime())
+    ? "Purchase import"
+    : date.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  return `${stamp} · ${documents.length} invoice${documents.length === 1 ? "" : "s"}`;
+}
+
+function renderPurchaseImportInbox() {
+  const countBadge = $("#purchaseImportInboxCount");
+  const unresolvedCount = state.purchaseImportDocuments.filter(document => !["approved", "duplicate"].includes(document.status)).length;
+  if (countBadge) {
+    countBadge.textContent = unresolvedCount;
+    countBadge.hidden = !unresolvedCount;
+  }
+  const batchSelect = $("#purchaseImportBatchSelect");
+  const list = $("#purchaseImportDocumentList");
+  const panel = $("#purchaseImportReviewPanel");
+  if (!batchSelect || !list || !panel) return;
+
+  const batches = sortedPurchaseImportBatches();
+  if (!purchaseImportBatchById(activePurchaseImportBatchId)) {
+    activePurchaseImportBatchId = batches.find(batch => batch.status !== "completed")?.id || batches[0]?.id || "";
+  }
+  batchSelect.innerHTML = batches.length
+    ? batches.map(batch => `<option value="${escapeHtml(batch.id)}" ${batch.id === activePurchaseImportBatchId ? "selected" : ""}>${escapeHtml(purchaseImportBatchLabel(batch))}</option>`).join("")
+    : '<option value="">No import batches</option>';
+  batchSelect.disabled = !batches.length;
+
+  const batch = purchaseImportBatchById(activePurchaseImportBatchId);
+  const documents = batch ? purchaseImportDocuments(batch.id) : [];
+  if (!documents.some(document => document.id === activePurchaseImportDocumentId)) {
+    activePurchaseImportDocumentId = documents.find(document => document.status !== "approved")?.id || documents[0]?.id || "";
+  }
+  const activeDocument = purchaseImportDocumentById(activePurchaseImportDocumentId);
+  list.innerHTML = documents.length
+    ? documents.map(document => renderPurchaseImportDocumentCard(document)).join("")
+    : '<div class="purchase-import-empty"><div><i data-lucide="inbox"></i><strong>No invoices</strong></div></div>';
+  panel.innerHTML = activeDocument ? renderPurchaseImportReview(activeDocument) : '<div class="purchase-import-empty"><div><i data-lucide="files"></i><strong>Select an invoice</strong></div></div>';
+  renderPurchaseImportSummary(batch, documents);
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderPurchaseImportSummary(batch, documents = []) {
+  const counts = {
+    total: documents.length,
+    processing: documents.filter(document => ["queued", "extracting", "approving"].includes(document.status)).length,
+    ready: documents.filter(document => document.status === "ready").length,
+    attention: documents.filter(document => ["needs-review", "duplicate", "failed"].includes(document.status)).length,
+    approved: documents.filter(document => document.status === "approved").length
+  };
+  const stats = $("#purchaseImportStats");
+  if (stats) {
+    stats.innerHTML = [
+      ["Invoices", counts.total],
+      ["Processing", counts.processing],
+      ["Ready", counts.ready],
+      ["Attention", counts.attention],
+      ["Approved", counts.approved]
+    ].map(([label, value]) => `<div class="purchase-import-stat"><span>${label}</span><strong>${value}</strong></div>`).join("");
+  }
+  const ready = documents.filter(document => document.status === "ready");
+  const selected = ready.filter(document => document.selected);
+  const selectAll = $("#purchaseImportSelectAll");
+  if (selectAll) {
+    selectAll.disabled = !ready.length || purchaseImportApproving;
+    selectAll.checked = Boolean(ready.length && selected.length === ready.length);
+    selectAll.indeterminate = Boolean(selected.length && selected.length < ready.length);
+  }
+  const selection = $("#purchaseImportSelection");
+  if (selection) selection.textContent = purchaseImportSelectionText(selected);
+  const approve = $("#purchaseImportApproveBtn");
+  if (approve) {
+    approve.disabled = !selected.length || counts.processing > 0 || purchaseImportApproving;
+    approve.innerHTML = purchaseImportApproving
+      ? '<i data-lucide="loader-circle"></i><span>Saving...</span>'
+      : `<i data-lucide="check-check"></i><span>Approve &amp; Save ${selected.length || ""}</span>`;
+  }
+  const discard = $("#purchaseImportDiscardBtn");
+  if (discard) discard.disabled = !batch || counts.processing > 0 || counts.approved > 0 || purchaseImportApproving;
+
+  const extractionDone = !counts.processing;
+  const reviewDone = Boolean(documents.length && documents.every(document => ["ready", "duplicate", "approved"].includes(document.status)));
+  const approveDone = Boolean(documents.length && documents.every(document => ["approved", "duplicate"].includes(document.status)));
+  $$('[data-import-stage]').forEach(stage => {
+    const name = stage.dataset.importStage;
+    stage.classList.toggle("complete", name === "upload" ? extractionDone : name === "review" ? reviewDone : approveDone);
+    stage.classList.toggle("active", name === "upload" ? !extractionDone : name === "review" ? extractionDone && !approveDone : approveDone);
+  });
+}
+
+function purchaseImportSelectionText(documents = []) {
+  if (!documents.length) return "0 selected";
+  const byProfile = documents.reduce((map, document) => {
+    const profile = profileByImportParsed(document.parsed || {});
+    const label = profile?.label || profile?.businessName || "Unmatched";
+    map.set(label, (map.get(label) || 0) + 1);
+    return map;
+  }, new Map());
+  const firms = [...byProfile.entries()].map(([label, count]) => `${label} ${count}`).join(" · ");
+  return `${documents.length} selected · ${firms}`;
+}
+
+function renderPurchaseImportDocumentCard(document) {
+  const parsed = document.parsed || {};
+  const profile = profileByImportParsed(parsed);
+  const totals = purchaseImportCalculatedTotals(parsed);
+  const selectable = document.status === "ready";
+  const attentionCount = (document.validationErrors?.length || 0) + (document.validationWarnings?.length || 0);
+  return `<article class="purchase-import-document ${document.id === activePurchaseImportDocumentId ? "active" : ""}" data-import-doc-id="${escapeHtml(document.id)}" tabindex="0">
+    <input class="purchase-import-document-select" type="checkbox" aria-label="Select ${escapeHtml(document.fileName)}" data-import-select-id="${escapeHtml(document.id)}" ${document.selected ? "checked" : ""} ${selectable ? "" : "disabled"}>
+    <div class="purchase-import-document-main">
+      <strong>${escapeHtml(parsed.supplierName || document.fileName)}</strong>
+      <span>${escapeHtml(parsed.invoiceNumber || "Invoice number missing")} · ${escapeHtml(formatInvoiceDate(parsed.invoiceDate) || "Date missing")}</span>
+      <small>${escapeHtml(profile?.label || profile?.businessName || "Buyer GST unmatched")}${attentionCount ? ` · ${attentionCount} note${attentionCount === 1 ? "" : "s"}` : ""}</small>
+    </div>
+    <span class="purchase-import-status ${escapeHtml(document.status)}">${escapeHtml(purchaseImportStatusLabel(document.status))}</span>
+    <div class="purchase-import-document-total"><span>${escapeHtml(document.fileName)}</span><strong>${money(totals.total)}</strong></div>
+  </article>`;
+}
+
+function purchaseImportStatusLabel(status) {
+  return {
+    queued: "Queued",
+    extracting: "Extracting",
+    ready: "Ready",
+    "needs-review": "Needs Review",
+    duplicate: "Duplicate",
+    failed: "Failed",
+    approving: "Saving",
+    approved: "Approved"
+  }[status] || "Review";
+}
+
+function renderPurchaseImportReview(document) {
+  if (["queued", "extracting", "approving"].includes(document.status)) {
+    return `<div class="purchase-import-empty"><div><i data-lucide="loader-circle"></i><strong>${escapeHtml(purchaseImportStatusLabel(document.status))} ${escapeHtml(document.fileName)}</strong></div></div>`;
+  }
+  if (document.status === "failed") {
+    const canRetry = purchaseImportFiles.has(document.id);
+    return `<div class="purchase-import-empty"><div><i data-lucide="file-warning"></i><strong>Extraction failed</strong><p>${escapeHtml(document.error || "Could not read this invoice")}</p>${canRetry ? `<button class="primary-btn" type="button" data-import-retry="${escapeHtml(document.id)}"><i data-lucide="refresh-cw"></i><span>Retry</span></button>` : ""}</div></div>`;
+  }
+  if (document.status === "approved") {
+    const parsed = document.parsed || {};
+    return `<div class="purchase-import-empty"><div><i data-lucide="badge-check"></i><strong>${escapeHtml(parsed.invoiceNumber || document.fileName)} saved</strong><p>${escapeHtml(parsed.supplierName || "Supplier")} · ${money(purchaseImportCalculatedTotals(parsed).total)}</p><button class="secondary-btn" type="button" data-open-approved-purchase="${escapeHtml(document.approvedPurchaseId)}"><i data-lucide="receipt-text"></i><span>Open Purchase</span></button></div></div>`;
+  }
+  const parsed = document.parsed || {};
+  const totals = purchaseImportCalculatedTotals(parsed);
+  const supplierPin = extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace);
+  const errors = document.validationErrors || [];
+  const warnings = document.validationWarnings || [];
+  const attachment = parsed.attachments?.[0] || {};
+  return `<form class="purchase-import-review-form" id="purchaseImportReviewForm" data-import-review-id="${escapeHtml(document.id)}">
+    <div class="purchase-import-review-title">
+      <div><h4>${escapeHtml(document.fileName)}</h4><p>${escapeHtml(attachment.status || "Attached")} · ${Math.max(1, Math.round(num(document.size) / 1024))} KB</p></div>
+      <span class="purchase-import-status ${escapeHtml(document.status)}">${escapeHtml(purchaseImportStatusLabel(document.status))}</span>
+    </div>
+    <div class="purchase-import-fields">
+      <label class="span-2 ${purchaseImportRequiredClass(errors, /buyer gst|selected buyer/i)}">Buyer Company<select name="profileId" required>${profileOptions(parsed.profileId || activeProfileId())}</select></label>
+      <label class="${purchaseImportRequiredClass(errors, /supplier name/i)}">Supplier Name<input name="supplierName" value="${escapeHtml(parsed.supplierName)}" required></label>
+      <label class="${purchaseImportRequiredClass(errors, /supplier gstin/i)}">Supplier GSTIN<input name="supplierGstin" maxlength="15" value="${escapeHtml(parsed.supplierGstin)}" required></label>
+      <label class="${purchaseImportRequiredClass(errors, /invoice number/i)}">Invoice Number<input name="invoiceNumber" value="${escapeHtml(parsed.invoiceNumber)}" required></label>
+      <label class="${purchaseImportRequiredClass(errors, /invoice date/i)}">Invoice Date<input name="invoiceDate" type="date" value="${escapeHtml(parsed.invoiceDate)}" required></label>
+      <label class="${purchaseImportRequiredClass(errors, /supplier pin/i)}">Supplier PIN<input name="supplierPincode" inputmode="numeric" maxlength="6" value="${escapeHtml(supplierPin)}" required></label>
+      <label>Round Off / Adjustment<input name="roundOff" type="number" step="0.01" value="${escapeHtml(round2(parsed.roundOff))}"></label>
+      <label class="span-2">Supplier Address<textarea name="supplierAddress" rows="3">${escapeHtml(parsed.supplierAddress)}</textarea></label>
+    </div>
+    <div class="purchase-import-section-head"><h5>Items</h5><button class="secondary-btn" type="button" data-import-add-line><i data-lucide="plus"></i><span>Add Item</span></button></div>
+    <div class="purchase-import-line-table">${(parsed.lines?.length ? parsed.lines : [purchaseImportBlankLine()]).map((line, index) => renderPurchaseImportLine(line, index, errors)).join("")}</div>
+    ${renderPurchaseImportTotals(totals)}
+    ${renderPurchaseImportMessages(errors, warnings)}
+    <div class="purchase-import-review-actions"><button class="primary-btn" type="submit"><i data-lucide="check"></i><span>Save Review</span></button></div>
+  </form>`;
+}
+
+function purchaseImportRequiredClass(errors = [], pattern) {
+  return errors.some(message => pattern.test(message)) ? "required-attention" : "";
+}
+
+function purchaseImportBlankLine() {
+  return { name: "", hsn: DEFAULT_SALE_HSN, qty: 1, rate: 0, grossRate: 0, gstRate: DEFAULT_SALE_GST_RATE, imeiNumbers: "" };
+}
+
+function renderPurchaseImportLine(line, index, errors = []) {
+  return `<div class="purchase-import-line-grid" data-import-line-index="${index}">
+    <label class="${purchaseImportRequiredClass(errors, new RegExp(`Item ${index + 1} name`, "i"))}">Item<input name="lineName" value="${escapeHtml(line.name || "")}" required></label>
+    <label>HSN/SAC<input name="lineHsn" inputmode="numeric" value="${escapeHtml(normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN)}" required></label>
+    <label class="${purchaseImportRequiredClass(errors, new RegExp(`Item ${index + 1} quantity`, "i"))}">Qty<input name="lineQty" type="number" min="0.01" step="0.01" value="${escapeHtml(num(line.qty))}" required></label>
+    <label class="${purchaseImportRequiredClass(errors, new RegExp(`Item ${index + 1} rate`, "i"))}">Rate / Qty (GST Incl.)<input name="lineGrossRate" type="number" min="0" step="0.01" value="${escapeHtml(round2(num(line.grossRate) || inclusiveRateFromTaxable(line.rate, line.gstRate)))}" required></label>
+    <label>GST %<input name="lineGstRate" type="number" min="0" step="0.01" value="${escapeHtml(num(line.gstRate))}" required></label>
+    <button class="icon-btn" type="button" data-import-remove-line="${index}" title="Remove item"><i data-lucide="trash-2"></i></button>
+    <label class="purchase-import-line-imei">IMEI Numbers<input name="lineImeiNumbers" value="${escapeHtml(normalizeImeiNumbers(line.imeiNumbers || ""))}" placeholder="Optional, comma separated"></label>
+  </div>`;
+}
+
+function renderPurchaseImportTotals(totals = {}) {
+  return `<div class="purchase-import-review-totals" id="purchaseImportReviewTotals">
+    <div><span>Taxable</span><strong data-import-total="taxable">${money(totals.taxable)}</strong></div>
+    <div><span>CGST</span><strong data-import-total="cgst">${money(totals.cgst)}</strong></div>
+    <div><span>SGST</span><strong data-import-total="sgst">${money(totals.sgst)}</strong></div>
+    <div><span>IGST</span><strong data-import-total="igst">${money(totals.igst)}</strong></div>
+    <div><span>Round Off</span><strong data-import-total="roundOff">${money(totals.roundOff)}</strong></div>
+    <div><span>Total</span><strong data-import-total="total">${money(totals.total)}</strong></div>
+  </div>`;
+}
+
+function renderPurchaseImportMessages(errors = [], warnings = []) {
+  const rows = [
+    ...errors.map(message => ({ type: "error", message })),
+    ...warnings.map(message => ({ type: "warning", message }))
+  ];
+  if (!rows.length) return '<div class="purchase-import-message-list"><div class="purchase-import-message"><i data-lucide="circle-check"></i><span>All required checks passed.</span></div></div>';
+  return `<div class="purchase-import-message-list">${rows.map(row => `<div class="purchase-import-message ${row.type === "error" ? "error" : ""}"><i data-lucide="${row.type === "error" ? "circle-alert" : "triangle-alert"}"></i><span>${escapeHtml(row.message)}</span></div>`).join("")}</div>`;
+}
+
+function handlePurchaseImportBatchChange(event) {
+  activePurchaseImportBatchId = event.target.value || "";
+  activePurchaseImportDocumentId = purchaseImportDocuments(activePurchaseImportBatchId)[0]?.id || "";
+  renderPurchaseImportInbox();
+}
+
+function handlePurchaseImportDocumentClick(event) {
+  const card = event.target.closest("[data-import-doc-id]");
+  if (!card) return;
+  activePurchaseImportDocumentId = card.dataset.importDocId || "";
+  renderPurchaseImportInbox();
+}
+
+function handlePurchaseImportDocumentSelection(event) {
+  const id = event.target.dataset.importSelectId;
+  if (!id) return;
+  const document = purchaseImportDocumentById(id);
+  if (!document || document.status !== "ready") return;
+  document.selected = event.target.checked;
+  touchPurchaseImportEntity(document);
+  saveState();
+  renderPurchaseImportInbox();
+}
+
+function toggleReadyPurchaseImports(event) {
+  purchaseImportDocuments(activePurchaseImportBatchId).forEach(document => {
+    if (document.status !== "ready") return;
+    document.selected = event.target.checked;
+    touchPurchaseImportEntity(document);
+  });
+  saveState();
+  renderPurchaseImportInbox();
+}
+
+function savePurchaseImportReview(event) {
+  if (event.target.id !== "purchaseImportReviewForm") return;
+  event.preventDefault();
+  const document = purchaseImportDocumentById(event.target.dataset.importReviewId);
+  if (!document) return;
+  document.parsed = normalizePurchaseImportParsedForState(
+    collectPurchaseImportReviewForm(event.target, document.parsed),
+    document.fileName
+  );
+  document.error = "";
+  if (!["approved", "extracting"].includes(document.status)) document.status = "ready";
+  refreshPurchaseImportBatchValidation(document.batchId);
+  if (document.status === "ready") document.selected = true;
+  updatePurchaseImportBatchProgress(document.batchId);
+  touchPurchaseImportEntity(document);
+  saveState();
+  renderPurchaseImportInbox();
+  toast(document.status === "ready" ? "Invoice review saved" : "Required details still need attention");
+}
+
+function collectPurchaseImportReviewForm(form, currentParsed = {}) {
+  const profile = state.settings.profiles.find(row => row.id === form.elements.profileId?.value) || activeProfile();
+  const supplierPincode = normalizePincode(form.elements.supplierPincode?.value || "");
+  const supplierAddress = addressWithUpdatedPincode(form.elements.supplierAddress?.value || "", supplierPincode);
+  const lines = $$("[data-import-line-index]", form).map(row => {
+    const gstRate = num($("[name='lineGstRate']", row)?.value);
+    const grossRate = num($("[name='lineGrossRate']", row)?.value);
+    return {
+      name: $("[name='lineName']", row)?.value.trim() || "",
+      hsn: normalizeLineHsn($("[name='lineHsn']", row)?.value) || DEFAULT_SALE_HSN,
+      qty: num($("[name='lineQty']", row)?.value),
+      grossRate,
+      rate: taxableRateFromInclusive(grossRate, gstRate),
+      gstRate,
+      imeiNumbers: normalizeImeiNumbers($("[name='lineImeiNumbers']", row)?.value || "")
+    };
+  });
+  return {
+    ...currentParsed,
+    profileId: profile.id,
+    buyerName: profile.businessName || profile.label || "",
+    buyerGstin: normalizeGstin(profile.gstin),
+    buyerAddress: profile.address || "",
+    buyerPlace: profile.state || "",
+    supplierName: form.elements.supplierName?.value.trim() || "",
+    supplierGstin: normalizeGstin(form.elements.supplierGstin?.value || ""),
+    supplierAddress,
+    supplierPlace: currentParsed.supplierPlace || stateNameFromGstin(form.elements.supplierGstin?.value || "") || "",
+    invoiceNumber: form.elements.invoiceNumber?.value.trim() || "",
+    invoiceDate: form.elements.invoiceDate?.value || "",
+    roundOff: round2(form.elements.roundOff?.value),
+    lines
+  };
+}
+
+function updatePurchaseImportReviewTotals(event) {
+  const form = event.target.closest("#purchaseImportReviewForm");
+  if (!form) return;
+  const document = purchaseImportDocumentById(form.dataset.importReviewId);
+  if (!document) return;
+  const totals = purchaseImportCalculatedTotals(collectPurchaseImportReviewForm(form, document.parsed));
+  Object.entries(totals).forEach(([key, value]) => {
+    const target = $(`[data-import-total='${key}']`, form);
+    if (target) target.textContent = money(value);
+  });
+}
+
+function handlePurchaseImportReviewClick(event) {
+  const retryId = event.target.closest("[data-import-retry]")?.dataset.importRetry;
+  if (retryId) {
+    retryPurchaseImportDocument(retryId);
+    return;
+  }
+  const approvedPurchaseId = event.target.closest("[data-open-approved-purchase]")?.dataset.openApprovedPurchase;
+  if (approvedPurchaseId) {
+    const purchase = state.purchases.find(entry => entry.id === approvedPurchaseId);
+    if (!purchase) return toast("Saved purchase was not found");
+    $("#purchaseImportDialog")?.close();
+    setActiveProfileId(purchase.profileId);
+    showView("purchases");
+    openEntry("purchase", purchase.id);
+    return;
+  }
+  const form = event.target.closest("#purchaseImportReviewForm");
+  if (!form) return;
+  const document = purchaseImportDocumentById(form.dataset.importReviewId);
+  if (!document) return;
+  if (event.target.closest("[data-import-add-line]")) {
+    const parsed = collectPurchaseImportReviewForm(form, document.parsed);
+    parsed.lines.push(purchaseImportBlankLine());
+    document.parsed = normalizePurchaseImportParsedForState(parsed, document.fileName);
+    touchPurchaseImportEntity(document);
+    saveState();
+    renderPurchaseImportInbox();
+    return;
+  }
+  const removeButton = event.target.closest("[data-import-remove-line]");
+  if (removeButton) {
+    const parsed = collectPurchaseImportReviewForm(form, document.parsed);
+    parsed.lines.splice(num(removeButton.dataset.importRemoveLine), 1);
+    if (!parsed.lines.length) parsed.lines.push(purchaseImportBlankLine());
+    document.parsed = normalizePurchaseImportParsedForState(parsed, document.fileName);
+    refreshPurchaseImportBatchValidation(document.batchId);
+    touchPurchaseImportEntity(document);
+    saveState();
+    renderPurchaseImportInbox();
+  }
+}
+
+function retryPurchaseImportDocument(documentId) {
+  const document = purchaseImportDocumentById(documentId);
+  const file = purchaseImportFiles.get(documentId);
+  if (!document || !file) return toast("Select the original file again to retry extraction");
+  document.status = "queued";
+  document.error = "";
+  document.selected = false;
+  touchPurchaseImportEntity(document);
+  purchaseUploadQueue.push({ batchId: document.batchId, documentId: document.id, file });
+  updatePurchaseImportBatchProgress(document.batchId);
+  saveState({ skipCloud: true });
+  renderPurchaseImportInbox();
+  processQueuedPurchaseInvoiceUpload();
+}
+
+async function approveSelectedPurchaseImports() {
+  if (purchaseImportApproving) return;
+  const batch = purchaseImportBatchById(activePurchaseImportBatchId);
+  if (!batch) return;
+  refreshPurchaseImportBatchValidation(batch.id);
+  const documents = purchaseImportDocuments(batch.id).filter(document => document.status === "ready" && document.selected);
+  if (!documents.length) {
+    renderPurchaseImportInbox();
+    return toast("Select at least one ready invoice");
+  }
+  purchaseImportApproving = true;
+  documents.forEach(document => { document.status = "approving"; });
+  renderPurchaseImportInbox();
+  const savedEntries = [];
+  let failedCount = 0;
+  for (const document of documents) {
+    try {
+      const duplicate = purchaseImportExistingDuplicate(document.parsed);
+      if (duplicate) throw new Error(`Invoice ${document.parsed.invoiceNumber} is already saved`);
+      const entry = createPurchaseEntryFromImportDocument(document);
+      await rememberPurchaseEwayRoute(entry.ewayDetails);
+      savedEntries.push(entry);
+      document.status = "approved";
+      document.selected = false;
+      document.approvedPurchaseId = entry.id;
+      document.error = "";
+      touchPurchaseImportEntity(document);
+    } catch (error) {
+      failedCount += 1;
+      document.status = "needs-review";
+      document.selected = false;
+      document.error = String(error?.message || error || "Could not save purchase");
+      document.validationErrors = uniqueMessages([document.error, ...(document.validationErrors || [])]);
+      touchPurchaseImportEntity(document);
+    }
+  }
+  refreshPurchaseImportBatchValidation(batch.id);
+  updatePurchaseImportBatchProgress(batch.id);
+  saveState();
+  renderAll();
+  const canSyncNow = cloudReadyForSync();
+  const synced = canSyncNow ? await syncCloudNow(false) : false;
+  if (canSyncNow && !synced) {
+    savedEntries.forEach(entry => markEntitySyncStatus(entry, SYNC_STATUS_FAILED));
+    documents.filter(document => document.status === "approved").forEach(document => markEntitySyncStatus(document, SYNC_STATUS_FAILED));
+    markEntitySyncStatus(batch, SYNC_STATUS_FAILED);
+    saveState({ skipCloud: true });
+  }
+  purchaseImportApproving = false;
+  renderAll();
+  const savedText = `${savedEntries.length} purchase${savedEntries.length === 1 ? "" : "s"} saved`;
+  if (failedCount) toast(`${savedText}. ${failedCount} needs review.`);
+  else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
+  else toast(canSyncNow ? `${savedText} and synced` : savedText);
+}
+
+function createPurchaseEntryFromImportDocument(document) {
+  const draft = buildPurchaseDraft(document.parsed, profileByImportParsed(document.parsed));
+  const profile = state.settings.profiles.find(row => row.id === draft.profileId);
+  const party = partyById(draft.partyId);
+  if (!profile || !party) throw new Error("Buyer company or supplier master could not be created");
+  const lines = draft.lines || [];
+  if (!lines.length) throw new Error("At least one item is required");
+  applyLineHsnToItems(lines);
+  const calculated = calculateEntryTotals(lines, profile, party, "purchase");
+  const roundOff = purchaseRoundOffForSource({
+    roundOff: draft.roundOff,
+    extractedTaxes: draft.extractedTaxes
+  }, calculated);
+  const reviewMessages = uniqueMessages([
+    ...(draft.reviewMessages || []),
+    ...calculated.reviewMessages,
+    ...purchaseTaxReviewMessages(draft.extractedTaxes, calculated)
+  ]);
+  const entry = entityWithLocalMeta({
+    id: uid(),
+    date: draft.date,
+    number: draft.number,
+    profileId: profile.id,
+    partyId: party.id,
+    status: "Paid",
+    paymentSourceId: "",
+    paymentDate: "",
+    paymentReference: "",
+    notes: "",
+    lines,
+    ...calculated,
+    roundOff,
+    total: purchaseTotalWithRoundOff(calculated, roundOff),
+    attachments: clone(draft.attachments || []),
+    extractedTaxes: clone(draft.extractedTaxes || null),
+    source: "purchase-upload-batch",
+    rateIncludesGst: true,
+    sellerGstin: normalizeGstin(party.gstin || draft.sellerGstin),
+    buyerGstin: normalizeGstin(profile.gstin),
+    ewayDetails: normalizePurchaseEwayDetails(draft.ewayDetails || {}),
+    reviewMessages,
+    reviewStatus: reviewMessages.length ? "Needs Review" : "Ready"
+  });
+  state.purchases.push(entry);
+  profile.nextPurchaseNo = num(profile.nextPurchaseNo) + 1;
+  entryMonthFilters.purchase = entryMonthKey(entry);
+  return entry;
+}
+
+async function discardActivePurchaseImportBatch() {
+  const batch = purchaseImportBatchById(activePurchaseImportBatchId);
+  if (!batch) return;
+  const documents = purchaseImportDocuments(batch.id);
+  if (documents.some(document => document.status === "approved")) return toast("Approved batches cannot be discarded");
+  if (!confirm(`Discard ${documents.length} uploaded invoice${documents.length === 1 ? "" : "s"}?`)) return;
+  const storagePaths = documents.flatMap(document => document.parsed?.attachments || [])
+    .filter(attachment => attachment.bucket === PURCHASE_ATTACHMENT_BUCKET && attachment.storagePath)
+    .map(attachment => attachment.storagePath);
+  purchaseUploadQueue = purchaseUploadQueue.filter(job => job.batchId !== batch.id);
+  documents.forEach(document => purchaseImportFiles.delete(document.id));
+  state.purchaseImportDocuments = state.purchaseImportDocuments.filter(document => document.batchId !== batch.id);
+  state.purchaseImportBatches = state.purchaseImportBatches.filter(row => row.id !== batch.id);
+  activePurchaseImportBatchId = "";
+  activePurchaseImportDocumentId = "";
+  saveState();
+  renderPurchaseImportInbox();
+  if (storagePaths.length && cloudClient && cloudSession) {
+    const { error } = await cloudClient.storage.from(PURCHASE_ATTACHMENT_BUCKET).remove(storagePaths);
+    if (error) console.warn("Could not remove discarded purchase files", error);
+  }
+  toast("Import batch discarded");
 }
 
 function applyPurchasePaymentAdjustments(parsed = {}, text = "") {
@@ -12008,8 +13033,8 @@ function inferGstRate(taxable, gstAmount) {
   return [0, 3, 5, 12, 18, 28].includes(rate) ? rate : 18;
 }
 
-function buildPurchaseDraft(parsed) {
-  const selectedProfile = activeProfile();
+function buildPurchaseDraft(parsed, selectedProfileOverride = null) {
+  const selectedProfile = selectedProfileOverride || activeProfile();
   const parsedProfile = state.settings.profiles.find(profile => profile.id === parsed.profileId);
   const parsedBuyerGstin = normalizeGstin(parsed.buyerGstin || parsedProfile?.gstin);
   const buyerProfile = parsedProfile || profileByGstin(parsedBuyerGstin) || selectedProfile;

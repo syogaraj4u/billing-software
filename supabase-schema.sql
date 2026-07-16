@@ -1746,3 +1746,91 @@ on conflict (workspace_id, id) do update set
   sync_status = excluded.sync_status, updated_at = excluded.updated_at,
   created_by = coalesce(public.billing_tally_sync_runs.created_by, excluded.created_by),
   last_synced_at = excluded.last_synced_at;
+
+create table if not exists public.billing_purchase_import_batches (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  id text not null,
+  status text not null default 'review',
+  file_count integer not null default 0,
+  approved_count integer not null default 0,
+  completed_at timestamptz,
+  label text not null default '',
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, id)
+);
+
+create table if not exists public.billing_purchase_import_documents (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  id text not null,
+  batch_id text not null,
+  file_name text not null default '',
+  mime_type text not null default 'application/octet-stream',
+  file_size bigint not null default 0,
+  file_hash text not null default '',
+  status text not null default 'queued',
+  selected boolean not null default false,
+  profile_id text not null default '',
+  supplier_gstin text not null default '',
+  invoice_number text not null default '',
+  invoice_date date,
+  total numeric(18,2) not null default 0,
+  duplicate_purchase_id text,
+  approved_purchase_id text,
+  error text not null default '',
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, id),
+  foreign key (workspace_id, batch_id)
+    references public.billing_purchase_import_batches(workspace_id, id)
+    on delete cascade
+);
+
+create index if not exists billing_purchase_import_batches_workspace_status_idx
+  on public.billing_purchase_import_batches(workspace_id, status, updated_at desc);
+create index if not exists billing_purchase_import_documents_batch_status_idx
+  on public.billing_purchase_import_documents(workspace_id, batch_id, status, created_at);
+create index if not exists billing_purchase_import_documents_invoice_idx
+  on public.billing_purchase_import_documents(workspace_id, supplier_gstin, invoice_number);
+create index if not exists billing_purchase_import_documents_hash_idx
+  on public.billing_purchase_import_documents(workspace_id, file_hash)
+  where file_hash <> '';
+
+alter table public.billing_purchase_import_batches enable row level security;
+alter table public.billing_purchase_import_documents enable row level security;
+
+drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_import_batches;
+drop policy if exists "Workspace members can insert billing rows" on public.billing_purchase_import_batches;
+drop policy if exists "Workspace members can update billing rows" on public.billing_purchase_import_batches;
+drop policy if exists "Workspace members can delete billing rows" on public.billing_purchase_import_batches;
+create policy "Workspace members can read billing rows" on public.billing_purchase_import_batches
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert billing rows" on public.billing_purchase_import_batches
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update billing rows" on public.billing_purchase_import_batches
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can delete billing rows" on public.billing_purchase_import_batches
+  for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+
+drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_import_documents;
+drop policy if exists "Workspace members can insert billing rows" on public.billing_purchase_import_documents;
+drop policy if exists "Workspace members can update billing rows" on public.billing_purchase_import_documents;
+drop policy if exists "Workspace members can delete billing rows" on public.billing_purchase_import_documents;
+create policy "Workspace members can read billing rows" on public.billing_purchase_import_documents
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert billing rows" on public.billing_purchase_import_documents
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update billing rows" on public.billing_purchase_import_documents
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can delete billing rows" on public.billing_purchase_import_documents
+  for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
