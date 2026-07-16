@@ -146,6 +146,8 @@ Example manual call body:
 
 When Supabase is configured and the user is signed in, data syncs to the selected cloud workspace. Staff can access the same workspace when their email is added in Cloud Workspace settings.
 
+Run `supabase/migrations/20260716223000_durable_entry_deletions.sql` once, or rerun the complete `supabase-schema.sql`. Purchase and purchase-order deletions are stored as durable tombstones before their cloud rows are removed. This prevents stale devices, workspace snapshots and local backups from restoring deleted entries. The migration also converts existing purchase deletion audit history and removes previously resurrected rows.
+
 If Supabase is not configured or the user is signed out, the app still works with browser local storage.
 
 Purchase invoice soft-copy uploads use the private `purchase-invoices` Supabase Storage bucket. If uploads show a row-level security or storage permission error, rerun the latest `supabase-schema.sql` in the Supabase SQL editor so the storage policies are refreshed.

@@ -1834,3 +1834,39 @@ create policy "Workspace members can update billing rows" on public.billing_purc
   with check (public.can_access_billing_workspace(workspace_id::text));
 create policy "Workspace members can delete billing rows" on public.billing_purchase_import_documents
   for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+
+create table if not exists public.billing_deletion_tombstones (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  entity_type text not null check (entity_type in ('purchase', 'po')),
+  entity_id text not null,
+  profile_id text not null default '',
+  document_number text not null default '',
+  deleted_at timestamptz not null default now(),
+  deleted_by uuid references auth.users(id),
+  before_data jsonb,
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, entity_type, entity_id)
+);
+
+create index if not exists billing_deletion_tombstones_workspace_deleted_idx
+  on public.billing_deletion_tombstones(workspace_id, deleted_at desc);
+
+alter table public.billing_deletion_tombstones enable row level security;
+
+drop policy if exists "Workspace members can read deletion tombstones" on public.billing_deletion_tombstones;
+drop policy if exists "Workspace members can insert deletion tombstones" on public.billing_deletion_tombstones;
+drop policy if exists "Workspace members can update deletion tombstones" on public.billing_deletion_tombstones;
+drop policy if exists "Workspace members can delete deletion tombstones" on public.billing_deletion_tombstones;
+
+create policy "Workspace members can read deletion tombstones" on public.billing_deletion_tombstones
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert deletion tombstones" on public.billing_deletion_tombstones
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update deletion tombstones" on public.billing_deletion_tombstones
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));

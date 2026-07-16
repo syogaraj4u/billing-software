@@ -20,6 +20,7 @@ const CLOUD_ROW_TABLES = {
   tallySyncRuns: "billing_tally_sync_runs",
   purchaseImportBatches: "billing_purchase_import_batches",
   purchaseImportDocuments: "billing_purchase_import_documents",
+  deletionTombstones: "billing_deletion_tombstones",
   auditLogs: "billing_audit_logs",
   backups: "billing_cloud_backups"
 };
@@ -487,7 +488,8 @@ const defaultState = {
   bankTransactions: [],
   tallySyncRuns: [],
   purchaseImportBatches: [],
-  purchaseImportDocuments: []
+  purchaseImportDocuments: [],
+  deletionTombstones: []
 };
 
 let state = loadState();
@@ -652,6 +654,7 @@ function normalizeState(value) {
   value.purchaseImportDocuments = Array.isArray(value.purchaseImportDocuments)
     ? value.purchaseImportDocuments.map(normalizePurchaseImportDocumentForState)
     : [];
+  value.deletionTombstones = normalizeDeletionTombstones(value.deletionTombstones);
   [...value.sales, ...value.creditNotes, ...value.purchases, ...value.purchaseReturns, ...value.purchaseOrders].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
@@ -660,6 +663,7 @@ function normalizeState(value) {
   value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties, value.items));
   value.purchaseReturns.forEach(entry => normalizeEntryForState(entry, "purchaseReturn", value.parties, value.items));
   value.purchaseOrders.forEach(entry => normalizeEntryForState(entry, "po", value.parties, value.items));
+  applyDeletionTombstones(value);
   return value;
 }
 
@@ -692,6 +696,12 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
   let changed = false;
   localCandidates.filter(Boolean).forEach(candidate => {
     const local = normalizeState(clone(candidate));
+    changed = mergeByIdentity(
+      merged.deletionTombstones,
+      local.deletionTombstones,
+      deletionTombstoneMergeKey,
+      mergeExistingDeletionTombstone
+    ) || changed;
     changed = mergeByIdentity(merged.parties, local.parties, partyMergeKey, mergeExistingParty) || changed;
     changed = mergeByIdentity(merged.items, local.items, itemMergeKey) || changed;
     changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
@@ -705,6 +715,7 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
     changed = mergeByIdentity(merged.purchaseImportBatches, local.purchaseImportBatches, purchaseImportBatchMergeKey, mergeNewestCloudEntity) || changed;
     changed = mergeByIdentity(merged.purchaseImportDocuments, local.purchaseImportDocuments, purchaseImportDocumentMergeKey, mergeNewestCloudEntity) || changed;
     mergeProfileCounters(merged.settings.profiles, local.settings.profiles);
+    changed = applyDeletionTombstones(merged) || changed;
   });
   return { state: normalizeState(merged), changed };
 }
@@ -812,6 +823,22 @@ function purchaseImportBatchMergeKey(batch = {}) {
 
 function purchaseImportDocumentMergeKey(document = {}) {
   return document.id || "";
+}
+
+function deletionTombstoneMergeKey(tombstone = {}) {
+  const entityType = normalizeDeletionEntityType(tombstone.entityType);
+  const entityId = String(tombstone.entityId || "").trim();
+  return entityType && entityId ? `${entityType}:${entityId}` : "";
+}
+
+function mergeExistingDeletionTombstone(target, source) {
+  const targetDeleted = deletionTombstoneTimestamp(target);
+  const sourceDeleted = deletionTombstoneTimestamp(source);
+  if (sourceDeleted < targetDeleted) return false;
+  if (sourceDeleted === targetDeleted && cloudAuditComparable(target) === cloudAuditComparable(source)) return false;
+  if (sourceDeleted === targetDeleted && target.beforeData && !source.beforeData) return false;
+  Object.assign(target, clone(source));
+  return true;
 }
 
 function mergeExistingTallySyncRun(target, source) {
@@ -1308,6 +1335,75 @@ function normalizePurchaseImportDocumentForState(document = {}) {
   };
   normalizeCloudEntityMeta(normalized, document);
   return normalized;
+}
+
+function normalizeDeletionTombstones(rows = []) {
+  const byKey = new Map();
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    const normalized = normalizeDeletionTombstoneForState(row);
+    if (!normalized) return;
+    const key = deletionTombstoneMergeKey(normalized);
+    const existing = byKey.get(key);
+    if (!existing || deletionTombstoneTimestamp(normalized) >= deletionTombstoneTimestamp(existing)) {
+      byKey.set(key, normalized);
+    }
+  });
+  return [...byKey.values()];
+}
+
+function normalizeDeletionTombstoneForState(tombstone = {}) {
+  const entityType = normalizeDeletionEntityType(tombstone.entityType || tombstone.kind);
+  const entityId = String(tombstone.entityId || tombstone.entryId || "").trim();
+  if (!entityType || !entityId) return null;
+  const deletedAt = cloudTimestamp(tombstone.deletedAt || tombstone.updatedAt || tombstone.createdAt);
+  const normalized = {
+    id: `${entityType}:${entityId}`,
+    entityType,
+    entityId,
+    profileId: String(tombstone.profileId || tombstone.beforeData?.profileId || ""),
+    documentNumber: String(tombstone.documentNumber || tombstone.beforeData?.number || ""),
+    deletedAt,
+    deletedBy: String(tombstone.deletedBy || tombstone.createdBy || ""),
+    beforeData: tombstone.beforeData && typeof tombstone.beforeData === "object"
+      ? clone(tombstone.beforeData)
+      : null
+  };
+  normalizeCloudEntityMeta(normalized, tombstone);
+  normalized.createdAt = normalized.createdAt || deletedAt;
+  normalized.updatedAt = normalized.updatedAt || deletedAt;
+  return normalized;
+}
+
+function normalizeDeletionEntityType(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["purchase", "purchases"].includes(normalized)) return "purchase";
+  if (["po", "purchase_order", "purchase_orders", "purchaseorder", "purchaseorders"].includes(normalized)) return "po";
+  return "";
+}
+
+function deletionTombstoneTimestamp(tombstone = {}) {
+  return new Date(tombstone.deletedAt || tombstone.updatedAt || tombstone.createdAt || 0).getTime() || 0;
+}
+
+function applyDeletionTombstones(targetState = {}) {
+  const mappings = [
+    ["purchase", "purchases"],
+    ["po", "purchaseOrders"]
+  ];
+  let changed = false;
+  mappings.forEach(([entityType, stateKey]) => {
+    const deletedIds = new Set((targetState.deletionTombstones || [])
+      .filter(tombstone => normalizeDeletionEntityType(tombstone.entityType) === entityType)
+      .map(tombstone => String(tombstone.entityId || "").trim())
+      .filter(Boolean));
+    if (!deletedIds.size || !Array.isArray(targetState[stateKey])) return;
+    const filtered = targetState[stateKey].filter(entry => !deletedIds.has(String(entry.id || "")));
+    if (filtered.length !== targetState[stateKey].length) {
+      targetState[stateKey] = filtered;
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "") {
@@ -3060,7 +3156,7 @@ async function enrichCloudWorkspaceWithRows(workspace = {}) {
 
 async function readNormalizedCloudState(workspaceId) {
   if (!cloudClient || !workspaceId) return null;
-  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions, tallySyncRuns, purchaseImportBatches, purchaseImportDocuments] = await Promise.all([
+  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions, tallySyncRuns, purchaseImportBatches, purchaseImportDocuments, deletionTombstones] = await Promise.all([
     readCloudTableRows(CLOUD_ROW_TABLES.parties, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.items, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.sales, workspaceId),
@@ -3072,10 +3168,11 @@ async function readNormalizedCloudState(workspaceId) {
     readCloudTableRows(CLOUD_ROW_TABLES.bankTransactions, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.tallySyncRuns, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.purchaseImportBatches, workspaceId),
-    readCloudTableRows(CLOUD_ROW_TABLES.purchaseImportDocuments, workspaceId)
+    readCloudTableRows(CLOUD_ROW_TABLES.purchaseImportDocuments, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.deletionTombstones, workspaceId)
   ]);
   if ([parties, items, sales, purchases, purchaseOrders].some(result => result === null)) return null;
-  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || [], tallySyncRuns || [], purchaseImportBatches || [], purchaseImportDocuments || []].some(rows => rows.length);
+  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || [], tallySyncRuns || [], purchaseImportBatches || [], purchaseImportDocuments || [], deletionTombstones || []].some(rows => rows.length);
   if (!hasRows) return null;
   return normalizeState({
     ...clone(defaultState),
@@ -3172,6 +3269,16 @@ async function readNormalizedCloudState(workspaceId) {
       duplicatePurchaseId: row.duplicate_purchase_id,
       approvedPurchaseId: row.approved_purchase_id,
       error: row.error
+    })),
+    deletionTombstones: (deletionTombstones || []).map(row => cloudRowData(row, {
+      id: `${row.entity_type}:${row.entity_id}`,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      profileId: row.profile_id,
+      documentNumber: row.document_number,
+      deletedAt: row.deleted_at,
+      deletedBy: row.deleted_by,
+      beforeData: row.before_data
     }))
   });
 }
@@ -3365,6 +3472,8 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
   const workspaceId = cloudWorkspace?.id;
   if (!cloudClient || !workspaceId) return;
   const userId = currentCloudUserId();
+  await syncCloudDeletionTombstones(nextState.deletionTombstones, syncedAt, userId);
+  await purgeCloudDeletedEntries(nextState.deletionTombstones);
   await Promise.all([
     syncCloudEntityTable(CLOUD_ROW_TABLES.parties, "id", nextState.parties, previousState.parties, row => cloudPartyRow(workspaceId, row, syncedAt, userId)),
     syncCloudEntityTable(CLOUD_ROW_TABLES.items, "id", nextState.items, previousState.items, row => cloudItemRow(workspaceId, row, syncedAt, userId)),
@@ -3504,6 +3613,48 @@ async function syncCloudEntityTable(table, idColumn, currentRows = [], previousR
       .eq("workspace_id", workspaceId)
       .in(idColumn, batch);
     if (error) throw error;
+  }
+}
+
+async function syncCloudDeletionTombstones(tombstones = [], syncedAt, userId) {
+  const rows = tombstones.map(tombstone => cloudDeletionTombstoneRow(
+    cloudWorkspace.id,
+    tombstone,
+    syncedAt,
+    userId
+  ));
+  for (let index = 0; index < rows.length; index += 250) {
+    const { error } = await cloudClient
+      .from(CLOUD_ROW_TABLES.deletionTombstones)
+      .upsert(rows.slice(index, index + 250), { onConflict: "workspace_id,entity_type,entity_id" });
+    if (error) throw error;
+  }
+}
+
+async function purgeCloudDeletedEntries(tombstones = []) {
+  for (const kind of ["purchase", "po"]) {
+    const ids = [...new Set(tombstones
+      .filter(tombstone => normalizeDeletionEntityType(tombstone.entityType) === kind)
+      .map(tombstone => String(tombstone.entityId || "").trim())
+      .filter(Boolean))];
+    const entryTable = cloudEntryTable(kind);
+    const lineTable = cloudEntryLineTable(kind);
+    const parentColumn = cloudEntryLineParentColumn(kind);
+    for (let index = 0; index < ids.length; index += 250) {
+      const batch = ids.slice(index, index + 250);
+      const { error: lineError } = await cloudClient
+        .from(lineTable)
+        .delete()
+        .eq("workspace_id", cloudWorkspace.id)
+        .in(parentColumn, batch);
+      if (lineError) throw lineError;
+      const { error: entryError } = await cloudClient
+        .from(entryTable)
+        .delete()
+        .eq("workspace_id", cloudWorkspace.id)
+        .in("id", batch);
+      if (entryError) throw entryError;
+    }
   }
 }
 
@@ -3688,6 +3839,21 @@ function cloudPurchaseImportDocumentRow(workspaceId, document, syncedAt, userId)
   };
 }
 
+function cloudDeletionTombstoneRow(workspaceId, tombstone, syncedAt, userId) {
+  return {
+    workspace_id: workspaceId,
+    entity_type: normalizeDeletionEntityType(tombstone.entityType),
+    entity_id: tombstone.entityId || "",
+    profile_id: tombstone.profileId || "",
+    document_number: tombstone.documentNumber || "",
+    deleted_at: cloudTimestamp(tombstone.deletedAt) || syncedAt,
+    deleted_by: tombstone.deletedBy || userId,
+    before_data: tombstone.beforeData ? clone(tombstone.beforeData) : null,
+    data: clone(tombstone),
+    ...cloudSyncColumns(tombstone, syncedAt, userId)
+  };
+}
+
 function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
   const base = {
     workspace_id: workspaceId,
@@ -3810,7 +3976,7 @@ function cloudTimestamp(value) {
 
 function markStateSyncStatus(sourceState, status, syncedAt = "") {
   const nextState = normalizeState(clone(sourceState || defaultState));
-  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions, ...nextState.tallySyncRuns, ...nextState.purchaseImportBatches, ...nextState.purchaseImportDocuments]
+  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions, ...nextState.tallySyncRuns, ...nextState.purchaseImportBatches, ...nextState.purchaseImportDocuments, ...nextState.deletionTombstones]
     .forEach(entity => markEntitySyncStatus(entity, status, syncedAt));
   return nextState;
 }
@@ -6712,23 +6878,65 @@ function purchaseEwayDistanceNeedsConfirmation(form) {
     && !form.elements.ewayDistanceConfirmed.checked;
 }
 
-function deleteEntry(kind, id) {
+async function deleteEntry(kind, id) {
   if (kind === "sale") {
     cancelEntry(kind, id);
     return;
   }
   const entry = entryList(kind).find(row => row.id === id);
+  if (!entry) return toast("Entry not found");
   if (kind === "purchase" && entry?.source === "internal-sale") {
     toast("Internal purchase is linked. Cancel the sales bill instead");
     return;
   }
   if (!confirm("Delete this entry?")) return;
   const key = kind === "purchase" ? "purchases" : "purchaseOrders";
+  const tombstone = recordEntryDeletion(kind, entry);
   state[key] = state[key].filter(row => row.id !== id);
   if (kind === "purchase") selectedPurchaseIds.delete(id);
-  saveState();
+  saveState({ skipCloud: true });
   renderAll();
-  toast("Entry deleted");
+  if (!cloudReadyForSync()) {
+    toast("Entry deleted locally. It will sync after cloud login");
+    return;
+  }
+  const synced = await syncCloudNow(false);
+  if (synced) {
+    toast("Entry deleted and synced");
+    return;
+  }
+  const pendingTombstone = state.deletionTombstones.find(row => deletionTombstoneMergeKey(row) === deletionTombstoneMergeKey(tombstone));
+  markEntitySyncStatus(pendingTombstone, SYNC_STATUS_FAILED);
+  saveState({ skipCloud: true });
+  renderAll();
+  toast(`Entry deleted locally. Cloud sync failed${cloudFailureSuffix()}`);
+}
+
+function recordEntryDeletion(kind, entry) {
+  const entityType = normalizeDeletionEntityType(kind);
+  const entityId = String(entry?.id || "").trim();
+  const now = new Date().toISOString();
+  const key = `${entityType}:${entityId}`;
+  const existingIndex = state.deletionTombstones.findIndex(row => deletionTombstoneMergeKey(row) === key);
+  const existing = existingIndex >= 0 ? state.deletionTombstones[existingIndex] : null;
+  const tombstone = normalizeDeletionTombstoneForState({
+    id: key,
+    entityType,
+    entityId,
+    profileId: entry?.profileId || "",
+    documentNumber: entry?.number || "",
+    deletedAt: now,
+    deletedBy: currentCloudUserId() || "",
+    beforeData: clone(entry),
+    syncStatus: newLocalSyncStatus(),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    createdBy: existing?.createdBy || currentCloudUserId() || "",
+    lastSyncedAt: existing?.lastSyncedAt || ""
+  });
+  if (existingIndex >= 0) state.deletionTombstones[existingIndex] = tombstone;
+  else state.deletionTombstones.push(tombstone);
+  return tombstone;
 }
 
 function cancelEntry(kind, id) {
