@@ -57,7 +57,9 @@ Deno.serve(async request => {
         workspace: workspace.name,
         sentTo: recipients,
         salesCount: report.sales.length,
+        creditNoteCount: report.creditNotes.length,
         purchaseCount: report.purchases.length,
+        purchaseReturnCount: report.purchaseReturns.length,
         softCopyCount: report.softCopies.length,
         softCopiesAttached: storedSoftCopies.length
       });
@@ -92,7 +94,9 @@ async function sendReportEmail(
 ) {
   const csvAttachments = [
     csvAttachment(`sales-register-${month}.csv`, salesRegisterHeader(), report.sales),
+    csvAttachment(`credit-note-register-${month}.csv`, creditNoteRegisterHeader(), report.creditNotes),
     csvAttachment(`purchase-register-${month}.csv`, purchaseRegisterHeader(), report.purchases),
+    csvAttachment(`purchase-return-register-${month}.csv`, purchaseReturnRegisterHeader(), report.purchaseReturns),
     csvAttachment(`gst-summary-${month}.csv`, gstSummaryHeader(), report.gstSummary),
     csvAttachment(`invoice-soft-copies-${month}.csv`, softCopyHeader(), report.softCopies.map(copy => copy.row))
   ];
@@ -106,7 +110,7 @@ async function sendReportEmail(
       from: fromEmail,
       to: recipients,
       subject: `${workspaceName} month-end billing report - ${month}`,
-      html: `<p>Month-end billing report for ${month} is attached.</p><p>Sales entries: ${report.sales.length}<br>Purchase entries: ${report.purchases.length}<br>GST summary rows: ${report.gstSummary.length}<br>Invoice soft-copy records: ${report.softCopies.length}<br>Soft copies attached: ${storedSoftCopies.length}</p>`,
+      html: `<p>Month-end billing report for ${month} is attached.</p><p>Sales entries: ${report.sales.length}<br>Credit notes: ${report.creditNotes.length}<br>Purchase entries: ${report.purchases.length}<br>Purchase returns: ${report.purchaseReturns.length}<br>GST summary rows: ${report.gstSummary.length}<br>Invoice soft-copy records: ${report.softCopies.length}<br>Soft copies attached: ${storedSoftCopies.length}</p>`,
       attachments: [...csvAttachments, ...storedSoftCopies]
     })
   });
@@ -118,10 +122,36 @@ async function sendReportEmail(
 
 function buildMonthEndReport(data: Record<string, any>, month: string) {
   const sales = salesRows(data, month);
+  const creditNotes = creditNoteRows(data, month);
   const purchases = purchaseRows(data, month);
+  const purchaseReturns = purchaseReturnRows(data, month);
   const gstSummary = gstSummaryRows(data, month);
   const softCopies = invoiceSoftCopies(data, month);
-  return { sales, purchases, gstSummary, softCopies };
+  return { sales, creditNotes, purchases, purchaseReturns, gstSummary, softCopies };
+}
+
+function creditNoteRows(data: Record<string, any>, month: string) {
+  const profiles = data.settings?.profiles || [];
+  const parties = data.parties || [];
+  return monthEntries(data.creditNotes || [], month)
+    .sort(sortByDateNumber)
+    .map((entry: Record<string, any>) => {
+      const profile = byId(profiles, entry.profileId);
+      const buyer = byId(parties, entry.partyId);
+      return [entry.date || "", entry.number || "", profile.businessName || profile.label || "", profile.gstin || "", buyer.name || "", buyer.gstin || "", entry.originalInvoiceNumber || "", entry.originalInvoiceDate || "", entry.reason || "", entry.restock ? "Yes" : "No", entry.taxMode || "", entry.taxable || 0, entry.cgst || 0, entry.sgst || 0, entry.igst || 0, entry.gst || 0, entry.roundOff || 0, entry.total || 0, isCancelledEntry(entry) ? "Cancelled" : "Active"];
+    });
+}
+
+function purchaseReturnRows(data: Record<string, any>, month: string) {
+  const profiles = data.settings?.profiles || [];
+  const parties = data.parties || [];
+  return monthEntries(data.purchaseReturns || [], month)
+    .sort(sortByDateNumber)
+    .map((entry: Record<string, any>) => {
+      const profile = byId(profiles, entry.profileId);
+      const supplier = byId(parties, entry.partyId);
+      return [entry.date || "", entry.number || "", profile.businessName || profile.label || "", profile.gstin || "", supplier.name || "", supplier.gstin || "", entry.originalInvoiceNumber || "", entry.originalInvoiceDate || "", entry.reason || "", entry.restock ? "Yes" : "No", entry.taxable || 0, entry.cgst || 0, entry.sgst || 0, entry.igst || 0, entry.gst || 0, entry.roundOff || 0, entry.total || 0, isCancelledEntry(entry) ? "Cancelled" : "Active"];
+    });
 }
 
 function salesRows(data: Record<string, any>, month: string) {
@@ -184,10 +214,18 @@ function purchaseRows(data: Record<string, any>, month: string) {
 function gstSummaryRows(data: Record<string, any>, month: string) {
   const profiles = data.settings?.profiles || [];
   const sales = monthEntries(data.sales || [], month).filter(entry => !isCancelledEntry(entry));
-  const purchases = monthEntries(data.purchases || [], month);
+  const credits = monthEntries(data.creditNotes || [], month).filter(entry => !isCancelledEntry(entry));
+  const purchases = monthEntries(data.purchases || [], month).filter(entry => !isCancelledEntry(entry));
+  const purchaseReturns = monthEntries(data.purchaseReturns || [], month).filter(entry => !isCancelledEntry(entry));
   return profiles.map((profile: Record<string, any>) => {
-    const output = sumTax(sales.filter(entry => entry.profileId === profile.id));
-    const input = sumTax(purchases.filter(entry => entry.profileId === profile.id));
+    const output = subtractTax(
+      sumTax(sales.filter(entry => entry.profileId === profile.id)),
+      sumTax(credits.filter(entry => entry.profileId === profile.id))
+    );
+    const input = subtractTax(
+      sumTax(purchases.filter(entry => entry.profileId === profile.id)),
+      sumTax(purchaseReturns.filter(entry => entry.profileId === profile.id))
+    );
     const netCgst = round2(output.cgst - input.cgst);
     const netSgst = round2(output.sgst - input.sgst);
     const netIgst = round2(output.igst - input.igst);
@@ -304,6 +342,14 @@ function purchaseRegisterHeader() {
   return ["Date", "Bill No", "Buyer Business", "Buyer GSTIN", "Supplier", "Supplier GSTIN", "Tax Mode", "Taxable", "CGST", "SGST", "IGST", "GST", "Total", "Review Status", "Review Notes", "Invoice Soft Copy"];
 }
 
+function creditNoteRegisterHeader() {
+  return ["Date", "Credit Note No", "Seller Business", "Seller GSTIN", "Buyer", "Buyer GSTIN", "Original Invoice", "Original Invoice Date", "Reason", "Stock Updated", "Tax Mode", "Taxable", "CGST", "SGST", "IGST", "GST", "Round Off", "Total", "Status"];
+}
+
+function purchaseReturnRegisterHeader() {
+  return ["Date", "Credit Note No", "Buyer Business", "Buyer GSTIN", "Supplier", "Supplier GSTIN", "Original Invoice", "Original Invoice Date", "Reason", "Stock Updated", "Taxable", "CGST", "SGST", "IGST", "GST", "Round Off", "Total", "Status"];
+}
+
 function gstSummaryHeader() {
   return ["Company", "GSTIN", "Sales Taxable", "Sales CGST", "Sales SGST", "Sales IGST", "Sales GST", "Purchase Taxable", "Purchase CGST", "Purchase SGST", "Purchase IGST", "Purchase GST", "Net CGST", "Net SGST", "Net IGST", "Net GST"];
 }
@@ -337,6 +383,16 @@ function sumTax(entries: Array<Record<string, any>>) {
     acc.gst = round2(acc.gst + num(entry.gst));
     return acc;
   }, { taxable: 0, cgst: 0, sgst: 0, igst: 0, gst: 0 });
+}
+
+function subtractTax(total: Record<string, number>, adjustment: Record<string, number>) {
+  return {
+    taxable: round2(total.taxable - adjustment.taxable),
+    cgst: round2(total.cgst - adjustment.cgst),
+    sgst: round2(total.sgst - adjustment.sgst),
+    igst: round2(total.igst - adjustment.igst),
+    gst: round2(total.gst - adjustment.gst)
+  };
 }
 
 function num(value: unknown) {

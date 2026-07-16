@@ -5,6 +5,8 @@ Browser-based cloud billing software for purchase entry, sales entry, purchase o
 ## Features
 
 - Sales entry
+- Firm-specific credit notes with partial or full item returns
+- Automatic linked purchase return for transactions between the 8 group firms
 - Chat sale bill draft from simple customer/item text
 - Purchase entry
 - Purchase order generation without changing stock
@@ -86,6 +88,12 @@ Run `supabase/migrations/20260713180000_bank_reconciliation.sql` once, or rerun 
 In Banking, add or edit the company bank accounts and cards, then upload a CSV, XLS or XLSX statement for one selected account. Statement files are parsed in the browser. Only normalized transaction rows are synced to Supabase; the original statement file is not uploaded.
 
 The app automatically matches a unique debit to a purchase and a unique credit to a sale when the date and amount are close. Ambiguous entries remain in Needs Review for manual confirmation. Books Missing shows bills without a statement match, Differences shows amount mismatches, and Due Payments estimates each configured credit card's statement-cycle debits less credits.
+
+## Credit Notes
+
+Run `supabase/migrations/20260716120000_credit_notes.sql` once, or rerun the complete `supabase-schema.sql`. The migration creates normalized credit-note, credit-note-item, purchase-return, and purchase-return-item tables and backfills any existing documents from workspace JSON.
+
+Each firm has its own non-reusable credit-note sequence, such as `NS/CN/26-27/001` and `KN/CN/26-27/001`. A credit note can return all or part of an original sales invoice. Goods-return notes add the credited quantity back to seller stock; financial-only adjustments do not affect stock. When the buyer is one of the other group firms, the app creates and links the corresponding purchase return automatically.
 
 ## Month-End Reports
 

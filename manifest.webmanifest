@@ -1,7 +1,7 @@
 {
   "name": "Billing Software",
   "short_name": "Billing",
-  "description": "Purchase entry, sales entry, inventory, GST invoices and reports.",
+  "description": "Sales, purchases, credit notes, inventory, GST invoices and reports.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

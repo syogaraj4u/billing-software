@@ -6,10 +6,14 @@ const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
   items: "billing_items",
   sales: "billing_sales",
+  creditNotes: "billing_credit_notes",
   purchases: "billing_purchases",
+  purchaseReturns: "billing_purchase_returns",
   purchaseOrders: "billing_purchase_orders",
   saleItems: "billing_sale_items",
+  creditNoteItems: "billing_credit_note_items",
   purchaseItems: "billing_purchase_items",
+  purchaseReturnItems: "billing_purchase_return_items",
   purchaseOrderItems: "billing_purchase_order_items",
   paymentSources: "billing_payment_sources",
   bankTransactions: "billing_bank_transactions",
@@ -325,6 +329,17 @@ const SALE_INVOICE_NUMBER_RULES = {
   "gst-8": { prefix: "SLD/26-27", start: 6, width: 3 }
 };
 
+const CREDIT_NOTE_NUMBER_RULES = {
+  "gst-1": { prefix: "NS/CN/26-27", start: 1, width: 3 },
+  "gst-2": { prefix: "KN/CN/26-27", start: 1, width: 3 },
+  "gst-3": { prefix: "HHM/CN/26-27", start: 1, width: 3 },
+  "gst-4": { prefix: "SNC/CN/26-27", start: 1, width: 3 },
+  "gst-5": { prefix: "SD/CN/26-27", start: 1, width: 3 },
+  "gst-6": { prefix: "KI/CN/26-27", start: 1, width: 3 },
+  "gst-7": { prefix: "LJT/CN/26-27", start: 1, width: 3 },
+  "gst-8": { prefix: "SLD/CN/26-27", start: 1, width: 3 }
+};
+
 const FIRM_LOGOS = {
   "gst-1": {
     initials: "NS",
@@ -461,7 +476,9 @@ const defaultState = {
     { id: uid(), name: "Default Supplier", type: "Supplier", gstin: "", phone: "", place: "Local", address: "" }
   ],
   sales: [],
+  creditNotes: [],
   purchases: [],
+  purchaseReturns: [],
   purchaseOrders: [],
   paymentSources: createDefaultPaymentSources(),
   bankTransactions: []
@@ -471,6 +488,7 @@ let state = loadState();
 let currentView = "dashboard";
 let entryMode = "sale";
 let editingEntryId = null;
+let editingCreditNoteId = null;
 let editingItemId = null;
 let editingPartyId = null;
 let deviceViewMode = "";
@@ -597,7 +615,9 @@ function normalizeState(value) {
   mergeTallyBuyerMaster(value);
   mergeInternalCompanyPartyMaster(value);
   value.sales = Array.isArray(value.sales) ? value.sales : [];
+  value.creditNotes = Array.isArray(value.creditNotes) ? value.creditNotes : [];
   value.purchases = Array.isArray(value.purchases) ? value.purchases : [];
+  value.purchaseReturns = Array.isArray(value.purchaseReturns) ? value.purchaseReturns : [];
   value.purchaseOrders = Array.isArray(value.purchaseOrders) ? value.purchaseOrders : [];
   value.paymentSources = Array.isArray(value.paymentSources)
     ? value.paymentSources.map(normalizePaymentSourceForState)
@@ -605,11 +625,13 @@ function normalizeState(value) {
   value.bankTransactions = Array.isArray(value.bankTransactions)
     ? value.bankTransactions.map(normalizeBankTransactionForState)
     : [];
-  [...value.sales, ...value.purchases, ...value.purchaseOrders].forEach(entry => {
+  [...value.sales, ...value.creditNotes, ...value.purchases, ...value.purchaseReturns, ...value.purchaseOrders].forEach(entry => {
     if (!entry.profileId) entry.profileId = value.settings.activeProfileId;
   });
   value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties, value.items));
+  value.creditNotes.forEach(entry => normalizeEntryForState(entry, "creditNote", value.parties, value.items));
   value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties, value.items));
+  value.purchaseReturns.forEach(entry => normalizeEntryForState(entry, "purchaseReturn", value.parties, value.items));
   value.purchaseOrders.forEach(entry => normalizeEntryForState(entry, "po", value.parties, value.items));
   return value;
 }
@@ -646,7 +668,9 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
     changed = mergeByIdentity(merged.parties, local.parties, partyMergeKey, mergeExistingParty) || changed;
     changed = mergeByIdentity(merged.items, local.items, itemMergeKey) || changed;
     changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
+    changed = mergeByIdentity(merged.creditNotes, local.creditNotes, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey) || changed;
+    changed = mergeByIdentity(merged.purchaseReturns, local.purchaseReturns, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.purchaseOrders, local.purchaseOrders, entryMergeKey) || changed;
     changed = mergeByIdentity(merged.paymentSources, local.paymentSources, paymentSourceMergeKey) || changed;
     changed = mergeByIdentity(merged.bankTransactions, local.bankTransactions, bankTransactionMergeKey) || changed;
@@ -1002,12 +1026,19 @@ function normalizeEntryForState(entry, kind, parties = [], items = []) {
   entry.attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
   entry.rateIncludesGst = true;
   entry.internalTransfer = normalizeInternalTransfer(entry.internalTransfer);
+  if (kind === "creditNote" || kind === "purchaseReturn") {
+    entry.originalSaleId = String(entry.originalSaleId || "").trim();
+    entry.originalInvoiceNumber = String(entry.originalInvoiceNumber || "").trim();
+    entry.originalInvoiceDate = String(entry.originalInvoiceDate || "").trim();
+    entry.reason = String(entry.reason || "Goods Returned").trim();
+    entry.restock = entry.restock !== false;
+  }
   entry.lines.forEach(line => {
     const item = items.find(row => row.id === line.itemId);
     if (!String(line.itemName || "").trim() && item?.name) line.itemName = item.name;
     line.hsn = lineHsn(line, item || {});
   });
-  if (kind === "sale") normalizeSaleAddressSnapshots(entry, parties);
+  if (kind === "sale" || kind === "creditNote") normalizeSaleAddressSnapshots(entry, parties);
   if (kind === "purchase") {
     entry.source = entry.source || "manual";
     entry.ewayDetails = normalizePurchaseEwayDetails(entry.ewayDetails || {});
@@ -1071,6 +1102,8 @@ function normalizeInternalTransfer(value = null) {
     role: String(value.role || "").trim(),
     linkedSaleId: String(value.linkedSaleId || "").trim(),
     linkedPurchaseId: String(value.linkedPurchaseId || "").trim(),
+    linkedCreditNoteId: String(value.linkedCreditNoteId || "").trim(),
+    linkedPurchaseReturnId: String(value.linkedPurchaseReturnId || "").trim(),
     sellerProfileId: String(value.sellerProfileId || "").trim(),
     buyerProfileId: String(value.buyerProfileId || "").trim(),
     createdAt: String(value.createdAt || "").trim(),
@@ -1358,8 +1391,11 @@ function toast(message) {
 
 function entryList(kind) {
   if (kind === "sale") return state.sales;
+  if (kind === "creditNote") return state.creditNotes;
   if (kind === "purchase") return state.purchases;
-  return state.purchaseOrders;
+  if (kind === "purchaseReturn") return state.purchaseReturns;
+  if (kind === "po") return state.purchaseOrders;
+  return [];
 }
 
 function activeEntries(kind) {
@@ -1375,6 +1411,15 @@ function defaultEntryMonth(kind, profileId = activeProfileId()) {
   return months[0] || currentMonthKey();
 }
 
+function defaultCreditDocumentMonth(profileId = activeProfileId()) {
+  const months = [...state.creditNotes, ...state.purchaseReturns]
+    .filter(entry => entry.profileId === profileId)
+    .map(entryMonthKey)
+    .filter(Boolean)
+    .sort((a, b) => b.localeCompare(a));
+  return months[0] || currentMonthKey();
+}
+
 function isMobileDeviceView() {
   return deviceViewMode === "mobile"
     || document.documentElement.dataset.deviceView === "mobile"
@@ -1382,7 +1427,7 @@ function isMobileDeviceView() {
 }
 
 function mobilePurchaseUsesSpecificMonth(kind) {
-  return (kind === "purchase" || kind === "po") && isMobileDeviceView();
+  return (kind === "purchase" || kind === "po" || kind === "creditNote" || kind === "purchaseReturn") && isMobileDeviceView();
 }
 
 function selectedEntryMonth(kind) {
@@ -1414,7 +1459,13 @@ function entryMonthOptions(kind) {
 }
 
 function renderEntryMonthFilter(kind) {
-  const select = kind === "sale" ? $("#salesMonthFilter") : kind === "purchase" ? $("#purchaseMonthFilter") : $("#poMonthFilter");
+  const select = kind === "sale"
+    ? $("#salesMonthFilter")
+    : kind === "creditNote" || kind === "purchaseReturn"
+      ? $("#creditNoteMonthFilter")
+      : kind === "purchase"
+        ? $("#purchaseMonthFilter")
+        : $("#poMonthFilter");
   if (!select) return;
   const selected = selectedEntryMonth(kind);
   select.innerHTML = entryMonthOptions(kind)
@@ -1433,12 +1484,15 @@ function activeAccountingEntries(kind) {
 
 function entryPrefix(kind) {
   if (kind === "sale") return "SALE";
+  if (kind === "creditNote") return "CN";
   if (kind === "purchase") return "PUR";
+  if (kind === "purchaseReturn") return "PR";
   return "PO";
 }
 
 function nextEntryNumber(kind, profileId = state.settings.activeProfileId) {
   if (kind === "sale") return nextSaleInvoiceNumber(profileId);
+  if (kind === "creditNote") return nextCreditNoteNumber(profileId);
   const key = kind === "purchase" ? "nextPurchaseNo" : "nextPoNo";
   const profile = profileById(profileId);
   return `${entryPrefix(kind)}-${String(profile[key] || 1).padStart(4, "0")}`;
@@ -1511,6 +1565,46 @@ function syncSaleNumberingForProfiles(profiles, salesEntries = []) {
   profiles.forEach(profile => {
     if (saleNumberRule(profile.id)) profile.nextSaleNo = nextSaleSequence(profile.id, salesEntries);
   });
+}
+
+function creditNoteNumberRule(profileId) {
+  return CREDIT_NOTE_NUMBER_RULES[profileId] || null;
+}
+
+function formatCreditNoteNumber(profileId, sequence) {
+  const rule = creditNoteNumberRule(profileId);
+  if (!rule) return `${entryPrefix("creditNote")}-${String(sequence || 1).padStart(4, "0")}`;
+  return `${rule.prefix}/${String(Math.max(rule.start, num(sequence))).padStart(rule.width, "0")}`;
+}
+
+function creditNoteSequenceFromNumber(profileId, value) {
+  const rule = creditNoteNumberRule(profileId);
+  if (!rule) return null;
+  const match = String(value || "").trim().match(new RegExp(`^${escapeRegExp(rule.prefix)}\\/(\\d+)$`));
+  return match ? num(match[1]) : null;
+}
+
+function nextCreditNoteSequence(profileId, entries = state.creditNotes) {
+  const rule = creditNoteNumberRule(profileId);
+  if (!rule) return 1;
+  const highestSaved = entries.reduce((highest, entry) => {
+    if (entry.profileId !== profileId) return highest;
+    const sequence = creditNoteSequenceFromNumber(profileId, entry.number);
+    return sequence ? Math.max(highest, sequence) : highest;
+  }, rule.start - 1);
+  return Math.max(rule.start, highestSaved + 1);
+}
+
+function nextCreditNoteNumber(profileId, excludeId = "") {
+  return formatCreditNoteNumber(
+    profileId,
+    nextCreditNoteSequence(profileId, state.creditNotes.filter(entry => entry.id !== excludeId))
+  );
+}
+
+function creditNoteNumberExists(number, excludeId = "") {
+  const target = String(number || "").trim();
+  return state.creditNotes.some(entry => entry.id !== excludeId && String(entry.number || "").trim() === target);
 }
 
 function normalizeGstin(value) {
@@ -1727,6 +1821,121 @@ function cancelPurchaseEntry(purchase, reason = "Purchase cancelled.") {
   Object.assign(purchase, entityWithLocalMeta(purchase, purchase));
 }
 
+function findLinkedPurchaseReturnForCreditNote(entry = {}) {
+  const linkedId = entry.internalTransfer?.linkedPurchaseReturnId;
+  if (linkedId) {
+    const linked = state.purchaseReturns.find(purchaseReturn => purchaseReturn.id === linkedId);
+    if (linked) return linked;
+  }
+  const byCreditNoteId = state.purchaseReturns.find(purchaseReturn => purchaseReturn.internalTransfer?.linkedCreditNoteId === entry.id);
+  if (byCreditNoteId) return byCreditNoteId;
+  const buyerProfile = internalBuyerProfileForSale(entry);
+  if (!buyerProfile) return null;
+  const sellerGstin = normalizeGstin(entry.sellerGstin || profileById(entry.profileId)?.gstin);
+  return state.purchaseReturns.find(purchaseReturn => (
+    purchaseReturn.profileId === buyerProfile.id
+    && normalizeGstin(purchaseReturn.sellerGstin) === sellerGstin
+    && String(purchaseReturn.number || "").trim() === String(entry.number || "").trim()
+  )) || null;
+}
+
+function syncInternalPurchaseReturnForCreditNote(creditNote = {}, previousCreditNote = null) {
+  if (!creditNote || isCancelledEntry(creditNote)) {
+    return cancelLinkedPurchaseReturn(previousCreditNote || creditNote, "Linked credit note was cancelled.");
+  }
+  const buyerProfile = internalBuyerProfileForSale(creditNote);
+  const previousReturn = findLinkedPurchaseReturnForCreditNote(previousCreditNote || creditNote);
+  if (!buyerProfile) {
+    return cancelLinkedPurchaseReturn(previousCreditNote || creditNote, "Credit note is no longer linked to an internal GST company.");
+  }
+  const affectedPurchaseReturns = [];
+  const sellerProfile = profileById(creditNote.profileId);
+  const supplierParty = ensureInternalCompanyParty(sellerProfile, "Supplier");
+  if (!supplierParty) return { action: "none", linkedPurchaseReturn: null, supplierParty: null };
+  if (previousReturn && previousReturn.profileId !== buyerProfile.id) {
+    cancelPurchaseReturnEntry(previousReturn, "Internal credit-note buyer company changed.");
+    affectedPurchaseReturns.push(previousReturn);
+  }
+  const existingReturn = previousReturn && previousReturn.profileId === buyerProfile.id ? previousReturn : null;
+  const now = new Date().toISOString();
+  const transfer = normalizeInternalTransfer({
+    role: "purchaseReturn",
+    linkedSaleId: creditNote.originalSaleId,
+    linkedCreditNoteId: creditNote.id,
+    linkedPurchaseReturnId: existingReturn?.id || "",
+    sellerProfileId: sellerProfile.id,
+    buyerProfileId: buyerProfile.id,
+    createdAt: existingReturn?.internalTransfer?.createdAt || now,
+    updatedAt: now
+  });
+  const lines = clone(creditNote.lines || []).map(line => ({ ...line, hsn: lineHsn(line) }));
+  const calculated = calculateEntryTotals(lines, buyerProfile, supplierParty, "purchase");
+  const purchaseReturn = entityWithLocalMeta({
+    ...(existingReturn || {}),
+    id: existingReturn?.id || uid(),
+    date: creditNote.date,
+    number: creditNote.number,
+    profileId: buyerProfile.id,
+    partyId: supplierParty.id,
+    status: "Active",
+    lines,
+    ...calculated,
+    roundOff: num(creditNote.roundOff),
+    total: round2(num(calculated.total) + num(creditNote.roundOff)),
+    source: "internal-credit-note",
+    rateIncludesGst: true,
+    sellerGstin: normalizeGstin(sellerProfile.gstin),
+    buyerGstin: normalizeGstin(buyerProfile.gstin),
+    originalSaleId: creditNote.originalSaleId,
+    originalInvoiceNumber: creditNote.originalInvoiceNumber,
+    originalInvoiceDate: creditNote.originalInvoiceDate,
+    reason: creditNote.reason,
+    restock: creditNote.restock,
+    reviewMessages: [`Internal purchase return created from credit note ${creditNote.number}.`],
+    reviewStatus: "Ready",
+    internalTransfer: transfer,
+    cancelled: false,
+    cancelledAt: ""
+  }, existingReturn);
+  purchaseReturn.internalTransfer.linkedPurchaseReturnId = purchaseReturn.id;
+  const index = state.purchaseReturns.findIndex(row => row.id === purchaseReturn.id);
+  if (index >= 0) state.purchaseReturns[index] = purchaseReturn;
+  else state.purchaseReturns.push(purchaseReturn);
+  creditNote.internalTransfer = normalizeInternalTransfer({
+    role: "creditNote",
+    linkedSaleId: creditNote.originalSaleId,
+    linkedCreditNoteId: creditNote.id,
+    linkedPurchaseReturnId: purchaseReturn.id,
+    sellerProfileId: sellerProfile.id,
+    buyerProfileId: buyerProfile.id,
+    createdAt: creditNote.internalTransfer?.createdAt || now,
+    updatedAt: now
+  });
+  Object.assign(creditNote, entityWithLocalMeta(creditNote, creditNote));
+  return {
+    action: existingReturn ? "updated" : "created",
+    linkedPurchaseReturn: purchaseReturn,
+    affectedPurchaseReturns: [...affectedPurchaseReturns, purchaseReturn],
+    supplierParty
+  };
+}
+
+function cancelLinkedPurchaseReturn(creditNote = {}, reason = "Linked credit note was cancelled.") {
+  const linkedReturn = findLinkedPurchaseReturnForCreditNote(creditNote);
+  if (!linkedReturn) return { action: "none", linkedPurchaseReturn: null, supplierParty: null };
+  cancelPurchaseReturnEntry(linkedReturn, reason);
+  return { action: "cancelled", linkedPurchaseReturn: linkedReturn, affectedPurchaseReturns: [linkedReturn], supplierParty: null };
+}
+
+function cancelPurchaseReturnEntry(purchaseReturn, reason = "Purchase return cancelled.") {
+  if (!purchaseReturn || isCancelledEntry(purchaseReturn)) return;
+  purchaseReturn.cancelled = true;
+  purchaseReturn.cancelledAt = new Date().toISOString();
+  purchaseReturn.status = "Cancelled";
+  purchaseReturn.reviewMessages = uniqueMessages([...(purchaseReturn.reviewMessages || []), reason]);
+  Object.assign(purchaseReturn, entityWithLocalMeta(purchaseReturn, purchaseReturn));
+}
+
 function lineTaxableAmount(line = {}) {
   return round2(num(line.qty) * num(line.rate));
 }
@@ -1816,6 +2025,12 @@ function stockForItem(itemId, profileId = activeProfileId()) {
   state.sales.filter(entry => (!profileId || entry.profileId === profileId) && !isCancelledEntry(entry)).forEach(entry => entry.lines.forEach(line => {
     if (line.itemId === itemId) stock -= num(line.qty);
   }));
+  state.creditNotes.filter(entry => (!profileId || entry.profileId === profileId) && !isCancelledEntry(entry) && entry.restock).forEach(entry => entry.lines.forEach(line => {
+    if (line.itemId === itemId) stock += num(line.qty);
+  }));
+  state.purchaseReturns.filter(entry => (!profileId || entry.profileId === profileId) && !isCancelledEntry(entry) && entry.restock).forEach(entry => entry.lines.forEach(line => {
+    if (line.itemId === itemId) stock -= num(line.qty);
+  }));
   return stock;
 }
 
@@ -1895,6 +2110,15 @@ function bindEvents() {
     entryMonthFilters.sale = event.target.value;
     renderEntries("sale");
   });
+  bindIf("#newCreditNoteBtn", "click", () => openCreditNote());
+  bindIf("#creditNoteMonthFilter", "change", event => {
+    entryMonthFilters.creditNote = event.target.value;
+    entryMonthFilters.purchaseReturn = event.target.value;
+    renderCreditNotes();
+  });
+  bindIf("#creditNoteForm", "submit", saveCreditNote);
+  bindIf("#creditNoteRegisterBtn", "click", exportCreditNoteRegister);
+  bindIf("#reportCreditNoteRegisterBtn", "click", exportCreditNoteRegister);
   bindIf("#chatBillBtn", "click", openChatBillDialog);
   bindIf("#newChatSaleBtn", "click", openChatBillDialog);
   $("#newPurchaseBtn").addEventListener("click", () => openEntry("purchase"));
@@ -2021,6 +2245,7 @@ function showView(view) {
     dashboard: "Dashboard",
     sales: "Sales",
     purchases: "Purchases",
+    creditNotes: "Credit Notes",
     purchaseOrders: "Purchase Orders",
     items: "Items",
     parties: "Party Master",
@@ -2037,6 +2262,7 @@ function renderAll() {
   renderProfileSelectors();
   renderDashboard();
   renderEntries("sale");
+  renderCreditNotes();
   renderEntries("purchase");
   renderEntries("po");
   renderItems();
@@ -2114,6 +2340,8 @@ function selectCompany(profileId) {
   setActiveProfileId(profileId);
   entryMonthFilters = {
     sale: defaultEntryMonth("sale", profileId),
+    creditNote: defaultCreditDocumentMonth(profileId),
+    purchaseReturn: defaultCreditDocumentMonth(profileId),
     purchase: defaultEntryMonth("purchase", profileId),
     po: defaultEntryMonth("po", profileId)
   };
@@ -2450,14 +2678,16 @@ function bestCloudWorkspace(workspaces = []) {
 
 function cloudWorkspaceScore(workspace = {}) {
   const counts = cloudWorkspaceCounts(workspace);
-  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.purchaseOrders * 50) + (counts.parties * 10) + counts.items + counts.bankTransactions;
+  return (counts.purchases * 1000) + (counts.sales * 100) + (counts.creditNotes * 75) + (counts.purchaseReturns * 75) + (counts.purchaseOrders * 50) + (counts.parties * 10) + counts.items + counts.bankTransactions;
 }
 
 function cloudWorkspaceCounts(workspace = {}) {
   const data = workspace?.data || {};
   return {
     sales: Array.isArray(data.sales) ? data.sales.length : 0,
+    creditNotes: Array.isArray(data.creditNotes) ? data.creditNotes.length : 0,
     purchases: Array.isArray(data.purchases) ? data.purchases.length : 0,
+    purchaseReturns: Array.isArray(data.purchaseReturns) ? data.purchaseReturns.length : 0,
     purchaseOrders: Array.isArray(data.purchaseOrders) ? data.purchaseOrders.length : 0,
     bankTransactions: Array.isArray(data.bankTransactions) ? data.bankTransactions.length : 0,
     parties: Array.isArray(data.parties) ? data.parties.length : 0,
@@ -2553,17 +2783,19 @@ async function enrichCloudWorkspaceWithRows(workspace = {}) {
 
 async function readNormalizedCloudState(workspaceId) {
   if (!cloudClient || !workspaceId) return null;
-  const [parties, items, sales, purchases, purchaseOrders, paymentSources, bankTransactions] = await Promise.all([
+  const [parties, items, sales, creditNotes, purchases, purchaseReturns, purchaseOrders, paymentSources, bankTransactions] = await Promise.all([
     readCloudTableRows(CLOUD_ROW_TABLES.parties, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.items, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.sales, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.creditNotes, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.purchases, workspaceId),
+    readCloudTableRows(CLOUD_ROW_TABLES.purchaseReturns, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.purchaseOrders, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.paymentSources, workspaceId),
     readCloudTableRows(CLOUD_ROW_TABLES.bankTransactions, workspaceId)
   ]);
   if ([parties, items, sales, purchases, purchaseOrders].some(result => result === null)) return null;
-  const hasRows = [parties, items, sales, purchases, purchaseOrders, paymentSources || [], bankTransactions || []].some(rows => rows.length);
+  const hasRows = [parties, items, sales, creditNotes || [], purchases, purchaseReturns || [], purchaseOrders, paymentSources || [], bankTransactions || []].some(rows => rows.length);
   if (!hasRows) return null;
   return normalizeState({
     ...clone(defaultState),
@@ -2585,7 +2817,9 @@ async function readNormalizedCloudState(workspaceId) {
       purchaseRate: row.purchase_rate
     })),
     sales: sales.map(row => cloudRowData(row, cloudEntryFallback(row, "sale"))),
+    creditNotes: (creditNotes || []).map(row => cloudRowData(row, cloudEntryFallback(row, "creditNote"))),
     purchases: purchases.map(row => cloudRowData(row, cloudEntryFallback(row, "purchase"))),
+    purchaseReturns: (purchaseReturns || []).map(row => cloudRowData(row, cloudEntryFallback(row, "purchaseReturn"))),
     purchaseOrders: purchaseOrders.map(row => cloudRowData(row, cloudEntryFallback(row, "po"))),
     paymentSources: (paymentSources || []).map(row => cloudRowData(row, {
       id: row.id,
@@ -2653,12 +2887,26 @@ function cloudRowData(row = {}, fallback = {}) {
 }
 
 function cloudEntryFallback(row = {}, kind = "purchase") {
+  const number = kind === "po"
+    ? row.po_number
+    : kind === "creditNote"
+      ? row.credit_note_number
+      : kind === "purchaseReturn"
+        ? row.return_number
+        : row.invoice_number;
+  const date = kind === "po"
+    ? row.po_date
+    : kind === "creditNote"
+      ? row.credit_note_date
+      : kind === "purchaseReturn"
+        ? row.return_date
+        : row.invoice_date;
   return {
     id: row.id,
     profileId: row.profile_id,
     partyId: row.party_id,
-    number: kind === "po" ? row.po_number : row.invoice_number,
-    date: kind === "po" ? row.po_date : row.invoice_date,
+    number,
+    date,
     status: row.status,
     taxable: row.taxable,
     cgst: row.cgst,
@@ -2669,7 +2917,12 @@ function cloudEntryFallback(row = {}, kind = "purchase") {
     sellerGstin: row.seller_gstin,
     buyerGstin: row.buyer_gstin,
     reviewStatus: row.review_status,
-    cancelled: row.cancelled
+    cancelled: row.cancelled,
+    originalSaleId: row.original_sale_id,
+    originalInvoiceNumber: row.original_invoice_number,
+    originalInvoiceDate: row.original_invoice_date,
+    reason: row.reason,
+    restock: row.restock
   };
 }
 
@@ -2805,6 +3058,8 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
     syncCloudEntityTable(CLOUD_ROW_TABLES.purchaseOrders, "id", nextState.purchaseOrders, previousState.purchaseOrders, row => cloudEntryRow(workspaceId, row, "po", syncedAt, userId))
   ]);
   await Promise.all([
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.creditNotes, "id", nextState.creditNotes, previousState.creditNotes, row => cloudEntryRow(workspaceId, row, "creditNote", syncedAt, userId)),
+    syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.purchaseReturns, "id", nextState.purchaseReturns, previousState.purchaseReturns, row => cloudEntryRow(workspaceId, row, "purchaseReturn", syncedAt, userId)),
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.paymentSources, "id", nextState.paymentSources, previousState.paymentSources, row => cloudPaymentSourceRow(workspaceId, row, syncedAt, userId)),
     syncOptionalCloudEntityTable(CLOUD_ROW_TABLES.bankTransactions, "id", nextState.bankTransactions, previousState.bankTransactions, row => cloudBankTransactionRow(workspaceId, row, syncedAt, userId))
   ]);
@@ -2812,6 +3067,10 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
     replaceCloudLineRows(CLOUD_ROW_TABLES.saleItems, nextState.sales.flatMap(entry => cloudLineRows(workspaceId, entry, "sale", syncedAt, userId))),
     replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseItems, nextState.purchases.flatMap(entry => cloudLineRows(workspaceId, entry, "purchase", syncedAt, userId))),
     replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseOrderItems, nextState.purchaseOrders.flatMap(entry => cloudLineRows(workspaceId, entry, "po", syncedAt, userId)))
+  ]);
+  await Promise.all([
+    replaceOptionalCloudLineRows(CLOUD_ROW_TABLES.creditNoteItems, nextState.creditNotes.flatMap(entry => cloudLineRows(workspaceId, entry, "creditNote", syncedAt, userId))),
+    replaceOptionalCloudLineRows(CLOUD_ROW_TABLES.purchaseReturnItems, nextState.purchaseReturns.flatMap(entry => cloudLineRows(workspaceId, entry, "purchaseReturn", syncedAt, userId)))
   ]);
   await insertCloudAuditRows(buildCloudAuditRows(previousState, nextState, syncedAt, userId));
   await saveDailyCloudBackup(nextState, syncedAt, userId);
@@ -2878,21 +3137,27 @@ function cloudFailureSuffix() {
 
 function cloudEntryTable(kind) {
   if (kind === "sale") return CLOUD_ROW_TABLES.sales;
+  if (kind === "creditNote") return CLOUD_ROW_TABLES.creditNotes;
   if (kind === "purchase") return CLOUD_ROW_TABLES.purchases;
+  if (kind === "purchaseReturn") return CLOUD_ROW_TABLES.purchaseReturns;
   if (kind === "po") return CLOUD_ROW_TABLES.purchaseOrders;
   return "";
 }
 
 function cloudEntryLineTable(kind) {
   if (kind === "sale") return CLOUD_ROW_TABLES.saleItems;
+  if (kind === "creditNote") return CLOUD_ROW_TABLES.creditNoteItems;
   if (kind === "purchase") return CLOUD_ROW_TABLES.purchaseItems;
+  if (kind === "purchaseReturn") return CLOUD_ROW_TABLES.purchaseReturnItems;
   if (kind === "po") return CLOUD_ROW_TABLES.purchaseOrderItems;
   return "";
 }
 
 function cloudEntryLineParentColumn(kind) {
   if (kind === "sale") return "sale_id";
+  if (kind === "creditNote") return "credit_note_id";
   if (kind === "purchase") return "purchase_id";
+  if (kind === "purchaseReturn") return "purchase_return_id";
   if (kind === "po") return "purchase_order_id";
   return "";
 }
@@ -2937,6 +3202,16 @@ async function replaceCloudLineRows(table, rows = []) {
   if (!rows.length) return;
   const { error } = await cloudClient.from(table).insert(rows);
   if (error) throw error;
+}
+
+async function replaceOptionalCloudLineRows(table, rows = []) {
+  try {
+    await replaceCloudLineRows(table, rows);
+    return true;
+  } catch (error) {
+    if (isMissingCloudTableError(error)) return false;
+    throw error;
+  }
 }
 
 async function replaceCloudLineRowsForEntry(table, parentColumn, entryId, rows = []) {
@@ -3063,6 +3338,36 @@ function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
       review_status: entry.reviewStatus || ""
     };
   }
+  if (kind === "creditNote") {
+    return {
+      ...base,
+      credit_note_number: entry.number || "",
+      credit_note_date: cloudDate(entry.date),
+      original_sale_id: entry.originalSaleId || null,
+      original_invoice_number: entry.originalInvoiceNumber || "",
+      original_invoice_date: cloudDate(entry.originalInvoiceDate),
+      seller_gstin: normalizeGstin(entry.sellerGstin),
+      buyer_gstin: normalizeGstin(entry.buyerGstin),
+      reason: entry.reason || "",
+      restock: Boolean(entry.restock),
+      cancelled: isCancelledEntry(entry)
+    };
+  }
+  if (kind === "purchaseReturn") {
+    return {
+      ...base,
+      return_number: entry.number || "",
+      return_date: cloudDate(entry.date),
+      original_sale_id: entry.originalSaleId || null,
+      original_invoice_number: entry.originalInvoiceNumber || "",
+      original_invoice_date: cloudDate(entry.originalInvoiceDate),
+      seller_gstin: normalizeGstin(entry.sellerGstin),
+      buyer_gstin: normalizeGstin(entry.buyerGstin),
+      reason: entry.reason || "",
+      restock: Boolean(entry.restock),
+      cancelled: isCancelledEntry(entry)
+    };
+  }
   return {
     ...base,
     invoice_number: entry.number || "",
@@ -3072,7 +3377,7 @@ function cloudEntryRow(workspaceId, entry, kind, syncedAt, userId) {
 }
 
 function cloudLineRows(workspaceId, entry, kind, syncedAt, userId) {
-  const parentColumn = kind === "sale" ? "sale_id" : kind === "purchase" ? "purchase_id" : "purchase_order_id";
+  const parentColumn = cloudEntryLineParentColumn(kind);
   return (entry.lines || []).map((line, index) => {
     const item = state.items.find(row => row.id === line.itemId) || {};
     const base = {
@@ -3096,6 +3401,7 @@ function cloudLineRows(workspaceId, entry, kind, syncedAt, userId) {
       last_synced_at: syncedAt
     };
     if (kind !== "sale") base.gross_rate = lineGrossRate(line);
+    if (kind === "creditNote" || kind === "purchaseReturn") base.original_line_index = num(line.originalLineIndex);
     return base;
   });
 }
@@ -3121,7 +3427,7 @@ function cloudTimestamp(value) {
 
 function markStateSyncStatus(sourceState, status, syncedAt = "") {
   const nextState = normalizeState(clone(sourceState || defaultState));
-  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.purchases, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions]
+  [...nextState.parties, ...nextState.items, ...nextState.sales, ...nextState.creditNotes, ...nextState.purchases, ...nextState.purchaseReturns, ...nextState.purchaseOrders, ...nextState.paymentSources, ...nextState.bankTransactions]
     .forEach(entity => markEntitySyncStatus(entity, status, syncedAt));
   return nextState;
 }
@@ -3146,7 +3452,9 @@ function buildCloudAuditRows(previousState, nextState, syncedAt, userId) {
     ["party", previousState.parties, nextState.parties],
     ["item", previousState.items, nextState.items],
     ["sale", previousState.sales, nextState.sales],
+    ["credit_note", previousState.creditNotes, nextState.creditNotes],
     ["purchase", previousState.purchases, nextState.purchases],
+    ["purchase_return", previousState.purchaseReturns, nextState.purchaseReturns],
     ["purchase_order", previousState.purchaseOrders, nextState.purchaseOrders],
     ["payment_source", previousState.paymentSources, nextState.paymentSources],
     ["bank_transaction", previousState.bankTransactions, nextState.bankTransactions]
@@ -3233,7 +3541,8 @@ function markEntrySyncFailed(kind, id) {
   if (!entry) return;
   markEntitySyncStatus(entry, SYNC_STATUS_FAILED);
   saveState({ skipCloud: true });
-  renderEntries(kind);
+  if (kind === "creditNote" || kind === "purchaseReturn") renderCreditNotes();
+  else renderEntries(kind);
 }
 
 function syncStatusBadge(entity = {}) {
@@ -4092,6 +4401,7 @@ function renderEntries(kind) {
       <td>
         <div class="row-actions">
           ${kind === "sale" ? `<button class="mini-btn" title="Invoice" onclick="showInvoice('${entry.id}', '${kind}')"><i data-lucide="file-text"></i></button>` : ""}
+          ${kind === "sale" && !cancelled ? `<button class="mini-btn" title="Create Credit Note" onclick="openCreditNote(null, '${entry.id}')"><i data-lucide="rotate-ccw"></i></button>` : ""}
           ${kind === "po" ? `<button class="mini-btn" title="Purchase Order" onclick="showInvoice('${entry.id}', '${kind}')"><i data-lucide="file-text"></i></button>` : ""}
           ${cancelled ? "" : `<button class="mini-btn" title="Edit" onclick="openEntry('${kind}', '${entry.id}')"><i data-lucide="pencil"></i></button>`}
           ${kind === "sale"
@@ -4107,6 +4417,66 @@ function renderEntries(kind) {
   const target = kind === "sale" ? "#salesRows" : kind === "purchase" ? "#purchaseRows" : "#poRows";
   $(target).innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
   if (kind === "purchase") bindPurchaseSelectors();
+}
+
+function renderCreditNotes() {
+  const allCreditDocuments = [...activeEntries("creditNote"), ...activeEntries("purchaseReturn")];
+  const months = [...new Set(allCreditDocuments.map(entryMonthKey).filter(Boolean))].sort((a, b) => b.localeCompare(a));
+  const fallbackMonth = months[0] || currentMonthKey();
+  let monthKey = entryMonthFilters.creditNote || fallbackMonth;
+  if (isMobileDeviceView() && monthKey === ALL_MONTHS_KEY) monthKey = fallbackMonth;
+  const options = isMobileDeviceView()
+    ? [...new Set([monthKey, ...months, currentMonthKey()])]
+    : [...new Set([ALL_MONTHS_KEY, monthKey, currentMonthKey(), ...months])];
+  $("#creditNoteMonthFilter").innerHTML = options
+    .sort((a, b) => a === ALL_MONTHS_KEY ? -1 : b === ALL_MONTHS_KEY ? 1 : b.localeCompare(a))
+    .map(value => `<option value="${escapeHtml(value)}" ${value === monthKey ? "selected" : ""}>${escapeHtml(monthLabel(value))}</option>`)
+    .join("");
+  entryMonthFilters.creditNote = monthKey;
+  entryMonthFilters.purchaseReturn = monthKey;
+  const notes = activeEntries("creditNote")
+    .filter(entry => monthKey === ALL_MONTHS_KEY || entryMonthKey(entry) === monthKey)
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const returns = activeEntries("purchaseReturn")
+    .filter(entry => monthKey === ALL_MONTHS_KEY || entryMonthKey(entry) === monthKey)
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const selectedLabel = monthLabel(monthKey);
+  const noteRows = notes.map(entry => {
+    const cancelled = isCancelledEntry(entry);
+    return `<tr class="${cancelled ? "cancelled-row" : ""}">
+      <td>${escapeHtml(entry.date || "")}</td>
+      <td>${escapeHtml(entry.number || "")}${syncStatusBadge(entry)}</td>
+      <td>${escapeHtml(profileName(entry.profileId))}</td>
+      <td>${escapeHtml(partyName(entry.partyId))}</td>
+      <td>${escapeHtml(entry.originalInvoiceNumber || "-")}</td>
+      <td>${escapeHtml(entry.reason || "-")}</td>
+      <td><span class="badge ${cancelled ? "danger" : "ok"}">${cancelled ? "Cancelled" : "Active"}</span></td>
+      <td class="num">${money(entry.taxable)}</td>
+      <td class="num">${money(entry.gst)}</td>
+      <td class="num">${money(entry.total)}</td>
+      <td><div class="row-actions">
+        <button class="mini-btn" title="Credit Note" onclick="showInvoice('${entry.id}', 'creditNote')"><i data-lucide="file-text"></i></button>
+        ${cancelled ? "" : `<button class="mini-btn" title="Edit" onclick="openCreditNote('${entry.id}')"><i data-lucide="pencil"></i></button>`}
+        ${cancelled ? "" : `<button class="mini-btn danger-btn" title="Cancel Credit Note" onclick="cancelCreditNote('${entry.id}')"><i data-lucide="ban"></i></button>`}
+      </div></td>
+    </tr>`;
+  }).join("");
+  $("#creditNoteRows").innerHTML = noteRows || emptyRow(11, `No credit notes for ${selectedLabel}`);
+  const returnRows = returns.map(entry => {
+    const cancelled = isCancelledEntry(entry);
+    return `<tr class="${cancelled ? "cancelled-row" : ""}">
+      <td>${escapeHtml(entry.date || "")}</td>
+      <td>${escapeHtml(entry.number || "")}${syncStatusBadge(entry)}</td>
+      <td>${escapeHtml(profileName(entry.profileId))}</td>
+      <td>${escapeHtml(partyName(entry.partyId))}</td>
+      <td>${escapeHtml(entry.originalInvoiceNumber || "-")}</td>
+      <td>${escapeHtml(entry.reason || "-")}</td>
+      <td><span class="badge ${cancelled ? "danger" : "ok"}">${cancelled ? "Cancelled" : "Active"}</span></td>
+      <td class="num">${money(entry.total)}</td>
+    </tr>`;
+  }).join("");
+  $("#purchaseReturnRows").innerHTML = returnRows || emptyRow(8, `No internal purchase returns for ${selectedLabel}`);
+  if (window.lucide) lucide.createIcons();
 }
 
 function emptyEntriesLabel(kind, activeCount = activeEntries(kind).length) {
@@ -5983,6 +6353,8 @@ function cancelEntry(kind, id) {
   const entry = state.sales.find(row => row.id === id);
   if (!entry) return toast("Sales bill not found");
   if (isCancelledEntry(entry)) return toast("Sales bill is already cancelled");
+  const activeCredits = state.creditNotes.filter(note => note.originalSaleId === entry.id && !isCancelledEntry(note));
+  if (activeCredits.length) return toast("Cancel the linked credit notes before cancelling this sales bill");
   if (!confirm(`Cancel sales bill ${entry.number}? This number will not be reused.`)) return;
   entry.cancelled = true;
   entry.cancelledAt = new Date().toISOString();
@@ -5996,6 +6368,267 @@ function cancelEntry(kind, id) {
   toast(internalSyncResult?.action === "cancelled"
     ? `Sales bill ${entry.number} cancelled. Internal purchase cancelled`
     : `Sales bill ${entry.number} cancelled`);
+}
+
+function creditableSales(profileId = activeProfileId(), includeSaleId = "") {
+  return state.sales
+    .filter(sale => sale.profileId === profileId && !isCancelledEntry(sale))
+    .filter(sale => sale.id === includeSaleId || sale.lines.some((line, index) => creditAvailableQuantity(sale.id, index) > 0))
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+}
+
+function creditAvailableQuantity(saleId, originalLineIndex, excludeCreditNoteId = "") {
+  const sale = state.sales.find(entry => entry.id === saleId);
+  const billed = num(sale?.lines?.[originalLineIndex]?.qty);
+  const credited = state.creditNotes
+    .filter(note => note.id !== excludeCreditNoteId && note.originalSaleId === saleId && !isCancelledEntry(note))
+    .reduce((sum, note) => sum + (note.lines || []).reduce((lineSum, line) => (
+      num(line.originalLineIndex) === originalLineIndex ? lineSum + num(line.qty) : lineSum
+    ), 0), 0);
+  return Math.max(0, round2(billed - credited));
+}
+
+function creditNoteSaleOption(sale, selectedId = "") {
+  const buyer = partyById(sale.partyId) || {};
+  return `<option value="${sale.id}" ${sale.id === selectedId ? "selected" : ""}>${escapeHtml(`${sale.number} | ${buyer.name || "Buyer"} | ${formatInvoiceDate(sale.date)} | ${money(invoicePayableTotal(sale))}`)}</option>`;
+}
+
+function openCreditNote(id = null, saleId = "") {
+  editingCreditNoteId = id;
+  const existing = id ? state.creditNotes.find(note => note.id === id) : null;
+  if (existing && isCancelledEntry(existing)) return toast("Cancelled credit note cannot be edited");
+  const selectedSaleId = existing?.originalSaleId || saleId;
+  const sales = creditableSales(activeProfileId(), selectedSaleId);
+  if (!sales.length) return toast("No sales invoice has quantity available for credit");
+  const form = $("#creditNoteForm");
+  form.reset();
+  form.elements.originalSaleId.innerHTML = sales.map(sale => creditNoteSaleOption(sale, selectedSaleId || sales[0].id)).join("");
+  form.elements.originalSaleId.value = selectedSaleId || sales[0].id;
+  form.elements.originalSaleId.disabled = Boolean(existing);
+  form.elements.date.value = existing?.date || today();
+  form.elements.number.value = existing?.number || nextCreditNoteNumber(activeProfileId());
+  form.elements.reason.value = existing?.reason || "Goods Returned";
+  form.elements.restock.checked = existing ? existing.restock !== false : true;
+  $("#creditNoteDialogTitle").textContent = existing ? "Edit Credit Note" : "New Credit Note";
+  form.elements.originalSaleId.onchange = () => renderCreditNoteEditor(null);
+  form.elements.reason.onchange = () => {
+    form.elements.restock.checked = ["Goods Returned", "Defective Goods"].includes(form.elements.reason.value);
+    updateCreditNoteTotals();
+  };
+  form.elements.restock.onchange = updateCreditNoteTotals;
+  renderCreditNoteEditor(existing);
+  $("#creditNoteDialog").showModal();
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderCreditNoteEditor(existing = null) {
+  const form = $("#creditNoteForm");
+  const sale = state.sales.find(entry => entry.id === form.elements.originalSaleId.value);
+  if (!sale) return;
+  const buyer = partyById(sale.partyId) || {};
+  $("#creditOriginalSummary").innerHTML = `
+    <div><span>Buyer</span><strong>${escapeHtml(buyer.name || "-")}</strong></div>
+    <div><span>GSTIN</span><strong>${escapeHtml(buyer.gstin || "-")}</strong></div>
+    <div><span>Invoice</span><strong>${escapeHtml(sale.number || "-")}</strong></div>
+    <div><span>Invoice Total</span><strong>${money(invoicePayableTotal(sale))}</strong></div>`;
+  $("#creditNoteLineRows").innerHTML = (sale.lines || []).map((line, originalLineIndex) => {
+    const item = state.items.find(row => row.id === line.itemId) || {};
+    const savedLine = existing?.lines?.find(row => num(row.originalLineIndex) === originalLineIndex);
+    const available = creditAvailableQuantity(sale.id, originalLineIndex, existing?.id || "");
+    const selected = num(savedLine?.qty) > 0;
+    const quantity = selected ? num(savedLine.qty) : 0;
+    const inclusiveRate = lineGrossRate(savedLine || line);
+    const imeis = savedLine?.imeiNumbers || (selected && quantity === num(line.qty) ? line.imeiNumbers || "" : "");
+    return `<div class="credit-note-line ${selected ? "selected" : ""}" data-original-line-index="${originalLineIndex}" data-item-id="${escapeHtml(line.itemId || "")}" data-item-name="${escapeHtml(line.itemName || item.name || itemNameByLine(line, item, originalLineIndex + 1))}" data-hsn="${escapeHtml(lineHsn(line, item))}" data-gst-rate="${num(line.gstRate)}" data-max-qty="${available}">
+      <label class="credit-line-select" title="Include this item"><input class="credit-line-enabled" type="checkbox" ${selected ? "checked" : ""}><span></span></label>
+      <div class="credit-line-product"><strong>${escapeHtml(line.itemName || item.name || itemNameByLine(line, item, originalLineIndex + 1))}</strong><small>HSN ${escapeHtml(lineHsn(line, item))} | Billed ${formatQty(line.qty)} | Available ${formatQty(available)}</small></div>
+      <label>Credit Qty<input class="credit-line-qty" type="number" min="0" max="${available}" step="0.01" value="${quantity}" ${selected ? "" : "disabled"}></label>
+      <label>Rate per quantity<input class="credit-line-rate" type="number" min="0" step="0.01" value="${inclusiveRate}" ${selected ? "" : "disabled"}></label>
+      <label>GST<input class="credit-line-gst" value="${num(line.gstRate)}%" readonly></label>
+      <label class="credit-line-imei">Returned IMEI (optional)<input class="credit-line-imeis" value="${escapeHtml(imeis)}" ${selected ? "" : "disabled"}></label>
+      <div class="credit-line-total"><span>Credit</span><strong>${money(selected ? quantity * inclusiveRate : 0)}</strong></div>
+    </div>`;
+  }).join("");
+  $$(".credit-note-line").forEach(row => {
+    row.querySelector(".credit-line-enabled").addEventListener("change", () => toggleCreditNoteLine(row));
+    row.querySelector(".credit-line-qty").addEventListener("input", updateCreditNoteTotals);
+    row.querySelector(".credit-line-rate").addEventListener("input", updateCreditNoteTotals);
+  });
+  updateCreditNoteTotals();
+}
+
+function toggleCreditNoteLine(row) {
+  const enabled = row.querySelector(".credit-line-enabled").checked;
+  row.classList.toggle("selected", enabled);
+  [".credit-line-qty", ".credit-line-rate", ".credit-line-imeis"].forEach(selector => {
+    row.querySelector(selector).disabled = !enabled;
+  });
+  const qty = row.querySelector(".credit-line-qty");
+  if (enabled && num(qty.value) <= 0) qty.value = row.dataset.maxQty;
+  if (!enabled) qty.value = 0;
+  updateCreditNoteTotals();
+}
+
+function collectCreditNoteLines(validate = false) {
+  const lines = [];
+  for (const row of $$(".credit-note-line")) {
+    if (!row.querySelector(".credit-line-enabled").checked) continue;
+    const qty = num(row.querySelector(".credit-line-qty").value);
+    const maxQty = num(row.dataset.maxQty);
+    const grossRate = num(row.querySelector(".credit-line-rate").value);
+    const gstRate = num(row.dataset.gstRate);
+    if (validate && (!qty || qty > maxQty)) {
+      row.querySelector(".credit-line-qty").focus();
+      throw new Error(`Credit quantity must be between 0 and ${formatQty(maxQty)}`);
+    }
+    if (validate && grossRate <= 0) {
+      row.querySelector(".credit-line-rate").focus();
+      throw new Error("Rate per quantity is required");
+    }
+    if (!qty || !grossRate) continue;
+    lines.push({
+      originalLineIndex: num(row.dataset.originalLineIndex),
+      itemId: row.dataset.itemId || "",
+      itemName: row.dataset.itemName || "",
+      hsn: normalizeLineHsn(row.dataset.hsn) || DEFAULT_SALE_HSN,
+      qty,
+      rate: taxableRateFromInclusive(grossRate, gstRate),
+      grossRate,
+      gstRate,
+      imeiNumbers: row.querySelector(".credit-line-imeis").value.trim()
+    });
+  }
+  return lines;
+}
+
+function creditNoteCalculation() {
+  const form = $("#creditNoteForm");
+  const sale = state.sales.find(entry => entry.id === form.elements.originalSaleId.value);
+  const profile = profileById(sale?.profileId || activeProfileId());
+  const buyer = partyById(sale?.partyId) || {};
+  const lines = collectCreditNoteLines(false);
+  const calculated = calculateEntryTotals(lines, profile, buyer, "sale");
+  const rawTotal = round2(calculated.taxable + calculated.gst);
+  const roundOff = Math.abs(Math.round(rawTotal) - rawTotal) >= 0.01 ? round2(Math.round(rawTotal) - rawTotal) : 0;
+  return { lines, calculated, roundOff, total: round2(rawTotal + roundOff) };
+}
+
+function updateCreditNoteTotals() {
+  if (!$("#creditNoteForm")) return;
+  const { lines, calculated, roundOff, total } = creditNoteCalculation();
+  $("#creditNoteTaxable").textContent = money(calculated.taxable);
+  $("#creditNoteCgst").textContent = money(calculated.cgst);
+  $("#creditNoteSgst").textContent = money(calculated.sgst);
+  $("#creditNoteIgst").textContent = money(calculated.igst);
+  $("#creditNoteGst").textContent = money(calculated.gst);
+  $("#creditNoteRoundOff").textContent = money(roundOff);
+  $("#creditNoteTotal").textContent = money(total);
+  $$(".credit-note-line").forEach(row => {
+    const enabled = row.querySelector(".credit-line-enabled").checked;
+    const amount = enabled ? num(row.querySelector(".credit-line-qty").value) * num(row.querySelector(".credit-line-rate").value) : 0;
+    row.querySelector(".credit-line-total strong").textContent = money(amount);
+  });
+  return lines;
+}
+
+async function saveCreditNote(event) {
+  event.preventDefault();
+  const form = $("#creditNoteForm");
+  const existing = editingCreditNoteId ? state.creditNotes.find(note => note.id === editingCreditNoteId) : null;
+  const sale = state.sales.find(entry => entry.id === form.elements.originalSaleId.value);
+  if (!sale || isCancelledEntry(sale)) return toast("Select an active sales invoice");
+  let lines;
+  try {
+    lines = collectCreditNoteLines(true);
+  } catch (error) {
+    return toast(error.message);
+  }
+  if (!lines.length) return toast("Select at least one item to credit");
+  const profile = profileById(sale.profileId);
+  const buyer = partyById(sale.partyId) || {};
+  const calculated = calculateEntryTotals(lines, profile, buyer, "sale");
+  const rawTotal = round2(calculated.taxable + calculated.gst);
+  const roundOff = Math.abs(Math.round(rawTotal) - rawTotal) >= 0.01 ? round2(Math.round(rawTotal) - rawTotal) : 0;
+  const requestedNumber = existing?.number || form.elements.number.value;
+  const number = creditNoteNumberExists(requestedNumber, existing?.id || "")
+    ? nextCreditNoteNumber(sale.profileId, existing?.id || "")
+    : requestedNumber;
+  const note = entityWithLocalMeta({
+    ...(existing || {}),
+    id: existing?.id || uid(),
+    profileId: sale.profileId,
+    partyId: sale.partyId,
+    date: form.elements.date.value,
+    number,
+    status: "Active",
+    originalSaleId: sale.id,
+    originalInvoiceNumber: sale.number,
+    originalInvoiceDate: sale.date,
+    reason: form.elements.reason.value,
+    restock: form.elements.restock.checked,
+    lines,
+    ...calculated,
+    roundOff,
+    total: round2(rawTotal + roundOff),
+    sellerGstin: normalizeGstin(profile.gstin),
+    buyerGstin: normalizeGstin(buyer.gstin),
+    billToSnapshot: clone(sale.billToSnapshot || partyAddressSnapshot(buyer)),
+    shipToSnapshot: clone(sale.shipToSnapshot || sale.billToSnapshot || partyAddressSnapshot(buyer)),
+    shipToSameAsBillTo: sale.shipToSameAsBillTo ?? true,
+    shipToAddressId: sale.shipToAddressId || "",
+    source: "sales-credit-note",
+    rateIncludesGst: true,
+    cancelled: false,
+    cancelledAt: ""
+  }, existing);
+  const index = state.creditNotes.findIndex(row => row.id === note.id);
+  if (index >= 0) state.creditNotes[index] = note;
+  else state.creditNotes.push(note);
+  const internalSyncResult = syncInternalPurchaseReturnForCreditNote(note, existing);
+  entryMonthFilters.creditNote = entryMonthKey(note);
+  entryMonthFilters.purchaseReturn = entryMonthKey(note);
+  saveState();
+  $("#creditNoteDialog").close();
+  renderAll();
+  const canSyncNow = cloudReadyForSync();
+  let synced = canSyncNow ? await syncCloudNow(false) : false;
+  if (canSyncNow && !synced) {
+    try {
+      if (internalSyncResult?.supplierParty) await syncSinglePartyToCloud(internalSyncResult.supplierParty);
+      const results = [await syncSingleEntryToCloud("creditNote", note)];
+      for (const purchaseReturn of internalSyncResult?.affectedPurchaseReturns || []) {
+        results.push(await syncSingleEntryToCloud("purchaseReturn", purchaseReturn));
+      }
+      synced = results.every(Boolean);
+    } catch (error) {
+      lastCloudSyncError = cloudErrorText(error);
+      console.warn("Credit note cloud sync failed", error);
+    }
+  }
+  if (canSyncNow && !synced) markEntrySyncFailed("creditNote", note.id);
+  const internalText = internalSyncResult?.action === "created"
+    ? ". Internal purchase return created"
+    : internalSyncResult?.action === "updated"
+      ? ". Internal purchase return updated"
+      : "";
+  toast(synced ? `Credit note saved and synced${internalText}` : canSyncNow ? `Credit note saved locally. Cloud sync failed${cloudFailureSuffix()}${internalText}` : `Credit note saved locally${internalText}`);
+}
+
+function cancelCreditNote(id) {
+  const note = state.creditNotes.find(row => row.id === id);
+  if (!note) return toast("Credit note not found");
+  if (isCancelledEntry(note)) return toast("Credit note is already cancelled");
+  if (!confirm(`Cancel credit note ${note.number}? This number will not be reused.`)) return;
+  note.cancelled = true;
+  note.cancelledAt = new Date().toISOString();
+  note.status = "Cancelled";
+  const internalSyncResult = cancelLinkedPurchaseReturn(note, "Linked credit note was cancelled.");
+  Object.assign(note, entityWithLocalMeta(note, note));
+  saveState();
+  renderAll();
+  toast(internalSyncResult?.action === "cancelled"
+    ? `Credit note ${note.number} cancelled. Internal purchase return cancelled`
+    : `Credit note ${note.number} cancelled`);
 }
 
 function openItem(id = null) {
@@ -6036,7 +6669,8 @@ function saveItem(event) {
 }
 
 function deleteItem(id) {
-  const used = [...state.sales, ...state.purchases].some(entry => entry.lines.some(line => line.itemId === id));
+  const used = [...state.sales, ...state.creditNotes, ...state.purchases, ...state.purchaseReturns, ...state.purchaseOrders]
+    .some(entry => entry.lines.some(line => line.itemId === id));
   if (used) {
     toast("Item is used in entries");
     return;
@@ -6318,13 +6952,14 @@ function showInvoice(id, kind) {
     showPurchaseOrder(entry, party, settings);
     return;
   }
+  const isCreditNote = kind === "creditNote";
   const billTo = normalizeAddressSnapshot(entry.billToSnapshot || partyAddressSnapshot(party));
   const shipTo = normalizeAddressSnapshot(entry.shipToSnapshot || billTo);
   const totalQty = entry.lines.reduce((sum, line) => sum + num(line.qty), 0);
   const roundOff = invoiceRoundOff(entry);
   const payableTotal = invoicePayableTotal(entry);
-  currentInvoiceFileName = invoicePdfFileName(entry, party);
-  currentInvoiceShareContext = { entry, party, settings };
+  currentInvoiceFileName = isCreditNote ? creditNotePdfFileName(entry, party) : invoicePdfFileName(entry, party);
+  currentInvoiceShareContext = { entry, party, settings, documentKind: isCreditNote ? "creditNote" : "invoice" };
   $("#invoicePrintArea").innerHTML = `
     <div class="invoice-preview-frame">
       <div class="invoice-sheet modern-invoice">
@@ -6332,13 +6967,13 @@ function showInvoice(id, kind) {
         <div class="invoice-brand-block">
           ${firmLogoMarkup(settings, "invoice-firm-logo")}
           <div class="invoice-title-block">
-            <span class="invoice-kicker">Sales Bill</span>
-            <h2>Tax Invoice</h2>
+            <span class="invoice-kicker">${isCreditNote ? "Sales Adjustment" : "Sales Bill"}</span>
+            <h2>${isCreditNote ? "Credit Note" : "Tax Invoice"}</h2>
             <p>${escapeHtml(settings.businessName || settings.label || state.selectedOrg?.name || "Business")}</p>
           </div>
         </div>
         <div class="modern-header-metrics">
-          ${invoiceMetaCell("Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
+          ${invoiceMetaCell(isCreditNote ? "Credit Note No." : "Invoice No.", entry.number, "Dated", formatInvoiceDate(entry.date))}
         </div>
       </div>
       <div class="invoice-seller-strip">
@@ -6348,6 +6983,7 @@ function showInvoice(id, kind) {
         ${invoicePartyBlock("Buyer (Bill to)", billTo)}
         ${invoicePartyBlock("Consignee (Ship to)", shipTo)}
       </div>
+      ${isCreditNote ? `<div class="credit-note-reference-strip"><span>Original Invoice</span><strong>${escapeHtml(entry.originalInvoiceNumber || "-")}</strong><span>Dated</span><strong>${escapeHtml(formatInvoiceDate(entry.originalInvoiceDate) || "-")}</strong><span>Reason</span><strong>${escapeHtml(entry.reason || "-")}</strong></div>` : ""}
       ${isCancelledEntry(entry) ? `<div class="invoice-cancelled-banner">CANCELLED</div>` : ""}
       <table class="invoice-items-table">
         <thead>
@@ -6396,7 +7032,7 @@ function showInvoice(id, kind) {
         </tbody>
       </table>
       <div class="amount-words-row">
-        <span>Amount Chargeable (in words)</span>
+        <span>${isCreditNote ? "Credit Amount (in words)" : "Amount Chargeable (in words)"}</span>
         <em>E. &amp; O.E</em>
         <strong>${escapeHtml(amountInWords(payableTotal))}</strong>
       </div>
@@ -6405,18 +7041,18 @@ function showInvoice(id, kind) {
         <span>Tax Amount (in words) :</span>
         <strong>${escapeHtml(amountInWords(entry.gst))}</strong>
       </div>
-      ${invoiceBankBlock(settings)}
+      ${isCreditNote ? "" : invoiceBankBlock(settings)}
       <div class="invoice-footer-grid">
         <div>
           <span>Declaration</span>
-          <p>We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</p>
+          <p>${isCreditNote ? `This credit note is issued against invoice ${escapeHtml(entry.originalInvoiceNumber || "-")} for ${escapeHtml(entry.reason || "the stated adjustment")}.` : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct."}</p>
         </div>
         <div class="signature-box">
           <strong>for ${escapeHtml(settings.businessName || settings.label)}</strong>
           <span>Authorised Signatory</span>
         </div>
       </div>
-      <p class="computer-note">This is a Computer Generated Invoice</p>
+      <p class="computer-note">This is a Computer Generated ${isCreditNote ? "Credit Note" : "Invoice"}</p>
       </div>
     </div>
   `;
@@ -6719,7 +7355,12 @@ async function shareInvoicePdf() {
     const blob = await buildInvoicePdfBlob();
     const file = new File([blob], currentInvoiceFileName, { type: "application/pdf" });
     if (canTryNativeInvoiceFileShare(file)) {
-      await shareNativeInvoiceFile(file, currentInvoiceShareContext?.documentKind === "po" ? "Purchase Order PDF" : "Invoice PDF");
+      const shareTitle = currentInvoiceShareContext?.documentKind === "po"
+        ? "Purchase Order PDF"
+        : currentInvoiceShareContext?.documentKind === "creditNote"
+          ? "Credit Note PDF"
+          : "Invoice PDF";
+      await shareNativeInvoiceFile(file, shareTitle);
       toast("PDF shared");
       return;
     }
@@ -6787,6 +7428,7 @@ async function shareNativeInvoiceFile(file, text) {
 function invoiceWhatsAppMessage({ entry, party, settings }) {
   const sellerName = settings.businessName || settings.label || "Nirvana Solutions";
   const isPo = currentInvoiceShareContext?.documentKind === "po";
+  const isCreditNote = currentInvoiceShareContext?.documentKind === "creditNote";
   const buyerName = party.name || (isPo ? "Supplier" : "Customer");
   const amount = `${state.settings.currency || "Rs."} ${formatInvoiceMoney(invoicePayableTotal(entry))}`;
   if (isPo) {
@@ -6795,6 +7437,16 @@ function invoiceWhatsAppMessage({ entry, party, settings }) {
       `Please find Purchase Order ${entry.number || ""} dated ${formatInvoiceDate(entry.date)} from ${sellerName}.`,
       `PO amount: ${amount}.`,
       "Please find the purchase order PDF attached.",
+      "Thank you."
+    ].join("\n");
+  }
+  if (isCreditNote) {
+    return [
+      `Dear ${buyerName},`,
+      `Please find Credit Note ${entry.number || ""} dated ${formatInvoiceDate(entry.date)} from ${sellerName}.`,
+      `Original invoice: ${entry.originalInvoiceNumber || "-"}.`,
+      `Credit amount: ${amount}.`,
+      "Please find the credit note PDF attached.",
       "Thank you."
     ].join("\n");
   }
@@ -7110,7 +7762,7 @@ function renderInvoiceVectorPdf(pdf, context) {
   y = renderInvoicePdfItems(pdf, details, layout, y);
   y = ensureInvoicePdfSpace(pdf, details, layout, y, 94, false);
   y = renderInvoicePdfTotals(pdf, details, layout, y);
-  renderInvoicePdfFooters(pdf, layout);
+  renderInvoicePdfFooters(pdf, layout, details);
 }
 
 function drawFirmPdfLogo(pdf, details, x, y, width, height) {
@@ -7416,6 +8068,7 @@ function renderPurchaseOrderPdfFooters(pdf, layout) {
 
 function invoicePdfDetails({ entry, party, settings, documentKind = "invoice", pdfLogo = null }) {
   const isPo = documentKind === "po";
+  const isCreditNote = documentKind === "creditNote";
   const buyerProfile = normalizeAddressSnapshot({
     name: settings.businessName || settings.label || "",
     gstin: settings.gstin || "",
@@ -7431,14 +8084,16 @@ function invoicePdfDetails({ entry, party, settings, documentKind = "invoice", p
     settings,
     documentKind,
     pdfLogo,
-    documentTitle: isPo ? "PURCHASE ORDER" : "TAX INVOICE",
-    numberLabel: isPo ? "PO No." : "Invoice No.",
+    documentTitle: isPo ? "PURCHASE ORDER" : isCreditNote ? "CREDIT NOTE" : "TAX INVOICE",
+    numberLabel: isPo ? "PO No." : isCreditNote ? "Credit Note No." : "Invoice No.",
     firstPartyLabel: isPo ? "Supplier" : "Buyer (Bill to)",
     secondPartyLabel: isPo ? "Ship To" : "Consignee (Ship to)",
-    amountWordsLabel: isPo ? "Amount (in words)" : "Amount Chargeable (in words)",
+    amountWordsLabel: isPo ? "Amount (in words)" : isCreditNote ? "Credit Amount (in words)" : "Amount Chargeable (in words)",
     finalTaxWordsLabel: isPo ? "Tax Amount (in words):" : "Tax Amount (in words):",
     declarationText: isPo
       ? "This purchase order is a request to supply the goods listed. Stock and purchase accounts will update only after purchase entry is saved."
+      : isCreditNote
+        ? `This credit note is issued against invoice ${entry.originalInvoiceNumber || "-"} for ${entry.reason || "the stated adjustment"}.`
       : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.",
     sellerName: settings.businessName || settings.label || "Business",
     sellerAddress: settings.address || "",
@@ -7450,6 +8105,7 @@ function invoicePdfDetails({ entry, party, settings, documentKind = "invoice", p
     payableTotal: invoicePayableTotal(entry),
     taxGroups: invoiceTaxGroups(entry),
     isIgst: num(entry.igst) > 0,
+    isCreditNote,
     cancelled: isCancelledEntry(entry)
   };
 }
@@ -7518,8 +8174,28 @@ function renderInvoicePdfPageHeader(pdf, details, layout, continued, includeTabl
     drawInvoicePdfPartyBox(pdf, details.firstPartyLabel, details.billTo, margin, y, boxWidth, boxHeight);
     drawInvoicePdfPartyBox(pdf, details.secondPartyLabel, details.shipTo, margin + boxWidth + 4, y, boxWidth, boxHeight);
     y += boxHeight + 5;
+    if (details.isCreditNote) {
+      drawInvoicePdfCreditReference(pdf, details, margin, y, contentWidth, 11);
+      y += 15;
+    }
   }
   return includeTableHeader ? renderInvoicePdfItemHeader(pdf, layout, y) : y;
+}
+
+function drawInvoicePdfCreditReference(pdf, details, x, y, w, h) {
+  pdf.setDrawColor(185, 196, 196);
+  pdf.setFillColor(247, 249, 249);
+  pdf.rect(x, y, w, h, "FD");
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(6.5);
+  pdf.text("Original Invoice", x + 2, y + 4);
+  pdf.text("Dated", x + 70, y + 4);
+  pdf.text("Reason", x + 112, y + 4);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(8);
+  pdf.text(pdfClean(details.entry.originalInvoiceNumber || "-"), x + 2, y + 9);
+  pdf.text(pdfClean(formatInvoiceDate(details.entry.originalInvoiceDate) || "-"), x + 70, y + 9);
+  pdf.text(pdfClean(details.entry.reason || "-"), x + 112, y + 9, { maxWidth: w - 114 });
 }
 
 function drawInvoicePdfMeta(pdf, details, x, y, w) {
@@ -7786,7 +8462,7 @@ function renderInvoicePdfBankAndSignature(pdf, details, layout, startY) {
   pdf.rect(rightX, y, rightWidth, 40);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(7.5);
-  pdf.text(details.documentKind === "po" ? "Terms" : "Bank Details", layout.margin + 2, y + 5);
+  pdf.text(details.documentKind === "po" ? "Terms" : details.isCreditNote ? "Credit Note Details" : "Bank Details", layout.margin + 2, y + 5);
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7);
   const leftLines = details.documentKind === "po"
@@ -7795,7 +8471,14 @@ function renderInvoicePdfBankAndSignature(pdf, details, layout, startY) {
         "This PO does not update inventory until converted to purchase entry.",
         details.entry.notes ? `Notes: ${details.entry.notes}` : ""
       ].filter(Boolean)
-    : [
+    : details.isCreditNote
+      ? [
+          `Original Invoice: ${details.entry.originalInvoiceNumber || "-"}`,
+          `Invoice Date: ${formatInvoiceDate(details.entry.originalInvoiceDate) || "-"}`,
+          `Reason: ${details.entry.reason || "-"}`,
+          `Stock updated: ${details.entry.restock ? "Yes" : "No"}`
+        ]
+      : [
         `Bank: ${bank.bankName || "-"}`,
         `Account Name: ${bank.accountName || details.sellerName}`,
         `Branch: ${bank.branch || "-"}`,
@@ -7826,14 +8509,14 @@ function addInvoicePdfContinuationPage(pdf, details, layout, includeTableHeader 
   return renderInvoicePdfPageHeader(pdf, details, layout, true, includeTableHeader);
 }
 
-function renderInvoicePdfFooters(pdf, layout) {
+function renderInvoicePdfFooters(pdf, layout, details = {}) {
   const totalPages = pdf.getNumberOfPages();
   for (let pageNo = 1; pageNo <= totalPages; pageNo += 1) {
     pdf.setPage(pageNo);
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(6.5);
     pdf.setTextColor(88, 105, 105);
-    pdf.text("This is a Computer Generated Invoice", layout.pageWidth / 2, layout.pageHeight - 6, { align: "center" });
+    pdf.text(`This is a Computer Generated ${details.isCreditNote ? "Credit Note" : "Invoice"}`, layout.pageWidth / 2, layout.pageHeight - 6, { align: "center" });
     pdf.text(`Page ${pageNo} of ${totalPages}`, layout.pageWidth - layout.margin, layout.pageHeight - 6, { align: "right" });
   }
   pdf.setTextColor(20, 34, 35);
@@ -7886,6 +8569,10 @@ function setInvoicePdfBusy(isBusy) {
 
 function invoicePdfFileName(entry, party) {
   return `${safeFileName(entry.number || "invoice")}-${safeFileName(party.name || "customer")}.pdf`;
+}
+
+function creditNotePdfFileName(entry, party) {
+  return `${safeFileName(entry.number || "credit-note")}-${safeFileName(party.name || "customer")}.pdf`;
 }
 
 function purchaseOrderPdfFileName(entry, supplier) {
@@ -8082,7 +8769,9 @@ function renderReport() {
   const inRange = entry => entry.date >= from && entry.date <= to;
   const profile = activeProfile();
   const sales = activeAccountingEntries("sale").filter(inRange);
+  const creditNotes = activeAccountingEntries("creditNote").filter(inRange);
   const purchases = activeAccountingEntries("purchase").filter(inRange);
+  const purchaseReturns = activeAccountingEntries("purchaseReturn").filter(inRange);
   const output = $("#reportOutput");
   if (activeReport === "stock") {
     output.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Purchase Rate</th><th class="num">Stock Value</th></tr></thead><tbody>
@@ -8094,8 +8783,12 @@ function renderReport() {
     return;
   }
   if (activeReport === "gst") {
-    const saleGst = sales.reduce((sum, entry) => sum + entry.gst, 0);
-    const purchaseGst = purchases.reduce((sum, entry) => sum + entry.gst, 0);
+    const grossSaleGst = sales.reduce((sum, entry) => sum + entry.gst, 0);
+    const creditGst = creditNotes.reduce((sum, entry) => sum + entry.gst, 0);
+    const grossPurchaseGst = purchases.reduce((sum, entry) => sum + entry.gst, 0);
+    const returnGst = purchaseReturns.reduce((sum, entry) => sum + entry.gst, 0);
+    const saleGst = round2(grossSaleGst - creditGst);
+    const purchaseGst = round2(grossPurchaseGst - returnGst);
     const rows = `<tr><td>${escapeHtml(profileName(profile.id))}</td><td class="num">${money(saleGst)}</td><td class="num">${money(purchaseGst)}</td><td class="num">${money(saleGst - purchaseGst)}</td></tr>`;
     output.innerHTML = `<div class="report-grid">
       <div class="report-card"><span>Output GST</span><strong>${money(saleGst)}</strong></div>
@@ -8105,22 +8798,31 @@ function renderReport() {
     <div class="table-wrap"><table><thead><tr><th>GST Profile</th><th class="num">Output GST</th><th class="num">Input GST</th><th class="num">Net GST</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     return;
   }
-  const salesTotal = sales.reduce((sum, entry) => sum + entry.total, 0);
-  const purchaseTotal = purchases.reduce((sum, entry) => sum + entry.total, 0);
+  const creditNoteTotal = creditNotes.reduce((sum, entry) => sum + entry.total, 0);
+  const purchaseReturnTotal = purchaseReturns.reduce((sum, entry) => sum + entry.total, 0);
+  const salesTotal = round2(sales.reduce((sum, entry) => sum + entry.total, 0) - creditNoteTotal);
+  const purchaseTotal = round2(purchases.reduce((sum, entry) => sum + entry.total, 0) - purchaseReturnTotal);
   const stockValue = state.items.reduce((sum, item) => sum + stockForItem(item.id) * num(item.purchaseRate), 0);
-  const receivable = sales.filter(entry => entry.status !== "Paid").reduce((sum, entry) => sum + entry.total, 0);
+  const receivable = Math.max(0, round2(sales.filter(entry => entry.status !== "Paid").reduce((sum, entry) => sum + entry.total, 0) - creditNoteTotal));
   const low = state.items.map(item => ({ ...item, stock: stockForItem(item.id) })).filter(item => item.stock <= num(item.minStock));
   output.innerHTML = `<div class="report-grid">
-    <div class="report-card"><span>Total Sales</span><strong>${money(salesTotal)}</strong></div>
-    <div class="report-card"><span>Total Purchases</span><strong>${money(purchaseTotal)}</strong></div>
+    <div class="report-card"><span>Net Sales</span><strong>${money(salesTotal)}</strong></div>
+    <div class="report-card"><span>Credit Notes</span><strong>${money(creditNoteTotal)}</strong></div>
+    <div class="report-card"><span>Net Purchases</span><strong>${money(purchaseTotal)}</strong></div>
+    <div class="report-card"><span>Purchase Returns</span><strong>${money(purchaseReturnTotal)}</strong></div>
     <div class="report-card"><span>Stock Value</span><strong>${money(stockValue)}</strong></div>
     <div class="report-card"><span>Receivable</span><strong>${money(receivable)}</strong></div>
     <div class="report-card"><span>Gross Margin</span><strong>${money(salesTotal - purchaseTotal)}</strong></div>
   </div>
   <div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>No.</th><th>GST</th><th>Party</th><th class="num">Total</th></tr></thead><tbody>
-    ${[...sales.map(entry => ({ ...entry, kind: "Sale" })), ...purchases.map(entry => ({ ...entry, kind: "Purchase" }))]
+    ${[
+      ...sales.map(entry => ({ ...entry, kind: "Sale", signedTotal: entry.total })),
+      ...creditNotes.map(entry => ({ ...entry, kind: "Credit Note", signedTotal: -entry.total })),
+      ...purchases.map(entry => ({ ...entry, kind: "Purchase", signedTotal: entry.total })),
+      ...purchaseReturns.map(entry => ({ ...entry, kind: "Purchase Return", signedTotal: -entry.total }))
+    ]
       .sort((a, b) => b.date.localeCompare(a.date))
-      .map(entry => `<tr><td>${entry.date}</td><td>${entry.kind}</td><td>${escapeHtml(entry.number)}</td><td>${escapeHtml(profileName(entry.profileId))}</td><td>${escapeHtml(partyName(entry.partyId))}</td><td class="num">${money(entry.total)}</td></tr>`)
+      .map(entry => `<tr><td>${entry.date}</td><td>${entry.kind}</td><td>${escapeHtml(entry.number)}</td><td>${escapeHtml(profileName(entry.profileId))}</td><td>${escapeHtml(partyName(entry.partyId))}</td><td class="num">${money(entry.signedTotal)}</td></tr>`)
       .join("") || emptyRow(6, "No entries in this period")}
   </tbody></table></div>
   <div class="table-wrap report-secondary-table"><table><thead><tr><th>Low Stock Item</th><th>HSN</th><th class="num">Stock</th><th class="num">Min</th></tr></thead><tbody>
@@ -8366,6 +9068,42 @@ function exportPurchaseRegister() {
   const header = ["Date", "Bill No", "Buyer Business", "Buyer GSTIN", "Supplier", "Supplier GSTIN", "Tax Mode", "Taxable", "CGST", "SGST", "IGST", "GST", "Total", "Review Status", "Review Notes", "Invoice Soft Copy"];
   downloadCsv([header, ...rows], `purchase-register-${profileName(activeProfileId()).replace(/[^A-Za-z0-9]+/g, "-")}-${today()}.csv`);
   toast("Purchase register downloaded");
+}
+
+function exportCreditNoteRegister() {
+  const from = $("#reportFrom")?.value || "0000-01-01";
+  const to = $("#reportTo")?.value || "9999-12-31";
+  const rows = activeEntries("creditNote")
+    .filter(entry => entry.date >= from && entry.date <= to)
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
+    .map(entry => {
+      const profile = profileById(entry.profileId);
+      const buyer = partyById(entry.partyId) || {};
+      return [
+        entry.date,
+        entry.number,
+        profile.businessName || profile.label,
+        profile.gstin,
+        buyer.name || "",
+        buyer.gstin || "",
+        entry.originalInvoiceNumber || "",
+        entry.originalInvoiceDate || "",
+        entry.reason || "",
+        entry.restock ? "Yes" : "No",
+        entry.taxMode || "",
+        round2(entry.taxable),
+        round2(entry.cgst),
+        round2(entry.sgst),
+        round2(entry.igst),
+        round2(entry.gst),
+        round2(entry.roundOff),
+        round2(entry.total),
+        isCancelledEntry(entry) ? "Cancelled" : "Active"
+      ];
+    });
+  const header = ["Date", "Credit Note No", "Seller Business", "Seller GSTIN", "Buyer", "Buyer GSTIN", "Original Invoice", "Original Invoice Date", "Reason", "Stock Updated", "Tax Mode", "Taxable", "CGST", "SGST", "IGST", "GST", "Round Off", "Total", "Status"];
+  downloadCsv([header, ...rows], `credit-note-register-${profileName(activeProfileId()).replace(/[^A-Za-z0-9]+/g, "-")}-${today()}.csv`);
+  toast("Credit note register downloaded");
 }
 
 function downloadJson(payload, fileName) {
@@ -10479,6 +11217,8 @@ function normalizeAppleStorage(value) {
 window.openEntry = openEntry;
 window.deleteEntry = deleteEntry;
 window.cancelEntry = cancelEntry;
+window.openCreditNote = openCreditNote;
+window.cancelCreditNote = cancelCreditNote;
 window.showInvoice = showInvoice;
 window.openItem = openItem;
 window.deleteItem = deleteItem;

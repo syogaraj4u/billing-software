@@ -210,6 +210,38 @@ create table if not exists public.billing_sales (
   primary key (workspace_id, id)
 );
 
+create table if not exists public.billing_credit_notes (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  id text not null,
+  profile_id text not null default '',
+  party_id text not null default '',
+  credit_note_number text not null default '',
+  credit_note_date date,
+  original_sale_id text,
+  original_invoice_number text not null default '',
+  original_invoice_date date,
+  seller_gstin text not null default '',
+  buyer_gstin text not null default '',
+  reason text not null default '',
+  restock boolean not null default false,
+  status text not null default '',
+  taxable numeric(14,2) not null default 0,
+  cgst numeric(14,2) not null default 0,
+  sgst numeric(14,2) not null default 0,
+  igst numeric(14,2) not null default 0,
+  gst numeric(14,2) not null default 0,
+  total numeric(14,2) not null default 0,
+  cancelled boolean not null default false,
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, id),
+  unique (workspace_id, profile_id, credit_note_number)
+);
+
 create table if not exists public.billing_purchases (
   workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
   id text not null,
@@ -234,6 +266,38 @@ create table if not exists public.billing_purchases (
   created_by uuid references auth.users(id),
   last_synced_at timestamptz,
   primary key (workspace_id, id)
+);
+
+create table if not exists public.billing_purchase_returns (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  id text not null,
+  profile_id text not null default '',
+  party_id text not null default '',
+  return_number text not null default '',
+  return_date date,
+  original_sale_id text,
+  original_invoice_number text not null default '',
+  original_invoice_date date,
+  seller_gstin text not null default '',
+  buyer_gstin text not null default '',
+  reason text not null default '',
+  restock boolean not null default false,
+  status text not null default '',
+  taxable numeric(14,2) not null default 0,
+  cgst numeric(14,2) not null default 0,
+  sgst numeric(14,2) not null default 0,
+  igst numeric(14,2) not null default 0,
+  gst numeric(14,2) not null default 0,
+  total numeric(14,2) not null default 0,
+  cancelled boolean not null default false,
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, id),
+  unique (workspace_id, profile_id, return_number)
 );
 
 alter table public.billing_purchases
@@ -288,6 +352,30 @@ create table if not exists public.billing_sale_items (
   primary key (workspace_id, sale_id, line_index)
 );
 
+create table if not exists public.billing_credit_note_items (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  credit_note_id text not null,
+  line_index integer not null,
+  original_line_index integer not null default 0,
+  item_id text not null default '',
+  item_name text not null default '',
+  hsn text not null default '',
+  qty numeric(14,3) not null default 0,
+  rate numeric(14,2) not null default 0,
+  gross_rate numeric(14,2) not null default 0,
+  gst_rate numeric(8,2) not null default 0,
+  taxable numeric(14,2) not null default 0,
+  gst numeric(14,2) not null default 0,
+  total numeric(14,2) not null default 0,
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, credit_note_id, line_index)
+);
+
 create table if not exists public.billing_purchase_items (
   workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
   purchase_id text not null,
@@ -309,6 +397,30 @@ create table if not exists public.billing_purchase_items (
   created_by uuid references auth.users(id),
   last_synced_at timestamptz,
   primary key (workspace_id, purchase_id, line_index)
+);
+
+create table if not exists public.billing_purchase_return_items (
+  workspace_id uuid not null references public.billing_cloud_workspaces(id) on delete cascade,
+  purchase_return_id text not null,
+  line_index integer not null,
+  original_line_index integer not null default 0,
+  item_id text not null default '',
+  item_name text not null default '',
+  hsn text not null default '',
+  qty numeric(14,3) not null default 0,
+  rate numeric(14,2) not null default 0,
+  gross_rate numeric(14,2) not null default 0,
+  gst_rate numeric(8,2) not null default 0,
+  taxable numeric(14,2) not null default 0,
+  gst numeric(14,2) not null default 0,
+  total numeric(14,2) not null default 0,
+  data jsonb not null default '{}'::jsonb,
+  sync_status text not null default 'Synced',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  last_synced_at timestamptz,
+  primary key (workspace_id, purchase_return_id, line_index)
 );
 
 create table if not exists public.billing_purchase_order_items (
@@ -358,7 +470,9 @@ create table if not exists public.billing_cloud_backups (
 );
 
 create index if not exists billing_sales_workspace_date_idx on public.billing_sales(workspace_id, invoice_date);
+create index if not exists billing_credit_notes_workspace_date_idx on public.billing_credit_notes(workspace_id, credit_note_date);
 create index if not exists billing_purchases_workspace_date_idx on public.billing_purchases(workspace_id, invoice_date);
+create index if not exists billing_purchase_returns_workspace_date_idx on public.billing_purchase_returns(workspace_id, return_date);
 create index if not exists billing_purchase_orders_workspace_date_idx on public.billing_purchase_orders(workspace_id, po_date);
 create index if not exists billing_parties_workspace_gstin_idx on public.billing_parties(workspace_id, gstin);
 create index if not exists billing_parties_workspace_type_idx on public.billing_parties(workspace_id, type);
@@ -369,10 +483,14 @@ create index if not exists billing_backups_workspace_date_idx on public.billing_
 alter table public.billing_parties enable row level security;
 alter table public.billing_items enable row level security;
 alter table public.billing_sales enable row level security;
+alter table public.billing_credit_notes enable row level security;
 alter table public.billing_purchases enable row level security;
+alter table public.billing_purchase_returns enable row level security;
 alter table public.billing_purchase_orders enable row level security;
 alter table public.billing_sale_items enable row level security;
+alter table public.billing_credit_note_items enable row level security;
 alter table public.billing_purchase_items enable row level security;
+alter table public.billing_purchase_return_items enable row level security;
 alter table public.billing_purchase_order_items enable row level security;
 alter table public.billing_audit_logs enable row level security;
 alter table public.billing_cloud_backups enable row level security;
@@ -422,6 +540,21 @@ create policy "Workspace members can update billing rows" on public.billing_sale
 create policy "Workspace members can delete billing rows" on public.billing_sales
   for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
 
+drop policy if exists "Workspace members can read billing rows" on public.billing_credit_notes;
+drop policy if exists "Workspace members can insert billing rows" on public.billing_credit_notes;
+drop policy if exists "Workspace members can update billing rows" on public.billing_credit_notes;
+drop policy if exists "Workspace members can delete billing rows" on public.billing_credit_notes;
+
+create policy "Workspace members can read billing rows" on public.billing_credit_notes
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert billing rows" on public.billing_credit_notes
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update billing rows" on public.billing_credit_notes
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can delete billing rows" on public.billing_credit_notes
+  for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+
 drop policy if exists "Workspace members can read billing rows" on public.billing_purchases;
 drop policy if exists "Workspace members can insert billing rows" on public.billing_purchases;
 drop policy if exists "Workspace members can update billing rows" on public.billing_purchases;
@@ -435,6 +568,21 @@ create policy "Workspace members can update billing rows" on public.billing_purc
   for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
   with check (public.can_access_billing_workspace(workspace_id::text));
 create policy "Workspace members can delete billing rows" on public.billing_purchases
+  for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+
+drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_returns;
+drop policy if exists "Workspace members can insert billing rows" on public.billing_purchase_returns;
+drop policy if exists "Workspace members can update billing rows" on public.billing_purchase_returns;
+drop policy if exists "Workspace members can delete billing rows" on public.billing_purchase_returns;
+
+create policy "Workspace members can read billing rows" on public.billing_purchase_returns
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert billing rows" on public.billing_purchase_returns
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update billing rows" on public.billing_purchase_returns
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can delete billing rows" on public.billing_purchase_returns
   for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
 
 drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_orders;
@@ -467,6 +615,21 @@ create policy "Workspace members can update billing rows" on public.billing_sale
 create policy "Workspace members can delete billing rows" on public.billing_sale_items
   for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
 
+drop policy if exists "Workspace members can read billing rows" on public.billing_credit_note_items;
+drop policy if exists "Workspace members can insert billing rows" on public.billing_credit_note_items;
+drop policy if exists "Workspace members can update billing rows" on public.billing_credit_note_items;
+drop policy if exists "Workspace members can delete billing rows" on public.billing_credit_note_items;
+
+create policy "Workspace members can read billing rows" on public.billing_credit_note_items
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert billing rows" on public.billing_credit_note_items
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update billing rows" on public.billing_credit_note_items
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can delete billing rows" on public.billing_credit_note_items
+  for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+
 drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_items;
 drop policy if exists "Workspace members can insert billing rows" on public.billing_purchase_items;
 drop policy if exists "Workspace members can update billing rows" on public.billing_purchase_items;
@@ -480,6 +643,21 @@ create policy "Workspace members can update billing rows" on public.billing_purc
   for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
   with check (public.can_access_billing_workspace(workspace_id::text));
 create policy "Workspace members can delete billing rows" on public.billing_purchase_items
+  for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+
+drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_return_items;
+drop policy if exists "Workspace members can insert billing rows" on public.billing_purchase_return_items;
+drop policy if exists "Workspace members can update billing rows" on public.billing_purchase_return_items;
+drop policy if exists "Workspace members can delete billing rows" on public.billing_purchase_return_items;
+
+create policy "Workspace members can read billing rows" on public.billing_purchase_return_items
+  for select to authenticated using (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can insert billing rows" on public.billing_purchase_return_items
+  for insert to authenticated with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can update billing rows" on public.billing_purchase_return_items
+  for update to authenticated using (public.can_access_billing_workspace(workspace_id::text))
+  with check (public.can_access_billing_workspace(workspace_id::text));
+create policy "Workspace members can delete billing rows" on public.billing_purchase_return_items
   for delete to authenticated using (public.can_access_billing_workspace(workspace_id::text));
 
 drop policy if exists "Workspace members can read billing rows" on public.billing_purchase_order_items;
