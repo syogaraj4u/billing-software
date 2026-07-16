@@ -753,6 +753,11 @@ function mergeExistingParty(target, source) {
     target.aliases = aliasText;
     changed = true;
   }
+  const supplierLocations = mergeSupplierLocations(target.supplierLocations, source?.supplierLocations);
+  if (JSON.stringify(supplierLocations) !== JSON.stringify(normalizeSupplierLocations(target.supplierLocations))) {
+    target.supplierLocations = supplierLocations;
+    changed = true;
+  }
   return changed;
 }
 
@@ -859,7 +864,8 @@ function normalizePartyForState(party) {
     place: party.place || "",
     address: party.address || "",
     aliases: party.aliases || "",
-    shippingAddresses: normalizeShippingAddresses(party.shippingAddresses || party.shipToAddresses || [])
+    shippingAddresses: normalizeShippingAddresses(party.shippingAddresses || party.shipToAddresses || []),
+    supplierLocations: normalizeSupplierLocations(party.supplierLocations || party.supplierAddresses || [])
   };
   normalizeCloudEntityMeta(normalized, party);
   return normalized;
@@ -893,6 +899,57 @@ function normalizeShippingAddresses(addresses = []) {
     place: address.place || "",
     address: address.address || ""
   })).filter(address => address.address || address.name || address.gstin || address.place);
+}
+
+function normalizeSupplierLocations(locations = []) {
+  let defaultAssigned = false;
+  const normalized = (Array.isArray(locations) ? locations : []).map((location, index) => {
+    const address = String(location.address || "").trim();
+    const pincode = normalizePincode(location.pincode || extractPreferredPincode(address));
+    const requestedDefault = Boolean(location.isDefault || location.default);
+    const isDefault = requestedDefault && !defaultAssigned;
+    if (isDefault) defaultAssigned = true;
+    return {
+      id: String(location.id || uid()),
+      label: String(location.label || location.name || location.place || (pincode ? `PIN ${pincode}` : `Location ${index + 1}`)).trim(),
+      place: String(location.place || "").trim(),
+      address: addressWithUpdatedPincode(address, pincode),
+      pincode,
+      isDefault,
+      source: String(location.source || "party-master").trim(),
+      verifiedAt: String(location.verifiedAt || location.updatedAt || "").trim()
+    };
+  }).filter(location => location.address || location.pincode || location.place);
+  if (normalized.length === 1 && !defaultAssigned) normalized[0].isDefault = true;
+  return normalized;
+}
+
+function supplierLocationMergeKey(location = {}) {
+  const pincode = normalizePincode(location.pincode || extractPreferredPincode(location.address));
+  const address = normalizeSupplierAddressForMatch(location.address);
+  const place = normalizeMergeText(location.place);
+  return pincode || address ? `${pincode}|${address}` : `place:${place}`;
+}
+
+function mergeSupplierLocations(targetLocations = [], sourceLocations = []) {
+  const merged = normalizeSupplierLocations(targetLocations).map(location => ({ ...location }));
+  normalizeSupplierLocations(sourceLocations).forEach(source => {
+    const sourceKey = supplierLocationMergeKey(source);
+    const existing = merged.find(location => location.id === source.id || (sourceKey && supplierLocationMergeKey(location) === sourceKey));
+    if (!existing) {
+      merged.push({ ...source });
+      return;
+    }
+    const existingVerifiedAt = new Date(existing.verifiedAt || 0).getTime() || 0;
+    const sourceVerifiedAt = new Date(source.verifiedAt || 0).getTime() || 0;
+    ["label", "place", "address", "pincode", "source", "verifiedAt"].forEach(key => {
+      if ((sourceVerifiedAt > existingVerifiedAt || !String(existing[key] || "").trim()) && String(source[key] || "").trim()) {
+        existing[key] = source[key];
+      }
+    });
+    if (!merged.some(location => location.isDefault) && source.isDefault) existing.isDefault = true;
+  });
+  return normalizeSupplierLocations(merged);
 }
 
 function normalizeEwayRouteDistances(value = {}) {
@@ -971,6 +1028,46 @@ function parseShippingAddressLine(line, existingAddresses = []) {
     id: matched?.id || uid(),
     ...address
   };
+}
+
+function formatSupplierLocationsForForm(locations = []) {
+  return normalizeSupplierLocations(locations).map(location => [
+    location.isDefault ? "Default" : (location.label || `PIN ${location.pincode}`),
+    location.place || "",
+    location.pincode || "",
+    location.address || ""
+  ].join(" | ")).join("\n");
+}
+
+function parseSupplierLocationsFromText(value, existingLocations = []) {
+  const existing = normalizeSupplierLocations(existingLocations);
+  const parsed = String(value || "")
+    .split(/\n+/)
+    .map((line, index) => parseSupplierLocationLine(line, existing, index))
+    .filter(Boolean);
+  if (parsed.length && !parsed.some(location => location.isDefault)) parsed[0].isDefault = true;
+  return normalizeSupplierLocations(parsed);
+}
+
+function parseSupplierLocationLine(line, existingLocations = [], index = 0) {
+  const parts = String(line || "").split("|").map(part => part.trim());
+  if (!parts.some(Boolean)) return null;
+  const [rawLabel = "", place = "", rawPincode = "", ...addressParts] = parts;
+  const pincode = normalizePincode(rawPincode || extractPreferredPincode(addressParts.join(" | ")));
+  const address = addressWithUpdatedPincode(addressParts.join(" | "), pincode);
+  const isDefault = /^default$/i.test(rawLabel);
+  const location = {
+    label: isDefault ? (place || (pincode ? `PIN ${pincode}` : "Default")) : (rawLabel || place || `Location ${index + 1}`),
+    place,
+    address,
+    pincode,
+    isDefault,
+    source: "manual",
+    verifiedAt: new Date().toISOString()
+  };
+  const key = supplierLocationMergeKey(location);
+  const matched = existingLocations.find(row => supplierLocationMergeKey(row) === key);
+  return { ...location, id: matched?.id || uid() };
 }
 
 function mergeTallyBuyerMaster(value) {
@@ -1234,6 +1331,9 @@ function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "
     supplierGstin: normalizeGstin(parsed.supplierGstin),
     supplierAddress: String(parsed.supplierAddress || "").trim(),
     supplierPlace: String(parsed.supplierPlace || "").trim(),
+    supplierLocationId: String(parsed.supplierLocationId || "").trim(),
+    supplierPincodeSource: String(parsed.supplierPincodeSource || "").trim(),
+    supplierLocationAmbiguous: Boolean(parsed.supplierLocationAmbiguous),
     buyerName: String(parsed.buyerName || "").trim(),
     buyerGstin: normalizeGstin(parsed.buyerGstin),
     buyerAddress: String(parsed.buyerAddress || "").trim(),
@@ -2322,6 +2422,7 @@ function bindEvents() {
   bindIf("#purchaseImportDiscardBtn", "click", discardActivePurchaseImportBatch);
   bindIf("#purchaseImportReviewPanel", "submit", savePurchaseImportReview);
   bindIf("#purchaseImportReviewPanel", "click", handlePurchaseImportReviewClick);
+  bindIf("#purchaseImportReviewPanel", "change", handlePurchaseImportReviewChange);
   bindIf("#purchaseImportReviewPanel", "input", updatePurchaseImportReviewTotals);
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
@@ -6991,6 +7092,7 @@ function openParty(id = null, options = {}) {
       : (party?.[key] ?? "");
   });
   form.elements.shippingAddresses.value = formatShippingAddressesForForm(party?.shippingAddresses || []);
+  form.elements.supplierLocations.value = formatSupplierLocationsForForm(party?.supplierLocations || []);
   partyAliasDraft = partyAliasList(party || {});
   renderPartyAliasManager();
   $("#partyDialog").showModal();
@@ -7142,6 +7244,10 @@ function saveParty(event) {
     shippingAddresses: parseShippingAddressesFromText(
       form.elements.shippingAddresses.value,
       existingParty?.shippingAddresses || []
+    ),
+    supplierLocations: parseSupplierLocationsFromText(
+      form.elements.supplierLocations.value,
+      existingParty?.supplierLocations || []
     )
   }, existingParty);
   const index = state.parties.findIndex(row => row.id === party.id);
@@ -11784,11 +11890,13 @@ function validatePurchaseImportDocument(document, batchDocuments = purchaseImpor
 
 function purchaseImportCurrentExtractionWarnings(parsed = {}) {
   const invoiceNumberReady = parsed.invoiceNumber && !isGeneratedPurchaseNumber(parsed.invoiceNumber);
+  const supplierPinReady = Boolean(extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace));
   return (parsed.reviewMessages || []).filter(message => {
     const text = String(message || "");
     if (/buyer gstin did not match/i.test(text) && profileByImportParsed(parsed)) return false;
     if (/supplier gstin (?:was not found|is required)/i.test(text) && isValidGstin(parsed.supplierGstin)) return false;
     if (/supplier invoice number (?:was not detected|is required)/i.test(text) && invoiceNumberReady) return false;
+    if (/supplier pin|multiple saved supplier locations/i.test(text) && supplierPinReady) return false;
     return true;
   });
 }
@@ -12026,6 +12134,7 @@ function renderPurchaseImportReview(document) {
   const parsed = document.parsed || {};
   const totals = purchaseImportCalculatedTotals(parsed);
   const supplierPin = extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace);
+  const supplierMemory = resolveSupplierLocationMemory(parsed);
   const errors = document.validationErrors || [];
   const warnings = document.validationWarnings || [];
   const attachment = parsed.attachments?.[0] || {};
@@ -12041,6 +12150,7 @@ function renderPurchaseImportReview(document) {
       <label class="${purchaseImportRequiredClass(errors, /invoice number/i)}">Invoice Number<input name="invoiceNumber" value="${escapeHtml(parsed.invoiceNumber)}" required></label>
       <label class="${purchaseImportRequiredClass(errors, /invoice date/i)}">Invoice Date<input name="invoiceDate" type="date" value="${escapeHtml(parsed.invoiceDate)}" required></label>
       <label class="${purchaseImportRequiredClass(errors, /supplier pin/i)}">Supplier PIN<input name="supplierPincode" inputmode="numeric" maxlength="6" value="${escapeHtml(supplierPin)}" required></label>
+      ${renderPurchaseImportSupplierMemory(parsed, supplierMemory)}
       <label>Round Off / Adjustment<input name="roundOff" type="number" step="0.01" value="${escapeHtml(round2(parsed.roundOff))}"></label>
       <label class="span-2">Supplier Address<textarea name="supplierAddress" rows="3">${escapeHtml(parsed.supplierAddress)}</textarea></label>
     </div>
@@ -12050,6 +12160,27 @@ function renderPurchaseImportReview(document) {
     ${renderPurchaseImportMessages(errors, warnings)}
     <div class="purchase-import-review-actions"><button class="primary-btn" type="submit"><i data-lucide="check"></i><span>Save Review</span></button></div>
   </form>`;
+}
+
+function renderPurchaseImportSupplierMemory(parsed = {}, memory = resolveSupplierLocationMemory(parsed)) {
+  const locations = memory.locations || [];
+  const supplierPin = extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace);
+  const selectedId = parsed.supplierLocationId || memory.location?.id || "";
+  const input = locations.length > 1
+    ? `<label class="span-2 ${parsed.supplierLocationAmbiguous && !supplierPin ? "required-attention" : ""}">Saved Supplier Location<select name="supplierLocationId"><option value="">Select supplier or dispatch location</option>${locations.map(location => {
+      const detail = [location.label, location.pincode, location.place].filter(Boolean).join(" · ");
+      return `<option value="${escapeHtml(location.id)}" ${location.id === selectedId ? "selected" : ""}>${escapeHtml(detail)}</option>`;
+    }).join("")}</select></label>`
+    : `<input type="hidden" name="supplierLocationId" value="${escapeHtml(selectedId)}">`;
+  let message = "";
+  if (parsed.supplierPincodeSource === "supplier-master" && supplierPin) {
+    message = "PIN restored from the shared supplier master.";
+  } else if (supplierPin && isValidGstin(parsed.supplierGstin)) {
+    message = "This supplier location will be remembered after approval.";
+  } else if (locations.length > 1) {
+    message = "Select a saved dispatch location or enter the PIN manually.";
+  }
+  return `${input}${message ? `<p class="purchase-import-memory-note span-2"><i data-lucide="map-pin-check"></i><span>${escapeHtml(message)}</span></p>` : ""}`;
 }
 
 function purchaseImportRequiredClass(errors = [], pattern) {
@@ -12148,8 +12279,17 @@ function savePurchaseImportReview(event) {
 
 function collectPurchaseImportReviewForm(form, currentParsed = {}) {
   const profile = state.settings.profiles.find(row => row.id === form.elements.profileId?.value) || activeProfile();
+  const supplierGstin = normalizeGstin(form.elements.supplierGstin?.value || "");
+  const supplierLocationId = form.elements.supplierLocationId?.value || "";
+  const selectedSupplierLocation = supplierLocationsByGstin(supplierGstin).find(location => location.id === supplierLocationId) || null;
   const supplierPincode = normalizePincode(form.elements.supplierPincode?.value || "");
   const supplierAddress = addressWithUpdatedPincode(form.elements.supplierAddress?.value || "", supplierPincode);
+  const currentSupplierPincode = extractPreferredPincode(currentParsed.supplierAddress || currentParsed.supplierPlace);
+  const supplierPincodeSource = selectedSupplierLocation
+    ? "supplier-master"
+    : supplierPincode && (supplierPincode !== currentSupplierPincode || supplierAddress !== currentParsed.supplierAddress)
+      ? "manual"
+      : (currentParsed.supplierPincodeSource || (supplierPincode ? "manual" : ""));
   const lines = $$("[data-import-line-index]", form).map(row => {
     const gstRate = num($("[name='lineGstRate']", row)?.value);
     const grossRate = num($("[name='lineGrossRate']", row)?.value);
@@ -12171,9 +12311,12 @@ function collectPurchaseImportReviewForm(form, currentParsed = {}) {
     buyerAddress: profile.address || "",
     buyerPlace: profile.state || "",
     supplierName: form.elements.supplierName?.value.trim() || "",
-    supplierGstin: normalizeGstin(form.elements.supplierGstin?.value || ""),
+    supplierGstin,
     supplierAddress,
-    supplierPlace: currentParsed.supplierPlace || stateNameFromGstin(form.elements.supplierGstin?.value || "") || "",
+    supplierPlace: selectedSupplierLocation?.place || currentParsed.supplierPlace || stateNameFromGstin(supplierGstin) || "",
+    supplierLocationId,
+    supplierPincodeSource,
+    supplierLocationAmbiguous: Boolean(!supplierPincode && supplierLocationsByGstin(supplierGstin).length > 1),
     invoiceNumber: form.elements.invoiceNumber?.value.trim() || "",
     invoiceDate: form.elements.invoiceDate?.value || "",
     roundOff: round2(form.elements.roundOff?.value),
@@ -12191,6 +12334,20 @@ function updatePurchaseImportReviewTotals(event) {
     const target = $(`[data-import-total='${key}']`, form);
     if (target) target.textContent = money(value);
   });
+}
+
+function handlePurchaseImportReviewChange(event) {
+  if (event.target.name !== "supplierLocationId") return;
+  const form = event.target.closest("#purchaseImportReviewForm");
+  const document = purchaseImportDocumentById(form?.dataset.importReviewId);
+  if (!form || !document) return;
+  const gstin = normalizeGstin(form.elements.supplierGstin?.value || document.parsed?.supplierGstin);
+  const location = supplierLocationsByGstin(gstin).find(row => row.id === event.target.value);
+  if (!location) return;
+  form.elements.supplierPincode.value = location.pincode;
+  form.elements.supplierAddress.value = location.address;
+  const note = $(".purchase-import-memory-note span", form);
+  if (note) note.textContent = "PIN restored from the shared supplier master.";
 }
 
 function handlePurchaseImportReviewClick(event) {
@@ -12470,6 +12627,7 @@ async function extractPurchaseInvoiceWithCloud(file) {
 async function enrichPurchasePincodes(parsed = {}) {
   const enriched = enrichPurchasePincodesFromMaster({ ...parsed });
   if (!purchaseNeedsPincodeHelp(enriched)) return enriched;
+  if (enriched.supplierLocationAmbiguous) return enriched;
   const cloudResult = await resolvePurchasePincodesWithCloud(enriched);
   return applyPurchasePincodeResolution(enriched, cloudResult);
 }
@@ -12477,21 +12635,118 @@ async function enrichPurchasePincodes(parsed = {}) {
 function enrichPurchasePincodesFromMaster(parsed = {}) {
   const supplierGstin = normalizeGstin(parsed.supplierGstin);
   const buyerGstin = normalizeGstin(parsed.buyerGstin || profileById(parsed.profileId)?.gstin);
-  const supplierMaster = partyAddressContextByGstin(supplierGstin);
+  const supplierMemory = resolveSupplierLocationMemory(parsed);
   const buyerMaster = profileAddressContextByGstin(buyerGstin);
-  const supplierPin = extractPreferredPincode(parsed.supplierAddress) || extractPreferredPincode(parsed.supplierPlace) || supplierMaster.pincode;
+  const invoiceSupplierPin = extractPreferredPincode(parsed.supplierAddress) || extractPreferredPincode(parsed.supplierPlace);
   const buyerPin = extractPreferredPincode(parsed.buyerAddress) || extractPreferredPincode(parsed.buyerPlace) || buyerMaster.pincode;
-  if (supplierPin && !extractPreferredPincode(parsed.supplierAddress)) {
-    parsed.supplierAddress = addressWithPincode(parsed.supplierAddress || supplierMaster.address, supplierPin);
+  if (invoiceSupplierPin) {
+    parsed.supplierPincodeSource = parsed.supplierPincodeSource || "invoice";
+    parsed.supplierLocationId = parsed.supplierLocationId || supplierMemory.location?.id || "";
+    parsed.supplierLocationAmbiguous = false;
+  } else if (supplierMemory.location?.pincode) {
+    parsed.supplierAddress = addressWithPincode(parsed.supplierAddress || supplierMemory.location.address, supplierMemory.location.pincode);
+    parsed.supplierPlace = parsed.supplierPlace || supplierMemory.location.place || "";
+    parsed.supplierLocationId = supplierMemory.location.id;
+    parsed.supplierPincodeSource = "supplier-master";
+    parsed.supplierLocationAmbiguous = false;
+  } else if (supplierMemory.ambiguous) {
+    parsed.supplierLocationId = "";
+    parsed.supplierPincodeSource = "";
+    parsed.supplierLocationAmbiguous = true;
+    parsed.reviewMessages = uniqueMessages([
+      ...(parsed.reviewMessages || []),
+      "Multiple saved supplier locations found. Select the dispatch location or enter the supplier PIN."
+    ]);
   }
-  if (!String(parsed.supplierAddress || "").trim() && supplierMaster.address) parsed.supplierAddress = supplierMaster.address;
-  if (!String(parsed.supplierPlace || "").trim() && supplierMaster.place) parsed.supplierPlace = supplierMaster.place;
   if (buyerPin && !extractPreferredPincode(parsed.buyerAddress)) {
     parsed.buyerAddress = addressWithPincode(parsed.buyerAddress || buyerMaster.address, buyerPin);
   }
   if (!String(parsed.buyerAddress || "").trim() && buyerMaster.address) parsed.buyerAddress = buyerMaster.address;
   if (!String(parsed.buyerPlace || "").trim() && buyerMaster.place) parsed.buyerPlace = buyerMaster.place;
   return parsed;
+}
+
+function supplierPartyByGstin(gstin) {
+  const normalized = normalizeGstin(gstin);
+  if (!normalized) return null;
+  return state.parties.find(party => normalizeGstin(party.gstin) === normalized) || null;
+}
+
+function supplierLocationsForParty(party = {}) {
+  const locations = normalizeSupplierLocations(party.supplierLocations || []);
+  const mainPincode = normalizePincode(extractPreferredPincode(party.address || party.place));
+  if (mainPincode) {
+    const mainLocation = {
+      id: `party-main-${String(party.id || normalizeGstin(party.gstin) || mainPincode).replace(/[^a-z0-9-]/gi, "-")}`,
+      label: "Main Address",
+      place: party.place || stateNameFromGstin(party.gstin) || "",
+      address: addressWithUpdatedPincode(party.address || "", mainPincode),
+      pincode: mainPincode,
+      isDefault: !locations.some(location => location.isDefault),
+      source: "party-master",
+      verifiedAt: ""
+    };
+    const mainKey = supplierLocationMergeKey(mainLocation);
+    if (!locations.some(location => supplierLocationMergeKey(location) === mainKey)) locations.unshift(mainLocation);
+  }
+  const seen = new Set();
+  return normalizeSupplierLocations(locations).filter(location => {
+    const key = supplierLocationMergeKey(location) || location.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function supplierLocationsByGstin(gstin) {
+  return supplierLocationsForParty(supplierPartyByGstin(gstin) || {});
+}
+
+function resolveSupplierLocationMemory(parsed = {}) {
+  const party = supplierPartyByGstin(parsed.supplierGstin);
+  const locations = supplierLocationsForParty(party || {});
+  if (!locations.length) return { party, locations, location: null, ambiguous: false };
+  const selected = locations.find(location => location.id === parsed.supplierLocationId);
+  if (selected) return { party, locations, location: selected, ambiguous: false };
+  const invoicePincode = normalizePincode(extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace));
+  const address = String(parsed.supplierAddress || "").trim();
+  const pinMatches = invoicePincode ? locations.filter(location => location.pincode === invoicePincode) : [];
+  if (pinMatches.length === 1) return { party, locations, location: pinMatches[0], ambiguous: false };
+  const candidates = pinMatches.length ? pinMatches : locations;
+  if (address) {
+    const ranked = candidates.map(location => ({ location, score: supplierAddressMatchScore(address, location.address) }))
+      .sort((left, right) => right.score - left.score);
+    if (ranked[0]?.score >= 0.72 && (!ranked[1] || ranked[0].score - ranked[1].score >= 0.12)) {
+      return { party, locations, location: ranked[0].location, ambiguous: false };
+    }
+  }
+  const uniquePins = [...new Set(locations.map(location => location.pincode).filter(Boolean))];
+  if (locations.length === 1 || uniquePins.length === 1) {
+    return { party, locations, location: locations[0], ambiguous: false };
+  }
+  return { party, locations, location: null, ambiguous: uniquePins.length > 1 };
+}
+
+function normalizeSupplierAddressForMatch(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b\d{6}\b/g, " ")
+    .replace(/\b(private|limited|pvt|ltd|india|gstin|pin|pincode)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function supplierAddressMatchScore(leftAddress = "", rightAddress = "") {
+  const left = normalizeSupplierAddressForMatch(leftAddress);
+  const right = normalizeSupplierAddressForMatch(rightAddress);
+  if (!left || !right) return 0;
+  if (left === right || left.includes(right) || right.includes(left)) return 1;
+  const leftTokens = new Set(left.split(" ").filter(token => token.length >= 3));
+  const rightTokens = new Set(right.split(" ").filter(token => token.length >= 3));
+  const common = [...leftTokens].filter(token => rightTokens.has(token)).length;
+  if (common < 3) return 0;
+  return common / Math.min(leftTokens.size, rightTokens.size);
 }
 
 function purchaseNeedsPincodeHelp(parsed = {}) {
@@ -12560,6 +12815,10 @@ function applyPartyPincodeResolution(parsed, type, resolution = {}, reviewMessag
   if (!existingPin && pin && confidence === "high") {
     parsed[addressKey] = addressWithPincode(resolution.address || parsed[addressKey], pin);
     if (!String(parsed[placeKey] || "").trim() && resolution.place) parsed[placeKey] = resolution.place;
+    if (type === "supplier") {
+      parsed.supplierPincodeSource = "gst-lookup";
+      parsed.supplierLocationAmbiguous = false;
+    }
     return;
   }
   if (!existingPin && pin) {
@@ -13095,11 +13354,14 @@ function ensureImportedSupplier(parsed) {
     supplierGstin && normalizeGstin(party.gstin) === supplierGstin
   ) || String(party.name || "").toLowerCase() === supplierName.toLowerCase() || partyAliasMatch(party, supplierName).index >= 0);
   if (existing) {
+    const before = cloudAuditComparable(existing);
     ensurePartyRole(existing, "Supplier");
     updateExistingImportedSupplier(existing, parsed, supplierGstin);
+    rememberApprovedSupplierLocation(existing, parsed);
+    if (cloudAuditComparable(existing) !== before) touchPartyMasterEntity(existing);
     return existing.id;
   }
-  const party = {
+  const party = entityWithLocalMeta({
     id: uid(),
     name: supplierName,
     type: "Supplier",
@@ -13108,23 +13370,78 @@ function ensureImportedSupplier(parsed) {
     place: parsed.supplierPlace || stateNameFromGstin(supplierGstin) || stateCodeFromGstin(supplierGstin) || "",
     address: parsed.supplierAddress || "",
     aliases: "",
-    shippingAddresses: []
-  };
-  state.parties.push(party);
+    shippingAddresses: [],
+    supplierLocations: []
+  });
+  rememberApprovedSupplierLocation(party, parsed);
+  state.parties.push(normalizePartyForState(party));
   return party.id;
 }
 
 function updateExistingImportedSupplier(party, parsed, supplierGstin) {
   if (!normalizeGstin(party.gstin) && supplierGstin) party.gstin = supplierGstin;
   if (!String(party.address || "").trim() && parsed.supplierAddress) party.address = parsed.supplierAddress;
-  else if (parsed.supplierAddress && !extractPreferredPincode(party.address)) {
-    const parsedPin = extractPreferredPincode(parsed.supplierAddress);
-    if (parsedPin) party.address = addressWithPincode(party.address, parsedPin);
-  }
   if (!String(party.place || "").trim()) {
     party.place = parsed.supplierPlace || stateNameFromGstin(supplierGstin) || stateCodeFromGstin(supplierGstin) || "";
   }
   if (parsed.supplierName) appendPartyAlias(party, parsed.supplierName);
+}
+
+function rememberApprovedSupplierLocation(party, parsed = {}) {
+  const pincode = normalizePincode(extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace));
+  if (!party || !isValidGstin(parsed.supplierGstin || party.gstin) || !pincode) return false;
+  const reviewedAddress = addressWithUpdatedPincode(parsed.supplierAddress || "", pincode);
+  const partyAddressPincode = extractPreferredPincode(party.address || party.place);
+  const canUsePartyAddress = !partyAddressPincode || partyAddressPincode === pincode;
+  const address = normalizeSupplierAddressForMatch(reviewedAddress)
+    ? reviewedAddress
+    : addressWithUpdatedPincode(canUsePartyAddress ? party.address : "", pincode);
+  const place = String(parsed.supplierPlace || party.place || stateNameFromGstin(party.gstin) || "").trim();
+  const locations = supplierLocationsForParty(party).map(location => ({ ...location }));
+  const selectedId = String(parsed.supplierLocationId || "");
+  const addressKey = supplierLocationMergeKey({ address, pincode });
+  let existing = locations.find(location => location.id === selectedId || supplierLocationMergeKey(location) === addressKey);
+  if (!existing) {
+    const samePin = locations.filter(location => location.pincode === pincode);
+    const normalizedAddress = normalizeSupplierAddressForMatch(address);
+    if (samePin.length === 1 && (!normalizedAddress || supplierAddressMatchScore(address, samePin[0].address) >= 0.72)) {
+      existing = samePin[0];
+    }
+  }
+  const now = new Date().toISOString();
+  if (existing) {
+    existing.address = normalizeSupplierAddressForMatch(address) ? address : (existing.address || address);
+    existing.pincode = pincode;
+    existing.place = place || existing.place;
+    existing.source = parsed.supplierPincodeSource || existing.source || "invoice";
+    existing.verifiedAt = now;
+  } else {
+    locations.push({
+      id: selectedId || uid(),
+      label: place || `PIN ${pincode}`,
+      place,
+      address,
+      pincode,
+      isDefault: !locations.some(location => location.isDefault),
+      source: parsed.supplierPincodeSource || "invoice",
+      verifiedAt: now
+    });
+  }
+  party.supplierLocations = normalizeSupplierLocations(locations);
+  if (!String(party.address || "").trim()) party.address = address;
+  else if (!extractPreferredPincode(party.address) && party.supplierLocations.find(location => location.isDefault)?.pincode === pincode) {
+    party.address = addressWithPincode(party.address, pincode);
+  }
+  if (!String(party.place || "").trim()) party.place = place;
+  return true;
+}
+
+function touchPartyMasterEntity(party) {
+  const now = new Date().toISOString();
+  party.syncStatus = newLocalSyncStatus();
+  party.createdAt = party.createdAt || now;
+  party.updatedAt = now;
+  party.createdBy = party.createdBy || currentCloudUserId() || "";
 }
 
 function appendPartyAlias(party, alias) {

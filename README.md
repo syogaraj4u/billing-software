@@ -89,6 +89,8 @@ Run `supabase/migrations/20260716193000_purchase_import_inbox.sql` once, or reru
 
 Upload one or more purchase PDFs/images from Purchases. The app extracts two files at a time and keeps each result in the Invoice Inbox without changing purchases, stock, parties or items. The review stage checks the buyer against the eight GST firms, requires supplier GSTIN and PIN, applies the default `85171300` HSN, highlights tax differences, and blocks saved or same-batch duplicates. Ready invoices can be selected across different buyer companies and saved together; failed, incomplete and duplicate documents remain in the inbox for correction.
 
+Approved supplier addresses and PIN codes are remembered in the shared party master by GSTIN. A later invoice with a missing PIN uses the single matching saved location automatically. When one GSTIN has multiple PIN locations, the review screen asks the user to select the supplier or dispatch location instead of guessing. Invoice-extracted PINs always take priority, and new or corrected locations are saved only after final purchase approval.
+
 ## Bank Reconciliation
 
 Run `supabase/migrations/20260713180000_bank_reconciliation.sql` once, or rerun the complete `supabase-schema.sql`. This creates workspace-secured payment-source and bank-transaction tables and backfills any reconciliation data already stored in the workspace JSON.

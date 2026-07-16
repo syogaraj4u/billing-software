@@ -4649,6 +4649,22 @@ body.invoice-pdf-capture .invoice-preview-frame {
   grid-column: 1 / -1;
 }
 
+.purchase-import-memory-note {
+  margin: -3px 0 1px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #38715f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.purchase-import-memory-note svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
 .purchase-import-section-head {
   display: flex;
   align-items: center;
