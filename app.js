@@ -6273,7 +6273,12 @@ function purchaseReviewCard(title, main, detail, extra, note) {
 function purchaseRoundOffForSource(source = {}, calculated = {}) {
   const explicitRoundOff = num(source?.roundOff);
   const extractedAdjustment = purchaseExtractedRoundOffForSource(source, calculated);
-  if (Math.abs(explicitRoundOff) >= 0.01) return round2(explicitRoundOff + extractedAdjustment);
+  if (Math.abs(explicitRoundOff) >= 0.01) {
+    const separateInvoiceRounding = Math.abs(explicitRoundOff) > 1
+      && Math.abs(extractedAdjustment) >= 0.01
+      && !amountsClose(explicitRoundOff, extractedAdjustment, 0.01);
+    return round2(explicitRoundOff + (separateInvoiceRounding ? extractedAdjustment : 0));
+  }
   if (Math.abs(extractedAdjustment) >= 0.01) return extractedAdjustment;
   const roundedAdjustment = round2(Math.round(num(calculated.total)) - num(calculated.total));
   return Math.abs(roundedAdjustment) >= 0.01 ? roundedAdjustment : 0;

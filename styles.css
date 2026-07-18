@@ -4111,6 +4111,18 @@ textarea { resize: vertical; }
   #purchaseRows td:nth-child(8) { display: none; }
   #purchaseRows td:nth-child(9) { grid-area: total; }
   #purchaseRows td:nth-child(10) { grid-area: actions; }
+  #salesRows td.empty-row,
+  #purchaseRows td.empty-row,
+  #salesRows .filter-note-row td,
+  #purchaseRows .filter-note-row td {
+    grid-area: auto;
+    grid-column: 1 / -1;
+    width: 100%;
+    padding: 16px;
+    justify-self: stretch;
+    text-align: center;
+    overflow-wrap: break-word;
+  }
   #salesView #salesRows td:nth-child(3),
   #salesView #salesRows td:nth-child(6),
   #salesView #salesRows td:nth-child(7),
