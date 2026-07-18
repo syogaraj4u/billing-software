@@ -13607,23 +13607,50 @@ function findInvoiceNumber(lines) {
 }
 
 function findInvoiceDate(text) {
+  const dateToken = "(?:\\d{4}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{1,2}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{1,2}[\\/\\-.\\s][A-Za-z]{3,9}[\\/\\-.\\s]\\d{2,4})";
+  const sanitized = String(text || "").replace(new RegExp(
+    `\\b(?:ack(?:nowledg(?:e)?ment)?\\.?|irn|e-?way\\s*bill(?:\\s+generated)?|generated|valid\\s*(?:upto|until)|delivery\\s*note|dispatch(?:ed)?|document)\\s*(?:date|dt\\.?)\\s*[:\\-]?\\s*${dateToken}`,
+    "gi"
+  ), " ");
   const patterns = [
-    /\b(?:invoice|bill)?\s*date\s*[:\-]?\s*(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i,
-    /\b(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4})\b/,
-    /\b(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2})\b/
+    new RegExp(`\\b(?:tax\\s+)?invoice\\s*(?:date|dated)\\s*[:\\-]?\\s*(${dateToken})`, "i"),
+    new RegExp(`\\bdate\\s+of\\s+invoice\\s*[:\\-]?\\s*(${dateToken})`, "i"),
+    new RegExp(`\\bdated\\s*[:\\-]?\\s*(${dateToken})`, "i"),
+    new RegExp(`\\bdate\\s*[:\\-]?\\s*(${dateToken})`, "i"),
+    new RegExp(`\\b(${dateToken})\\b`, "i")
   ];
   for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return toDateInput(match[1]);
+    const match = sanitized.match(pattern);
+    const normalized = match ? toDateInput(match[1]) : "";
+    if (normalized) return normalized;
   }
   return "";
 }
 
 function toDateInput(value) {
-  const parts = value.split(/[\/\-.]/).map(part => part.padStart(2, "0"));
-  if (parts[0].length === 4) return `${parts[0]}-${parts[1]}-${parts[2]}`;
-  const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-  return `${year}-${parts[1]}-${parts[0]}`;
+  const cleaned = String(value || "").trim().replace(/,/g, "");
+  const iso = cleaned.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (iso) return dateInputFromParts(iso[1], iso[2], iso[3]);
+  const named = cleaned.match(/^(\d{1,2})[\/\-.\s]([A-Za-z]{3,9})[\/\-.\s](\d{2,4})$/);
+  if (named) {
+    const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    const monthText = named[2].toLowerCase();
+    const monthIndex = monthNames.findIndex(month => month.startsWith(monthText) || monthText.startsWith(month.slice(0, 3)));
+    if (monthIndex >= 0) return dateInputFromParts(named[3], monthIndex + 1, named[1]);
+  }
+  const numeric = cleaned.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!numeric) return "";
+  return dateInputFromParts(numeric[3], numeric[2], numeric[1]);
+}
+
+function dateInputFromParts(yearValue, monthValue, dayValue) {
+  const yearText = String(yearValue || "");
+  const year = Number(yearText.length === 2 ? `20${yearText}` : yearText);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (!year || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function findInvoiceAmounts(lines) {

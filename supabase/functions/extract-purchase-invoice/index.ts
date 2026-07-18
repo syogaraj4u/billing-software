@@ -40,7 +40,7 @@ const invoiceSchema = {
     buyerAddress: { type: "string" },
     buyerPlace: { type: "string" },
     invoiceNumber: { type: "string" },
-    invoiceDate: { type: "string" },
+    invoiceDate: { type: "string", description: "Tax invoice date in YYYY-MM-DD format. Never use ACK Date, acknowledgement date, e-way generated date, or delivery date." },
     taxable: { type: "number" },
     gst: { type: "number" },
     total: { type: "number" },
@@ -108,7 +108,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. Extract supplier and buyer address/place when visible; return an empty string when not visible. Keep any visible six digit PIN code inside supplierAddress and buyerAddress. Return clean catalog item names: for Apple/iPhone products keep only product family, model/variant, and storage, for example 'Apple iPhone 17 256GB Blue SKU ABC123' becomes 'iPhone 17 256GB' and 'IPHONE 17 PRO MAX 512 NATURAL TITANIUM' becomes 'iPhone 17 Pro Max 512GB'. Remove colors, SKU/item/model codes, EAN, IMEI, serial, batch, and other supplier-only suffixes from item names. Separate CGST, SGST and IGST exactly as shown. If an item HSN/SAC is not visible, use default HSN 85171300. If payment lines show card cashback, cashback, debit note, or any post-total payment adjustment, return it in roundOff as a negative number; for example CARD CASH BACK - 6000 means roundOff -6000. Keep extractedTaxes.total as the invoice total before cashback, while total may be the net debited/payable total. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, unreadable values, payment adjustment, or tax mode mismatch."
+              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. invoiceDate must be the Tax Invoice Date, Invoice Date, or Dated value associated with the invoice number. Never use ACK Date, acknowledgement date, IRN date, e-way bill generated date, delivery date, dispatch date, document date, or validity date as invoiceDate. Return invoiceDate as YYYY-MM-DD even when the invoice prints a named month such as 16-Jun-26. Extract supplier and buyer address/place when visible; return an empty string when not visible. Keep any visible six digit PIN code inside supplierAddress and buyerAddress. Return clean catalog item names: for Apple/iPhone products keep only product family, model/variant, and storage, for example 'Apple iPhone 17 256GB Blue SKU ABC123' becomes 'iPhone 17 256GB' and 'IPHONE 17 PRO MAX 512 NATURAL TITANIUM' becomes 'iPhone 17 Pro Max 512GB'. Remove colors, SKU/item/model codes, EAN, IMEI, serial, batch, and other supplier-only suffixes from item names. Separate CGST, SGST and IGST exactly as shown. If an item HSN/SAC is not visible, use default HSN 85171300. If payment lines show card cashback, cashback, debit note, or any post-total payment adjustment, return it in roundOff as a negative number; for example CARD CASH BACK - 6000 means roundOff -6000. Keep extractedTaxes.total as the invoice total before cashback, while total may be the net debited/payable total. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, unreadable values, payment adjustment, or tax mode mismatch."
             }
           ]
         },
@@ -188,14 +188,31 @@ function extractOutputText(response: Record<string, unknown>) {
 }
 
 function toDateInput(value: string) {
-  if (!value) return new Date().toISOString().slice(0, 10);
-  const iso = value.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (iso) return iso[0];
-  const parts = value.split(/[\/\-.]/).map(part => part.padStart(2, "0"));
-  if (parts.length !== 3) return new Date().toISOString().slice(0, 10);
-  if (parts[0].length === 4) return `${parts[0]}-${parts[1]}-${parts[2]}`;
-  const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-  return `${year}-${parts[1]}-${parts[0]}`;
+  const cleaned = String(value || "").trim().replace(/,/g, "");
+  const iso = cleaned.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (iso) return dateInputFromParts(iso[1], iso[2], iso[3]);
+  const named = cleaned.match(/^(\d{1,2})[\/\-.\s]([A-Za-z]{3,9})[\/\-.\s](\d{2,4})$/);
+  if (named) {
+    const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    const monthText = named[2].toLowerCase();
+    const monthIndex = monthNames.findIndex(month => month.startsWith(monthText) || monthText.startsWith(month.slice(0, 3)));
+    if (monthIndex >= 0) return dateInputFromParts(named[3], monthIndex + 1, named[1]);
+  }
+  const numeric = cleaned.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (numeric) return dateInputFromParts(numeric[3], numeric[2], numeric[1]);
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dateInputFromParts(yearValue: string, monthValue: string | number, dayValue: string | number) {
+  const yearText = String(yearValue || "");
+  const year = Number(yearText.length === 2 ? `20${yearText}` : yearText);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (!year || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return new Date().toISOString().slice(0, 10);
+  }
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function json(payload: unknown, status = 200) {
