@@ -12360,6 +12360,7 @@ function renderPurchaseImportReview(document) {
   const errors = document.validationErrors || [];
   const warnings = document.validationWarnings || [];
   const attachment = parsed.attachments?.[0] || {};
+  const nextDocument = purchaseImportNextReviewDocument(document.batchId, document.id);
   return `<form class="purchase-import-review-form" id="purchaseImportReviewForm" data-import-review-id="${escapeHtml(document.id)}">
     <div class="purchase-import-review-title">
       <div><h4>${escapeHtml(document.fileName)}</h4><p>${escapeHtml(attachment.status || "Attached")} · ${Math.max(1, Math.round(num(document.size) / 1024))} KB</p></div>
@@ -12381,8 +12382,17 @@ function renderPurchaseImportReview(document) {
     <div class="purchase-import-line-table">${(parsed.lines?.length ? parsed.lines : [purchaseImportBlankLine()]).map((line, index) => renderPurchaseImportLine(line, index, errors)).join("")}</div>
     ${renderPurchaseImportTotals(totals)}
     ${renderPurchaseImportMessages(errors, warnings)}
-    <div class="purchase-import-review-actions"><button class="primary-btn" type="submit"><i data-lucide="check"></i><span>Save Review</span></button></div>
+    <div class="purchase-import-review-actions"><button class="primary-btn" type="submit"><i data-lucide="${nextDocument ? "arrow-right" : "check"}"></i><span>${nextDocument ? "Save &amp; Review Next" : "Save Review"}</span></button></div>
   </form>`;
+}
+
+function purchaseImportNextReviewDocument(batchId, currentDocumentId) {
+  const documents = purchaseImportDocuments(batchId);
+  const currentIndex = documents.findIndex(document => document.id === currentDocumentId);
+  if (currentIndex < 0) return null;
+  return documents.slice(currentIndex + 1).find(document => (
+    ["ready", "needs-review"].includes(document.status)
+  )) || null;
 }
 
 function purchaseImportEwayDetails(parsed = {}, overrides = {}) {
@@ -12519,9 +12529,13 @@ function handlePurchaseImportBatchChange(event) {
 }
 
 function handlePurchaseImportDocumentClick(event) {
+  if (event.target.closest("[data-import-select-id]")) return;
   const card = event.target.closest("[data-import-doc-id]");
   if (!card) return;
-  activePurchaseImportDocumentId = card.dataset.importDocId || "";
+  const nextDocumentId = card.dataset.importDocId || "";
+  if (!nextDocumentId || nextDocumentId === activePurchaseImportDocumentId) return;
+  persistActivePurchaseImportDraft();
+  activePurchaseImportDocumentId = nextDocumentId;
   renderPurchaseImportInbox();
 }
 
@@ -12533,7 +12547,8 @@ function handlePurchaseImportDocumentSelection(event) {
   document.selected = event.target.checked;
   touchPurchaseImportEntity(document);
   saveState();
-  renderPurchaseImportInbox();
+  renderPurchaseImportSummary(purchaseImportBatchById(document.batchId), purchaseImportDocuments(document.batchId));
+  if (window.lucide) lucide.createIcons();
 }
 
 function toggleReadyPurchaseImports(event) {
@@ -12543,7 +12558,32 @@ function toggleReadyPurchaseImports(event) {
     touchPurchaseImportEntity(document);
   });
   saveState();
-  renderPurchaseImportInbox();
+  $$('[data-import-select-id]', $("#purchaseImportDocumentList")).forEach(input => {
+    const document = purchaseImportDocumentById(input.dataset.importSelectId);
+    if (document?.status === "ready") input.checked = document.selected;
+  });
+  renderPurchaseImportSummary(
+    purchaseImportBatchById(activePurchaseImportBatchId),
+    purchaseImportDocuments(activePurchaseImportBatchId)
+  );
+  if (window.lucide) lucide.createIcons();
+}
+
+function persistActivePurchaseImportDraft() {
+  const form = $("#purchaseImportReviewForm");
+  const document = purchaseImportDocumentById(form?.dataset.importReviewId);
+  if (!form || !document || ["approved", "extracting", "approving"].includes(document.status)) return null;
+  document.parsed = normalizePurchaseImportParsedForState(
+    collectPurchaseImportReviewForm(form, document.parsed),
+    document.fileName
+  );
+  document.error = "";
+  document.status = "ready";
+  refreshPurchaseImportBatchValidation(document.batchId);
+  updatePurchaseImportBatchProgress(document.batchId);
+  touchPurchaseImportEntity(document);
+  saveState();
+  return document;
 }
 
 function savePurchaseImportReview(event) {
@@ -12559,11 +12599,17 @@ function savePurchaseImportReview(event) {
   if (!["approved", "extracting"].includes(document.status)) document.status = "ready";
   refreshPurchaseImportBatchValidation(document.batchId);
   if (document.status === "ready") document.selected = true;
+  const nextDocument = document.status === "ready"
+    ? purchaseImportNextReviewDocument(document.batchId, document.id)
+    : null;
   updatePurchaseImportBatchProgress(document.batchId);
   touchPurchaseImportEntity(document);
   saveState();
+  if (nextDocument) activePurchaseImportDocumentId = nextDocument.id;
   renderPurchaseImportInbox();
-  toast(document.status === "ready" ? "Invoice review saved" : "Required details still need attention");
+  toast(document.status === "ready"
+    ? nextDocument ? "Invoice saved. Review the next invoice." : "Invoice review saved"
+    : "Required details still need attention");
 }
 
 function collectPurchaseImportReviewForm(form, currentParsed = {}) {
@@ -12761,6 +12807,7 @@ async function approveSelectedPurchaseImports() {
   if (purchaseImportApproving) return;
   const batch = purchaseImportBatchById(activePurchaseImportBatchId);
   if (!batch) return;
+  persistActivePurchaseImportDraft();
   refreshPurchaseImportBatchValidation(batch.id);
   const documents = purchaseImportDocuments(batch.id).filter(document => document.status === "ready" && document.selected);
   if (!documents.length) {
