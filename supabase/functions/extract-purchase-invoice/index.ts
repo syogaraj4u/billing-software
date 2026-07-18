@@ -40,7 +40,7 @@ const invoiceSchema = {
     buyerAddress: { type: "string" },
     buyerPlace: { type: "string" },
     invoiceNumber: { type: "string" },
-    invoiceDate: { type: "string", description: "Tax invoice date in YYYY-MM-DD format. Never use ACK Date, acknowledgement date, e-way generated date, or delivery date." },
+    invoiceDate: { type: "string", description: "Tax invoice date normalized to YYYY-MM-DD from any common printed date format. Never use ACK, IRN, e-way, delivery, dispatch, document, generated, or validity dates." },
     taxable: { type: "number" },
     gst: { type: "number" },
     total: { type: "number" },
@@ -108,7 +108,7 @@ Deno.serve(async request => {
           content: [
             {
               type: "input_text",
-              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. invoiceDate must be the Tax Invoice Date, Invoice Date, or Dated value associated with the invoice number. Never use ACK Date, acknowledgement date, IRN date, e-way bill generated date, delivery date, dispatch date, document date, or validity date as invoiceDate. Return invoiceDate as YYYY-MM-DD even when the invoice prints a named month such as 16-Jun-26. Extract supplier and buyer address/place when visible; return an empty string when not visible. Keep any visible six digit PIN code inside supplierAddress and buyerAddress. Return clean catalog item names: for Apple/iPhone products keep only product family, model/variant, and storage, for example 'Apple iPhone 17 256GB Blue SKU ABC123' becomes 'iPhone 17 256GB' and 'IPHONE 17 PRO MAX 512 NATURAL TITANIUM' becomes 'iPhone 17 Pro Max 512GB'. Remove colors, SKU/item/model codes, EAN, IMEI, serial, batch, and other supplier-only suffixes from item names. Separate CGST, SGST and IGST exactly as shown. If an item HSN/SAC is not visible, use default HSN 85171300. If payment lines show card cashback, cashback, debit note, or any post-total payment adjustment, return it in roundOff as a negative number; for example CARD CASH BACK - 6000 means roundOff -6000. Keep extractedTaxes.total as the invoice total before cashback, while total may be the net debited/payable total. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, unreadable values, payment adjustment, or tax mode mismatch."
+              text: "Extract an Indian GST purchase invoice into a purchase register draft. The buyer must be one of the provided GST profiles when possible. invoiceDate must be the Tax Invoice Date, Invoice Date, or Dated value associated with the invoice number. Never use ACK Date, acknowledgement date, IRN date, e-way bill generated date, delivery date, dispatch date, document date, generated date, or validity date as invoiceDate. Recognize all common invoice date formats, including DD/MM/YYYY, DD-MM-YY, DD.MM.YYYY, YYYY-MM-DD, YYYY/MM/DD, DD-MMM-YY, DD Month YYYY, Month DD YYYY, compact DDMMYYYY, compact YYYYMMDD, compact DDMMMYYYY, ordinal dates, and invoice date/time values. Interpret ambiguous numeric dates as Indian day-first dates. Return invoiceDate only as YYYY-MM-DD. If the invoice date is missing or unreadable, return an empty string and add a review message instead of using another date. Extract supplier and buyer address/place when visible; return an empty string when not visible. Keep any visible six digit PIN code inside supplierAddress and buyerAddress. Return clean catalog item names: for Apple/iPhone products keep only product family, model/variant, and storage, for example 'Apple iPhone 17 256GB Blue SKU ABC123' becomes 'iPhone 17 256GB' and 'IPHONE 17 PRO MAX 512 NATURAL TITANIUM' becomes 'iPhone 17 Pro Max 512GB'. Remove colors, SKU/item/model codes, EAN, IMEI, serial, batch, and other supplier-only suffixes from item names. Separate CGST, SGST and IGST exactly as shown. If an item HSN/SAC is not visible, use default HSN 85171300. If payment lines show card cashback, cashback, debit note, or any post-total payment adjustment, return it in roundOff as a negative number; for example CARD CASH BACK - 6000 means roundOff -6000. Keep extractedTaxes.total as the invoice total before cashback, while total may be the net debited/payable total. For invoices that say values are inclusive of GST, including Reliance/Reliance Digital receipts, return each line rate as taxable value before GST, not MRP or paid gross amount, and set total to the net paid/invoice total. If an invoice has a GST receipt summary by HSN, prefer that summary for taxable, tax, and total values. Add reviewMessages for unclear buyer, supplier, GSTIN, address, unreadable values, payment adjustment, or tax mode mismatch."
             }
           ]
         },
@@ -136,6 +136,12 @@ Deno.serve(async request => {
     const invoice = parseJsonOutput(response);
     invoice.fileName = invoice.fileName || fileName;
     invoice.invoiceDate = toDateInput(invoice.invoiceDate);
+    if (!invoice.invoiceDate) {
+      invoice.reviewMessages = Array.isArray(invoice.reviewMessages) ? invoice.reviewMessages : [];
+      if (!invoice.reviewMessages.some((message: unknown) => /invoice date/i.test(String(message)))) {
+        invoice.reviewMessages.push("Invoice date was not readable. Enter it before saving.");
+      }
+    }
     return json({ invoice });
   } catch (error) {
     return json({ error: publicOpenAIError(error) }, 500);
@@ -188,29 +194,49 @@ function extractOutputText(response: Record<string, unknown>) {
 }
 
 function toDateInput(value: string) {
-  const cleaned = String(value || "").trim().replace(/,/g, "");
-  const iso = cleaned.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/(\d)(?:st|nd|rd|th)\b/gi, "$1")
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/(?:T|\s+)\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:\s*[AP]M)?(?:Z|[+\-]\d{2}:?\d{2})?$/i, "");
+  const iso = cleaned.match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})$/);
   if (iso) return dateInputFromParts(iso[1], iso[2], iso[3]);
-  const named = cleaned.match(/^(\d{1,2})[\/\-.\s]([A-Za-z]{3,9})[\/\-.\s](\d{2,4})$/);
-  if (named) {
-    const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-    const monthText = named[2].toLowerCase();
-    const monthIndex = monthNames.findIndex(month => month.startsWith(monthText) || monthText.startsWith(month.slice(0, 3)));
-    if (monthIndex >= 0) return dateInputFromParts(named[3], monthIndex + 1, named[1]);
-  }
-  const numeric = cleaned.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  const dayFirstNamed = cleaned.match(/^(\d{1,2})[\s\/\-.]+([A-Za-z]{3,9})[\s\/\-.]+(\d{2,4})$/);
+  if (dayFirstNamed) return dateInputFromParts(dayFirstNamed[3], invoiceMonthNumber(dayFirstNamed[2]), dayFirstNamed[1]);
+  const monthFirstNamed = cleaned.match(/^([A-Za-z]{3,9})[\s\/\-.]+(\d{1,2})[\s\/\-.]+(\d{2,4})$/);
+  if (monthFirstNamed) return dateInputFromParts(monthFirstNamed[3], invoiceMonthNumber(monthFirstNamed[1]), monthFirstNamed[2]);
+  const yearFirstNamed = cleaned.match(/^(\d{4})[\s\/\-.]+([A-Za-z]{3,9})[\s\/\-.]+(\d{1,2})$/);
+  if (yearFirstNamed) return dateInputFromParts(yearFirstNamed[1], invoiceMonthNumber(yearFirstNamed[2]), yearFirstNamed[3]);
+  const compactNamed = cleaned.match(/^(\d{1,2})([A-Za-z]{3,9})(\d{2,4})$/);
+  if (compactNamed) return dateInputFromParts(compactNamed[3], invoiceMonthNumber(compactNamed[2]), compactNamed[1]);
+  const numeric = cleaned.match(/^(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2,4})$/);
   if (numeric) return dateInputFromParts(numeric[3], numeric[2], numeric[1]);
-  return new Date().toISOString().slice(0, 10);
+  const compact = cleaned.replace(/\s/g, "");
+  if (/^\d{8}$/.test(compact)) {
+    return /^(?:19|20)/.test(compact)
+      ? dateInputFromParts(compact.slice(0, 4), compact.slice(4, 6), compact.slice(6, 8))
+      : dateInputFromParts(compact.slice(4, 8), compact.slice(2, 4), compact.slice(0, 2));
+  }
+  if (/^\d{6}$/.test(compact)) return dateInputFromParts(compact.slice(4, 6), compact.slice(2, 4), compact.slice(0, 2));
+  return "";
+}
+
+function invoiceMonthNumber(value: string) {
+  const token = String(value || "").trim().toLowerCase().slice(0, 3);
+  const index = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(token);
+  return index >= 0 ? index + 1 : 0;
 }
 
 function dateInputFromParts(yearValue: string, monthValue: string | number, dayValue: string | number) {
+  if (!monthValue) return "";
   const yearText = String(yearValue || "");
   const year = Number(yearText.length === 2 ? `20${yearText}` : yearText);
   const month = Number(monthValue);
   const day = Number(dayValue);
   const date = new Date(Date.UTC(year, month - 1, day));
   if (!year || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
-    return new Date().toISOString().slice(0, 10);
+    return "";
   }
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
