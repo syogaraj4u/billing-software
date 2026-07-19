@@ -1,0 +1,43 @@
+{
+  "name": "nirvana-billing-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native iOS and Android applications for Nirvana Billing.",
+  "scripts": {
+    "mobile:build": "node scripts/build-mobile.mjs",
+    "mobile:sync": "npm run mobile:build && cap sync",
+    "mobile:add:ios": "npm run mobile:build && cap add ios",
+    "mobile:add:android": "npm run mobile:build && cap add android",
+    "mobile:source-assets": "node scripts/generate-mobile-source-assets.mjs",
+    "mobile:assets": "npm run mobile:source-assets && capacitor-assets generate --ios --android",
+    "mobile:open:ios": "npm run mobile:sync && cap open ios",
+    "mobile:open:android": "npm run mobile:sync && cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/filesystem": "^8.0.0",
+    "@capacitor/ios": "^8.4.2",
+    "@capacitor/keyboard": "^8.0.0",
+    "@capacitor/network": "^8.0.0",
+    "@capacitor/share": "^8.0.0",
+    "@capacitor/splash-screen": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0",
+    "@supabase/supabase-js": "^2.90.1",
+    "exceljs": "^4.4.0",
+    "lucide": "^0.562.0",
+    "pdfjs-dist": "4.10.38"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.4.2",
+    "esbuild": "^0.27.2",
+    "sharp": "^0.34.5"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
+  }
+}

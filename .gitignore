@@ -1,0 +1,12 @@
+node_modules/
+mobile/www/
+output/
+outputs/
+tmp/
+supabase/.temp/
+ios/App/Pods/
+ios/DerivedData/
+android/.gradle/
+android/app/build/
+android/build/
+.DS_Store

@@ -2450,11 +2450,20 @@ function updateDeviceViewMode() {
 }
 
 function registerServiceWorker() {
-  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  if (window.NativeBilling?.isNative || !("serviceWorker" in navigator) || location.protocol === "file:") return;
   navigator.serviceWorker
     .register("./service-worker.js", { updateViaCache: "none" })
     .then(registration => registration.update())
     .catch(() => {});
+}
+
+let reconnectSyncTimer = null;
+
+function handleNetworkReconnect() {
+  clearTimeout(reconnectSyncTimer);
+  reconnectSyncTimer = setTimeout(() => {
+    if (cloudSession && cloudWorkspace) syncCloudNow(false);
+  }, 500);
 }
 
 function bindIf(selector, eventName, handler) {
@@ -2601,6 +2610,7 @@ function bindEvents() {
   window.addEventListener("resize", fitInvoicePreview);
   window.addEventListener("orientationchange", updateDeviceViewMode);
   window.addEventListener("orientationchange", fitInvoicePreview);
+  window.addEventListener("online", handleNetworkReconnect);
   $("#purchaseRegisterBtn").addEventListener("click", exportPurchaseRegister);
   $("#reportFrom").addEventListener("change", renderReport);
   $("#reportTo").addEventListener("change", renderReport);
@@ -4626,6 +4636,23 @@ async function handleBankStatementUpload(event) {
 }
 
 async function readBankStatementMatrix(file) {
+  if (window.ExcelJS) {
+    const workbook = new window.ExcelJS.Workbook();
+    await workbook.xlsx.load(await file.arrayBuffer());
+    const sheets = workbook.worksheets.map(worksheet => {
+      const rows = [];
+      worksheet.eachRow({ includeEmpty: false }, row => {
+        const values = [];
+        for (let column = 1; column <= Math.max(worksheet.columnCount, row.cellCount); column += 1) {
+          values.push(excelStatementCellValue(row.getCell(column).value));
+        }
+        if (values.some(value => String(value ?? "").trim())) rows.push(values);
+      });
+      return rows;
+    }).filter(rows => rows.length);
+    if (!sheets.length) throw new Error("The statement file is empty");
+    return sheets.sort((a, b) => statementLayoutScore(b) - statementLayoutScore(a))[0];
+  }
   if (window.XLSX) {
     const buffer = await file.arrayBuffer();
     const workbook = window.XLSX.read(buffer, { type: "array", cellDates: true, raw: true });
@@ -4639,6 +4666,16 @@ async function readBankStatementMatrix(file) {
   }
   if (!/\.csv$/i.test(file.name)) throw new Error("Excel reader is unavailable. Upload a CSV file instead");
   return parseCsvMatrix(await file.text());
+}
+
+function excelStatementCellValue(value) {
+  if (value == null) return "";
+  if (value instanceof Date || typeof value !== "object") return value;
+  if (Object.prototype.hasOwnProperty.call(value, "result")) return excelStatementCellValue(value.result);
+  if (Array.isArray(value.richText)) return value.richText.map(part => part.text || "").join("");
+  if (typeof value.text === "string") return value.text;
+  if (typeof value.hyperlink === "string") return value.text || value.hyperlink;
+  return String(value);
 }
 
 function parseCsvMatrix(text) {
@@ -8862,8 +8899,8 @@ async function downloadInvoicePdf() {
   try {
     setInvoicePdfBusy(true);
     const blob = await buildInvoicePdfBlob();
-    downloadBlob(blob, currentInvoiceFileName);
-    toast("PDF downloaded");
+    await downloadBlob(blob, currentInvoiceFileName);
+    toast(window.NativeBilling?.isNative ? "PDF ready to save or share" : "PDF downloaded");
   } catch (error) {
     console.error(error);
     toast("Could not create PDF. Try Print instead.");
@@ -8931,6 +8968,7 @@ async function shareInvoiceToWhatsApp() {
 }
 
 function canTryNativeInvoiceFileShare(file) {
+  if (window.NativeBilling?.isNative && typeof window.NativeBilling.shareBlob === "function") return true;
   if (typeof navigator.share !== "function") return false;
   if (typeof navigator.canShare !== "function") return true;
   try {
@@ -8941,6 +8979,13 @@ function canTryNativeInvoiceFileShare(file) {
 }
 
 async function shareNativeInvoiceFile(file, text) {
+  if (window.NativeBilling?.isNative && typeof window.NativeBilling.shareBlob === "function") {
+    await window.NativeBilling.shareBlob(file, currentInvoiceFileName, {
+      title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
+      text
+    });
+    return;
+  }
   await navigator.share({
     title: currentInvoiceFileName.replace(/\.pdf$/i, ""),
     text,
@@ -10640,12 +10685,16 @@ function downloadCsv(rows, fileName) {
 }
 
 function downloadBlob(blob, fileName) {
+  if (window.NativeBilling?.isNative && typeof window.NativeBilling.saveOrShareBlob === "function") {
+    return window.NativeBilling.saveOrShareBlob(blob, fileName, { title: fileName });
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+  return Promise.resolve();
 }
 
 function csvCell(value) {
@@ -13312,7 +13361,9 @@ function buildManualReviewPurchase(file, message) {
 
 async function extractPdfText(file) {
   if (!window.pdfjsLib) throw new Error("PDF reader is not loaded");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = window.NativeBilling?.isNative
+    ? "./vendor/pdf.worker.min.mjs"
+    : "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const pages = [];
