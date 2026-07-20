@@ -13045,11 +13045,30 @@ function collectPurchaseImportReviewForm(form, currentParsed = {}) {
     supplierPlace
   }, {
     ...(currentParsed.ewayDetails || {}),
-    fromPincode: supplierPincode,
-    toPincode: ""
+    fromPincode: supplierPincode
   });
   const enteredDistance = Math.max(0, num(form.elements.ewayDistanceKm?.value));
   const distanceChanged = enteredDistance > 0 && enteredDistance !== num(currentEwayDetails.distanceKm);
+  const nextEwayProbe = normalizePurchaseEwayDetails({
+    ...currentEwayDetails,
+    transType: form.elements.ewayTransType?.value || "1",
+    destinationPreset: form.elements.ewayDestinationPreset?.value || "buyer",
+    dispatchFromAddress: form.elements.ewayDispatchFromAddress?.value.trim() || supplierAddress,
+    shipToAddress: form.elements.ewayShipToAddress?.value.trim() || "",
+    fromPincode: supplierPincode
+  });
+  const nextRoute = purchaseEwayRouteFromValues(profile, {
+    name: supplierName || "Supplier",
+    address: supplierAddress,
+    place: supplierPlace
+  }, nextEwayProbe);
+  const previousRouteKey = normalizeEwayRouteKey(currentParsed.ewayDetails?.routeKey || ewayRouteKey(
+    currentParsed.ewayDetails?.fromPincode,
+    currentParsed.ewayDetails?.toPincode
+  ));
+  const nextRouteKey = normalizeEwayRouteKey(nextRoute.routeKey || "");
+  const routeChanged = Boolean(previousRouteKey && nextRouteKey && previousRouteKey !== nextRouteKey);
+  const carriedDistance = routeChanged ? 0 : currentEwayDetails.distanceKm;
   const ewayDetails = purchaseImportEwayDetails({
     ...currentParsed,
     profileId: profile.id,
@@ -13062,16 +13081,15 @@ function collectPurchaseImportReviewForm(form, currentParsed = {}) {
     ...currentEwayDetails,
     transType: form.elements.ewayTransType?.value || "1",
     vehicleNo: normalizeVehicleNumber(form.elements.ewayVehicleNo?.value || ""),
-    distanceKm: enteredDistance || currentEwayDetails.distanceKm,
+    distanceKm: enteredDistance || carriedDistance,
     distanceSource: enteredDistance
       ? (distanceChanged ? "manual-confirmed" : currentEwayDetails.distanceSource)
-      : currentEwayDetails.distanceSource,
-    distanceConfirmed: enteredDistance ? true : currentEwayDetails.distanceConfirmed,
+      : routeChanged ? "" : currentEwayDetails.distanceSource,
+    distanceConfirmed: enteredDistance ? true : routeChanged ? false : currentEwayDetails.distanceConfirmed,
     destinationPreset: form.elements.ewayDestinationPreset?.value || "buyer",
     dispatchFromAddress: form.elements.ewayDispatchFromAddress?.value.trim() || supplierAddress,
     shipToAddress: form.elements.ewayShipToAddress?.value.trim() || "",
-    fromPincode: supplierPincode,
-    toPincode: ""
+    fromPincode: supplierPincode
   });
   return {
     ...currentParsed,
@@ -13105,6 +13123,7 @@ function updatePurchaseImportReviewTotals(event) {
     const target = $(`[data-import-total='${key}']`, form);
     if (target) target.textContent = money(value);
   });
+  maybeSchedulePurchaseImportDistanceFromForm(form, document, event.target.name);
 }
 
 function handlePurchaseImportReviewChange(event) {
@@ -13113,6 +13132,11 @@ function handlePurchaseImportReviewChange(event) {
   if (!form || !document) return;
   if (["ewayTransType", "ewayDestinationPreset"].includes(event.target.name)) {
     updatePurchaseImportEwayVisibility(form);
+    maybeSchedulePurchaseImportDistanceFromForm(form, document, event.target.name, true);
+    return;
+  }
+  if (["profileId", "supplierPincode", "supplierAddress", "ewayDispatchFromAddress", "ewayShipToAddress"].includes(event.target.name)) {
+    maybeSchedulePurchaseImportDistanceFromForm(form, document, event.target.name, true);
     return;
   }
   if (event.target.name !== "supplierLocationId") return;
@@ -13128,6 +13152,42 @@ function handlePurchaseImportReviewChange(event) {
   }
   const note = $(".purchase-import-memory-note span", form);
   if (note) note.textContent = "PIN restored from the shared supplier master.";
+  maybeSchedulePurchaseImportDistanceFromForm(form, document, event.target.name, true);
+}
+
+function maybeSchedulePurchaseImportDistanceFromForm(form, document, fieldName = "", force = false) {
+  const routeFields = new Set([
+    "profileId",
+    "supplierPincode",
+    "supplierAddress",
+    "supplierLocationId",
+    "ewayTransType",
+    "ewayDestinationPreset",
+    "ewayDispatchFromAddress",
+    "ewayShipToAddress"
+  ]);
+  if (!force && !routeFields.has(fieldName)) return;
+  if (num(form.elements.ewayDistanceKm?.value)) return;
+  const parsed = normalizePurchaseImportParsedForState(
+    collectPurchaseImportReviewForm(form, document.parsed),
+    document.fileName
+  );
+  const route = purchaseImportEwayRoute(parsed);
+  if (!route.fromPincode || !route.toPincode) return;
+  document.parsed = parsed;
+  touchPurchaseImportEntity(document);
+  saveState();
+  ensurePurchaseImportDistance(document).then(ewayDetails => {
+    if (!ewayDetails?.distanceKm) return;
+    if (form.dataset.importReviewId !== document.id) return;
+    if (!num(form.elements.ewayDistanceKm?.value)) {
+      form.elements.ewayDistanceKm.value = Math.max(1, Math.round(num(ewayDetails.distanceKm)));
+    }
+    renderPurchaseImportSummary(
+      purchaseImportBatchById(document.batchId),
+      purchaseImportDocuments(document.batchId)
+    );
+  }).catch(error => console.warn("Purchase import distance update failed", error));
 }
 
 function updatePurchaseImportEwayVisibility(form) {
