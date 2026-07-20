@@ -2645,6 +2645,7 @@ function bindEvents() {
   bindIf("#purchaseImportReviewPanel", "input", updatePurchaseImportReviewTotals);
   $("#ewayJsonBtn").addEventListener("click", exportSelectedEwayJson);
   $("#selectAllPurchases").addEventListener("change", toggleAllPurchases);
+  bindIf("#deleteSelectedPurchasesBtn", "click", deleteSelectedPurchases);
   $("#newItemBtn").addEventListener("click", () => openItem());
   $("#newPartyBtn").addEventListener("click", () => openParty(null, newPartyDialogOptions()));
   $$("[data-party-filter]").forEach(button => {
@@ -5320,17 +5321,34 @@ function bindPurchaseSelectors() {
 function updateSelectAllPurchases() {
   const control = $("#selectAllPurchases");
   if (!control) return;
-  const ids = monthFilteredEntries("purchase").filter(entry => !isCancelledEntry(entry)).map(entry => entry.id);
+  const ids = visibleSelectablePurchaseIds();
   const selectedCount = ids.filter(id => selectedPurchaseIds.has(id)).length;
   control.checked = ids.length > 0 && selectedCount === ids.length;
   control.indeterminate = selectedCount > 0 && selectedCount < ids.length;
+  const deleteButton = $("#deleteSelectedPurchasesBtn");
+  if (deleteButton) {
+    deleteButton.disabled = selectedCount === 0;
+    const label = deleteButton.querySelector("span");
+    if (label) label.textContent = selectedCount ? `Delete Selected (${selectedCount})` : "Delete Selected";
+  }
 }
 
 function toggleAllPurchases(event) {
   selectedPurchaseIds = event.target.checked
-    ? new Set(monthFilteredEntries("purchase").filter(entry => !isCancelledEntry(entry)).map(entry => entry.id))
+    ? new Set(visibleSelectablePurchaseIds())
     : new Set();
   renderEntries("purchase");
+}
+
+function visibleSelectablePurchaseIds() {
+  return monthFilteredEntries("purchase")
+    .filter(entry => !isCancelledEntry(entry))
+    .map(entry => entry.id);
+}
+
+function selectedVisiblePurchaseIds() {
+  const visibleIds = new Set(visibleSelectablePurchaseIds());
+  return [...selectedPurchaseIds].filter(id => visibleIds.has(id));
 }
 
 function renderItems() {
@@ -7109,33 +7127,64 @@ async function deleteEntry(kind, id) {
     cancelEntry(kind, id);
     return;
   }
-  const entry = entryList(kind).find(row => row.id === id);
-  if (!entry) return toast("Entry not found");
-  if (kind === "purchase" && entry?.source === "internal-sale") {
+  const ids = kind === "purchase" ? purchaseDeleteTargetIds(id) : [id];
+  await deleteEntries(kind, ids);
+}
+
+async function deleteSelectedPurchases() {
+  const ids = selectedVisiblePurchaseIds();
+  if (!ids.length) return toast("Select purchase bills first");
+  await deleteEntries("purchase", ids);
+}
+
+function purchaseDeleteTargetIds(clickedId = "") {
+  const selectedIds = selectedVisiblePurchaseIds();
+  if (clickedId && selectedIds.includes(clickedId) && selectedIds.length > 1) return selectedIds;
+  if (!clickedId) return selectedIds;
+  return [clickedId];
+}
+
+async function deleteEntries(kind, ids = []) {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  if (!uniqueIds.length) return toast("Entry not found");
+  const entries = uniqueIds
+    .map(id => entryList(kind).find(row => row.id === id))
+    .filter(Boolean);
+  if (!entries.length) return toast("Entry not found");
+  if (kind === "purchase" && entries.some(entry => entry?.source === "internal-sale")) {
     toast("Internal purchase is linked. Cancel the sales bill instead");
     return;
   }
-  if (!confirm("Delete this entry?")) return;
+  const count = entries.length;
+  const confirmText = count === 1
+    ? `Delete entry ${entries[0].number || ""}?`
+    : `Delete ${count} selected purchase entries?`;
+  if (!confirm(confirmText)) return;
   const key = kind === "purchase" ? "purchases" : "purchaseOrders";
-  const tombstone = recordEntryDeletion(kind, entry);
-  state[key] = state[key].filter(row => row.id !== id);
-  if (kind === "purchase") selectedPurchaseIds.delete(id);
+  const tombstones = entries.map(entry => recordEntryDeletion(kind, entry));
+  const deletedIds = new Set(entries.map(entry => entry.id));
+  state[key] = state[key].filter(row => !deletedIds.has(row.id));
+  if (kind === "purchase") entries.forEach(entry => selectedPurchaseIds.delete(entry.id));
   saveState({ skipCloud: true });
   renderAll();
   if (!cloudReadyForSync()) {
-    toast("Entry deleted locally. It will sync after cloud login");
+    toast(count === 1 ? "Entry deleted locally. It will sync after cloud login" : `${count} entries deleted locally. They will sync after cloud login`);
     return;
   }
   const synced = await syncCloudNow(false);
   if (synced) {
-    toast("Entry deleted and synced");
+    toast(count === 1 ? "Entry deleted and synced" : `${count} entries deleted and synced`);
     return;
   }
-  const pendingTombstone = state.deletionTombstones.find(row => deletionTombstoneMergeKey(row) === deletionTombstoneMergeKey(tombstone));
-  markEntitySyncStatus(pendingTombstone, SYNC_STATUS_FAILED);
+  tombstones.forEach(tombstone => {
+    const pendingTombstone = state.deletionTombstones.find(row => deletionTombstoneMergeKey(row) === deletionTombstoneMergeKey(tombstone));
+    markEntitySyncStatus(pendingTombstone, SYNC_STATUS_FAILED);
+  });
   saveState({ skipCloud: true });
   renderAll();
-  toast(`Entry deleted locally. Cloud sync failed${cloudFailureSuffix()}`);
+  toast(count === 1
+    ? `Entry deleted locally. Cloud sync failed${cloudFailureSuffix()}`
+    : `${count} entries deleted locally. Cloud sync failed${cloudFailureSuffix()}`);
 }
 
 function recordEntryDeletion(kind, entry) {
