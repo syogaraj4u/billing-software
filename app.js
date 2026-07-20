@@ -12612,7 +12612,7 @@ function renderPurchaseImportSummary(batch, documents = []) {
       : `<i data-lucide="check-check"></i><span>Approve &amp; Save ${approvalCount || ""}</span>`;
   }
   const discard = $("#purchaseImportDiscardBtn");
-  if (discard) discard.disabled = !batch || counts.processing > 0 || counts.approved > 0 || purchaseImportApproving;
+  if (discard) discard.disabled = !batch || !documents.length || counts.processing > 0 || purchaseImportApproving;
 
   const extractionDone = !counts.processing;
   const reviewDone = Boolean(documents.length && documents.every(document => ["ready", "duplicate", "approved"].includes(document.status)));
@@ -13485,9 +13485,13 @@ async function discardActivePurchaseImportBatch() {
   const batch = purchaseImportBatchById(activePurchaseImportBatchId);
   if (!batch) return;
   const documents = purchaseImportDocuments(batch.id);
-  if (documents.some(document => document.status === "approved")) return toast("Approved batches cannot be discarded");
-  if (!confirm(`Discard ${documents.length} uploaded invoice${documents.length === 1 ? "" : "s"}?`)) return;
-  const storagePaths = documents.flatMap(document => document.parsed?.attachments || [])
+  const approvedCount = documents.filter(document => document.status === "approved").length;
+  const pendingCount = documents.length - approvedCount;
+  const message = approvedCount
+    ? `Clear this import batch from the inbox? ${approvedCount} approved purchase${approvedCount === 1 ? "" : "s"} will stay saved. ${pendingCount} unapproved upload${pendingCount === 1 ? "" : "s"} will be discarded.`
+    : `Discard ${documents.length} uploaded invoice${documents.length === 1 ? "" : "s"}?`;
+  if (!confirm(message)) return;
+  const storagePaths = documents.filter(document => document.status !== "approved").flatMap(document => document.parsed?.attachments || [])
     .filter(attachment => attachment.bucket === PURCHASE_ATTACHMENT_BUCKET && attachment.storagePath)
     .map(attachment => attachment.storagePath);
   purchaseUploadQueue = purchaseUploadQueue.filter(job => job.batchId !== batch.id);
@@ -13502,7 +13506,7 @@ async function discardActivePurchaseImportBatch() {
     const { error } = await cloudClient.storage.from(PURCHASE_ATTACHMENT_BUCKET).remove(storagePaths);
     if (error) console.warn("Could not remove discarded purchase files", error);
   }
-  toast("Import batch discarded");
+  toast(approvedCount ? "Import batch cleared. Approved purchases are still saved." : "Import batch discarded");
 }
 
 function applyPurchasePaymentAdjustments(parsed = {}, text = "") {
