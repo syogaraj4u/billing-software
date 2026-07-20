@@ -523,6 +523,7 @@ let activePurchaseImportBatchId = "";
 let activePurchaseImportDocumentId = "";
 let purchaseImportApproving = false;
 const purchaseImportFiles = new Map();
+const purchaseImportDistanceRequests = new Map();
 const PURCHASE_IMPORT_CONCURRENCY = 2;
 let purchaseImportCloudSyncChain = Promise.resolve();
 let entryDraftMeta = {};
@@ -1846,6 +1847,7 @@ function mobilePurchaseUsesSpecificMonth(kind) {
 
 function selectedEntryMonth(kind) {
   const selected = entryMonthFilters[kind] || defaultEntryMonth(kind);
+  if (kind === "purchase" && selected === ALL_MONTHS_KEY) return ALL_MONTHS_KEY;
   return mobilePurchaseUsesSpecificMonth(kind) && selected === ALL_MONTHS_KEY
     ? defaultEntryMonth(kind)
     : selected;
@@ -6106,6 +6108,52 @@ function scheduleEwayDistanceEstimate(route) {
   ewayDistanceEstimateKey = key;
   clearTimeout(ewayDistanceEstimateTimer);
   ewayDistanceEstimateTimer = setTimeout(() => estimateEwayDistanceWithCloud(route, key), 700);
+}
+
+async function resolveEwayDistanceForRoute(route = {}) {
+  const routeKey = ewayDistanceEstimateRouteKey(route);
+  if (!route.fromPincode || !route.toPincode || !routeKey.replace(/\|/g, "").trim()) return null;
+  const samePinDistance = samePincodeDistanceKm(route);
+  if (samePinDistance) {
+    return { distanceKm: samePinDistance, source: "same-pincode", confirmed: true };
+  }
+  const fixedDistance = fixedEwayRouteDistance(route.fromPincode, route.toPincode);
+  if (fixedDistance) {
+    return { distanceKm: fixedDistance, source: "configured-route", confirmed: true };
+  }
+  if (route.savedDistance) {
+    return { distanceKm: route.savedDistance, source: "shared-cache", confirmed: true };
+  }
+  if (cloudConfigured() && cloudClient && cloudSession) {
+    try {
+      const { data, error } = await cloudClient.functions.invoke(EWAY_DISTANCE_FUNCTION, {
+        body: {
+          fromAddress: route.fromAddress,
+          toAddress: route.toAddress,
+          fromPincode: route.fromPincode,
+          toPincode: route.toPincode
+        }
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      if (!data?.fallbackRequired) {
+        const distanceKm = Math.max(1, Math.round(num(data?.distanceKm)));
+        if (distanceKm) {
+          return {
+            distanceKm,
+            source: data?.source === "shared-cache" ? "shared-cache" : data?.source || "google-routes",
+            confirmed: true
+          };
+        }
+      }
+    } catch (error) {
+      console.warn("E-way distance resolver unavailable", error);
+    }
+  }
+  const estimatedDistance = calculateEwayDistance(route.fromPincode, route.toPincode);
+  return estimatedDistance
+    ? { distanceKm: estimatedDistance, source: "local-estimate", confirmed: false }
+    : null;
 }
 
 async function estimateEwayDistanceWithCloud(route, key) {
@@ -12521,6 +12569,7 @@ function renderPurchaseImportInbox() {
   panel.innerHTML = activeDocument ? renderPurchaseImportReview(activeDocument) : '<div class="purchase-import-empty"><div><i data-lucide="files"></i><strong>Select an invoice</strong></div></div>';
   renderPurchaseImportSummary(batch, documents);
   if (window.lucide) lucide.createIcons();
+  if (activeDocument) schedulePurchaseImportDistanceAutofill(activeDocument);
 }
 
 function renderPurchaseImportSummary(batch, documents = []) {
@@ -12710,6 +12759,78 @@ function purchaseImportEwayDetails(parsed = {}, overrides = {}) {
     distanceSource,
     distanceConfirmed: Boolean(distanceKm) && distanceSource !== "local-estimate"
   });
+}
+
+function purchaseImportEwayRoute(parsed = {}, details = purchaseImportEwayDetails(parsed)) {
+  const profile = profileByImportParsed(parsed) || profileById(parsed.profileId || activeProfileId()) || activeProfile();
+  const supplier = {
+    name: parsed.supplierName || "Supplier",
+    address: parsed.supplierAddress || "",
+    place: parsed.supplierPlace || ""
+  };
+  return purchaseEwayRouteFromValues(profile, supplier, details);
+}
+
+async function resolvePurchaseImportEwayDetails(parsed = {}) {
+  const currentDetails = purchaseImportEwayDetails(parsed);
+  if (num(currentDetails.distanceKm)) return currentDetails;
+  const route = purchaseImportEwayRoute(parsed, currentDetails);
+  const result = await resolveEwayDistanceForRoute(route);
+  if (!result?.distanceKm) return currentDetails;
+  return normalizePurchaseEwayDetails({
+    ...currentDetails,
+    fromPincode: route.fromPincode,
+    toPincode: route.toPincode,
+    routeKey: route.routeKey,
+    distanceKm: result.distanceKm,
+    distanceSource: result.source,
+    distanceConfirmed: result.confirmed
+  });
+}
+
+async function ensurePurchaseImportDistance(document) {
+  if (!document || ["approved", "duplicate", "failed", "queued", "extracting"].includes(document.status)) return null;
+  const parsed = document.parsed || {};
+  if (num(parsed.ewayDetails?.distanceKm)) return parsed.ewayDetails;
+  const route = purchaseImportEwayRoute(parsed);
+  const requestKey = `${document.id}:${route.routeKey || ewayDistanceEstimateRouteKey(route)}`;
+  if (purchaseImportDistanceRequests.has(requestKey)) return purchaseImportDistanceRequests.get(requestKey);
+  const request = (async () => {
+    const ewayDetails = await resolvePurchaseImportEwayDetails(parsed);
+    if (!num(ewayDetails.distanceKm) || num(document.parsed?.ewayDetails?.distanceKm)) return ewayDetails;
+    document.parsed = normalizePurchaseImportParsedForState({
+      ...document.parsed,
+      ewayDetails
+    }, document.fileName);
+    refreshPurchaseImportBatchValidation(document.batchId);
+    touchPurchaseImportEntity(document);
+    saveState();
+    return ewayDetails;
+  })();
+  purchaseImportDistanceRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    purchaseImportDistanceRequests.delete(requestKey);
+  }
+}
+
+function schedulePurchaseImportDistanceAutofill(document) {
+  if (!document || num(document.parsed?.ewayDetails?.distanceKm)) return;
+  const route = purchaseImportEwayRoute(document.parsed || {});
+  if (!route.fromPincode || !route.toPincode) return;
+  ensurePurchaseImportDistance(document).then(ewayDetails => {
+    if (!ewayDetails?.distanceKm || activePurchaseImportDocumentId !== document.id) return;
+    const form = $("#purchaseImportReviewForm");
+    if (form?.dataset.importReviewId !== document.id) return;
+    if (form.elements.ewayDistanceKm && !num(form.elements.ewayDistanceKm.value)) {
+      form.elements.ewayDistanceKm.value = Math.max(1, Math.round(num(ewayDetails.distanceKm)));
+    }
+    renderPurchaseImportSummary(
+      purchaseImportBatchById(document.batchId),
+      purchaseImportDocuments(document.batchId)
+    );
+  }).catch(error => console.warn("Purchase import distance autofill failed", error));
 }
 
 function renderPurchaseImportEwayFields(details = {}) {
@@ -12941,11 +13062,11 @@ function collectPurchaseImportReviewForm(form, currentParsed = {}) {
     ...currentEwayDetails,
     transType: form.elements.ewayTransType?.value || "1",
     vehicleNo: normalizeVehicleNumber(form.elements.ewayVehicleNo?.value || ""),
-    distanceKm: enteredDistance,
+    distanceKm: enteredDistance || currentEwayDetails.distanceKm,
     distanceSource: enteredDistance
       ? (distanceChanged ? "manual-confirmed" : currentEwayDetails.distanceSource)
-      : "",
-    distanceConfirmed: Boolean(enteredDistance),
+      : currentEwayDetails.distanceSource,
+    distanceConfirmed: enteredDistance ? true : currentEwayDetails.distanceConfirmed,
     destinationPreset: form.elements.ewayDestinationPreset?.value || "buyer",
     dispatchFromAddress: form.elements.ewayDispatchFromAddress?.value.trim() || supplierAddress,
     shipToAddress: form.elements.ewayShipToAddress?.value.trim() || "",
@@ -13095,6 +13216,7 @@ async function approveSelectedPurchaseImports() {
   let failedCount = 0;
   for (const document of documents) {
     try {
+      await ensurePurchaseImportDistance(document);
       const duplicate = purchaseImportExistingDuplicate(document.parsed);
       if (duplicate) throw new Error(`Invoice ${document.parsed.invoiceNumber} is already saved`);
       const entry = createPurchaseEntryFromImportDocument(document);
@@ -13116,6 +13238,7 @@ async function approveSelectedPurchaseImports() {
   }
   refreshPurchaseImportBatchValidation(batch.id);
   updatePurchaseImportBatchProgress(batch.id);
+  applyPurchaseImportSavedMonthFilter(savedEntries);
   saveState();
   renderAll();
   const canSyncNow = cloudReadyForSync();
@@ -13132,6 +13255,12 @@ async function approveSelectedPurchaseImports() {
   if (failedCount) toast(`${savedText}. ${failedCount} needs review.`);
   else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
   else toast(canSyncNow ? `${savedText} and synced` : savedText);
+}
+
+function applyPurchaseImportSavedMonthFilter(savedEntries = []) {
+  const months = [...new Set(savedEntries.map(entryMonthKey).filter(Boolean))];
+  if (!months.length) return;
+  entryMonthFilters.purchase = months.length === 1 ? months[0] : ALL_MONTHS_KEY;
 }
 
 function createPurchaseEntryFromImportDocument(document) {
