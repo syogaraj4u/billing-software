@@ -13282,6 +13282,7 @@ async function approveSelectedPurchaseImports() {
   const batch = purchaseImportBatchById(activePurchaseImportBatchId);
   if (!batch) return;
   persistActivePurchaseImportDraft();
+  const copiedVehicleCount = propagatePurchaseImportBatchVehicles(batch.id);
   refreshPurchaseImportBatchValidation(batch.id);
   const documents = purchaseImportApprovalDocuments(batch.id);
   if (!documents.length) {
@@ -13336,9 +13337,10 @@ async function approveSelectedPurchaseImports() {
   const savedText = `${savedEntries.length} purchase${savedEntries.length === 1 ? "" : "s"} saved`;
   const companyText = purchaseImportSavedCompanySummary(savedEntries);
   const failedText = purchaseImportFailedSummary(failedDocuments);
-  if (failedDocuments.length) toast(`${savedText}${companyText}. ${failedDocuments.length} needs review${failedText}.`);
+  const vehicleText = copiedVehicleCount ? ` Vehicle copied to ${copiedVehicleCount} invoice${copiedVehicleCount === 1 ? "" : "s"}.` : "";
+  if (failedDocuments.length) toast(`${savedText}${companyText}. ${failedDocuments.length} needs review${failedText}.${vehicleText}`);
   else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
-  else toast(canSyncNow ? `${savedText}${companyText} and synced` : `${savedText}${companyText}`);
+  else toast(`${canSyncNow ? `${savedText}${companyText} and synced` : `${savedText}${companyText}`}.${vehicleText}`.trim());
 }
 
 function purchaseImportApprovalDocuments(batchId) {
@@ -13351,13 +13353,12 @@ function propagatePurchaseImportVehicle(sourceDocument) {
   const sourceParsed = sourceDocument?.parsed || {};
   const vehicleNo = normalizeVehicleNumber(sourceParsed.ewayDetails?.vehicleNo || "");
   if (!sourceDocument || !vehicleNo) return 0;
-  const supplierKey = purchaseImportSupplierGroupKey(sourceParsed);
-  if (!supplierKey) return 0;
+  if (!purchaseImportSupplierGroupKeys(sourceParsed).length) return 0;
   let changedCount = 0;
   purchaseImportDocuments(sourceDocument.batchId).forEach(document => {
     if (document.id === sourceDocument.id) return;
     if (["approved", "duplicate", "failed", "queued", "extracting", "approving"].includes(document.status)) return;
-    if (purchaseImportSupplierGroupKey(document.parsed || {}) !== supplierKey) return;
+    if (!purchaseImportSameSupplier(sourceParsed, document.parsed || {})) return;
     const currentDetails = normalizePurchaseEwayDetails(document.parsed?.ewayDetails || {});
     if (currentDetails.vehicleNo === vehicleNo) return;
     document.parsed = normalizePurchaseImportParsedForState({
@@ -13373,11 +13374,28 @@ function propagatePurchaseImportVehicle(sourceDocument) {
   return changedCount;
 }
 
-function purchaseImportSupplierGroupKey(parsed = {}) {
+function propagatePurchaseImportBatchVehicles(batchId) {
+  let changedCount = 0;
+  purchaseImportDocuments(batchId)
+    .filter(document => normalizeVehicleNumber(document.parsed?.ewayDetails?.vehicleNo || ""))
+    .forEach(document => {
+      changedCount += propagatePurchaseImportVehicle(document);
+    });
+  return changedCount;
+}
+
+function purchaseImportSameSupplier(left = {}, right = {}) {
+  const leftKeys = new Set(purchaseImportSupplierGroupKeys(left));
+  return purchaseImportSupplierGroupKeys(right).some(key => leftKeys.has(key));
+}
+
+function purchaseImportSupplierGroupKeys(parsed = {}) {
   const gstin = normalizeGstin(parsed.supplierGstin);
-  if (gstin) return `gstin:${gstin}`;
   const name = normalizeMergeText(parsed.supplierName);
-  return name ? `name:${name}` : "";
+  return [
+    gstin ? `gstin:${gstin}` : "",
+    name ? `name:${name}` : ""
+  ].filter(Boolean);
 }
 
 function applyPurchaseImportSavedView(savedEntries = []) {
