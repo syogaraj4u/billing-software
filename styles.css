@@ -1990,6 +1990,94 @@ html.native-app body {
   font-size: 15px;
 }
 
+.app-health-panel {
+  padding: 0;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+
+.app-health-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.app-health-grid div {
+  background: #fff;
+  padding: 15px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.app-health-grid span,
+.app-error-head span,
+.app-error-row span,
+.app-error-row small,
+.app-error-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app-health-grid strong,
+.app-error-head strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.app-health-grid small {
+  color: var(--muted);
+  min-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-error-head {
+  border-top: 1px solid var(--line);
+  padding: 14px 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.app-error-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.app-error-log {
+  border-top: 1px solid var(--line);
+  display: grid;
+}
+
+.app-error-row,
+.app-error-empty {
+  padding: 12px 15px;
+  border-top: 1px solid #edf2f4;
+}
+
+.app-error-row:first-child,
+.app-error-empty:first-child {
+  border-top: 0;
+}
+
+.app-error-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 140px;
+  gap: 12px;
+  align-items: center;
+}
+
+.app-error-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cloud-dialog-body {
   padding: 18px 20px 20px;
 }
@@ -3744,6 +3832,16 @@ html.native-app body {
   .dashboard-action-grid,
   .metric-grid, .split-layout, .report-grid, .cloud-settings, .form-grid, .settings-grid {
     grid-template-columns: 1fr;
+  }
+  .app-health-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .app-error-head {
+    align-items: flex-start;
+  }
+  .app-error-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
   .dashboard-action-grid {
     min-height: calc(100dvh - 220px);

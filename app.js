@@ -1,6 +1,9 @@
 const STORAGE_KEY = "billingSoftware.v1";
 const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
+const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
+const APP_VERSION = "1.0.0";
+const APP_BUILD = "2026.07.20.1";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -1759,6 +1762,45 @@ function toast(message) {
   node.classList.add("show");
   clearTimeout(node.timer);
   node.timer = setTimeout(() => node.classList.remove("show"), 2300);
+  recordAppError(message);
+  renderAppHealth();
+}
+
+function shouldRecordAppMessage(message) {
+  return /failed|error|could not|invalid|missing|not ready|not configured|permission|denied|duplicate|unavailable/i.test(String(message || ""));
+}
+
+function appErrorLog() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(APP_ERROR_LOG_KEY) || "[]");
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordAppError(message, details = "") {
+  const cleanMessage = String(message || "").trim();
+  if (!cleanMessage || !shouldRecordAppMessage(cleanMessage)) return;
+  const entries = appErrorLog();
+  const latest = entries[0];
+  const now = new Date().toISOString();
+  if (latest?.message === cleanMessage && Date.now() - new Date(latest.at || 0).getTime() < 5000) return;
+  entries.unshift({
+    id: uid(),
+    at: now,
+    message: cleanMessage,
+    details: String(details || "").trim(),
+    view: currentView || "dashboard",
+    profile: activeProfile()?.businessName || activeProfile()?.label || ""
+  });
+  localStorage.setItem(APP_ERROR_LOG_KEY, JSON.stringify(entries.slice(0, 40)));
+}
+
+function clearAppErrorLog() {
+  localStorage.removeItem(APP_ERROR_LOG_KEY);
+  renderAppHealth();
+  toast("Error log cleared");
 }
 
 function entryList(kind) {
@@ -2633,6 +2675,9 @@ function bindEvents() {
   $("#addPartyAliasBtn").addEventListener("click", addPartyAliasFromInput);
   $("#partyAliasInput").addEventListener("keydown", handlePartyAliasInputKeydown);
   $("#saveSettingsBtn").addEventListener("click", saveSettings);
+  bindIf("#healthRetrySyncBtn", "click", retryHealthSync);
+  bindIf("#healthExportBackupBtn", "click", exportBackup);
+  bindIf("#healthClearLogBtn", "click", clearAppErrorLog);
   $("#changeCompanyBtn").addEventListener("click", openCompanySelector);
   $("#settingsForm").elements.profileId.addEventListener("change", renderSettings);
   $("#topbarLogoffBtn").addEventListener("click", signOutFromCloud);
@@ -2726,6 +2771,7 @@ function renderAll() {
   renderSettings();
   renderReport();
   renderCloudUi();
+  renderAppHealth();
   if (window.lucide) lucide.createIcons();
 }
 
@@ -2967,6 +3013,7 @@ function renderCloudUi() {
   $("#cloudWorkspaceName").value = cloudWorkspace?.name || "";
   $("#cloudMemberEmails").value = (cloudWorkspace?.member_emails || []).join("\n");
   renderAppVisibility();
+  renderAppHealth();
 }
 
 async function signInToBillingApp(event) {
@@ -4190,6 +4237,70 @@ function renderDashboard() {
   if (window.lucide) lucide.createIcons();
 }
 
+function syncTrackedEntities() {
+  return [
+    ...state.parties,
+    ...state.items,
+    ...state.sales,
+    ...state.creditNotes,
+    ...state.purchases,
+    ...state.purchaseReturns,
+    ...state.purchaseOrders,
+    ...state.paymentSources,
+    ...state.bankTransactions,
+    ...state.tallySyncRuns,
+    ...state.purchaseImportBatches,
+    ...state.purchaseImportDocuments,
+    ...state.deletionTombstones
+  ];
+}
+
+function syncStatusCounts() {
+  return syncTrackedEntities().reduce((counts, entity = {}) => {
+    const status = entity.syncStatus || SYNC_STATUS_SYNCED;
+    counts.total += 1;
+    if (status === SYNC_STATUS_SYNCED) counts.synced += 1;
+    else if (status === SYNC_STATUS_FAILED) counts.failed += 1;
+    else if (status === SYNC_STATUS_SYNCING) counts.syncing += 1;
+    else counts.local += 1;
+    return counts;
+  }, { total: 0, synced: 0, syncing: 0, local: 0, failed: 0 });
+}
+
+function renderAppHealth() {
+  if (!$("#appHealthGrid")) return;
+  const counts = syncStatusCounts();
+  const pending = counts.syncing + counts.local + counts.failed;
+  const configured = cloudConfigured();
+  const signedIn = Boolean(cloudSession);
+  const connected = Boolean(cloudWorkspace);
+  $("#healthCloudStatus").textContent = !configured ? "Not configured" : signedIn && connected ? "Connected" : signedIn ? "Signed in" : "Signed out";
+  $("#healthCloudDetail").textContent = connected
+    ? `${cloudWorkspace.name || "Workspace"} · ${cloudSession?.user?.email || ""}`.trim()
+    : configured ? "Login required" : "Supabase config missing";
+  $("#healthSyncSummary").textContent = pending ? `${pending} pending` : "All synced";
+  $("#healthSyncDetail").textContent = `${counts.synced}/${counts.total} records synced`;
+  $("#healthPendingSummary").textContent = counts.failed ? `${counts.failed} failed` : counts.syncing ? `${counts.syncing} syncing` : counts.local ? `${counts.local} local` : "Clear";
+  $("#healthPendingDetail").textContent = lastCloudSyncError || "No current sync error";
+  $("#healthVersionSummary").textContent = `v${APP_VERSION}`;
+  $("#healthVersionDetail").textContent = `Build ${APP_BUILD}`;
+  const errors = appErrorLog();
+  $("#healthErrorSummary").textContent = errors.length ? `${errors.length} recent issue${errors.length === 1 ? "" : "s"}` : "No errors logged";
+  $("#appErrorLog").innerHTML = errors.length ? errors.slice(0, 8).map(error => `
+    <div class="app-error-row">
+      <span>${escapeHtml(new Date(error.at).toLocaleString("en-IN"))}</span>
+      <strong>${escapeHtml(error.message)}</strong>
+      <small>${escapeHtml([error.profile, error.view].filter(Boolean).join(" · "))}</small>
+    </div>
+  `).join("") : `<div class="app-error-empty">No recent app errors.</div>`;
+}
+
+async function retryHealthSync() {
+  const synced = await syncCloudNow(true);
+  renderAppHealth();
+  if (!synced && !cloudReadyForSync()) toast("Sign in to sync cloud data");
+}
+
 function defaultReconciliationMonth() {
   return today().slice(0, 7);
 }
@@ -5359,6 +5470,7 @@ function renderSettings() {
   form.elements.reportEmails.value = state.settings.reportEmails || "";
   form.elements.ewayVehicleNo.value = state.settings.ewayDefaults?.vehicleNo || "";
   form.elements.ewayDistanceKm.value = num(state.settings.ewayDefaults?.distanceKm) || "";
+  renderAppHealth();
 }
 
 function emptyRow(colspan, label) {
