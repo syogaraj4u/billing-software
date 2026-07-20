@@ -12606,7 +12606,7 @@ function renderPurchaseImportSummary(batch, documents = []) {
   const approve = $("#purchaseImportApproveBtn");
   if (approve) {
     const approvalCount = selected.length || ready.length;
-    approve.disabled = !ready.length || counts.processing > 0 || purchaseImportApproving;
+    approve.disabled = !batch || !documents.length || counts.processing > 0 || purchaseImportApproving;
     approve.innerHTML = purchaseImportApproving
       ? '<i data-lucide="loader-circle"></i><span>Saving...</span>'
       : `<i data-lucide="check-check"></i><span>Approve &amp; Save ${approvalCount || ""}</span>`;
@@ -13291,57 +13291,63 @@ async function approveSelectedPurchaseImports() {
     return toast("No ready invoices to approve. Open the highlighted invoices and fix required fields.");
   }
   purchaseImportApproving = true;
-  documents.forEach(document => { document.status = "approving"; });
-  renderPurchaseImportInbox();
-  const savedEntries = [];
-  const failedDocuments = [];
-  for (const document of documents) {
-    try {
-      await ensurePurchaseImportDistance(document);
-      const duplicate = purchaseImportExistingDuplicate(document.parsed);
-      if (duplicate) throw new Error(`Invoice ${document.parsed.invoiceNumber} is already saved`);
-      const entry = createPurchaseEntryFromImportDocument(document);
-      await rememberPurchaseEwayRoute(entry.ewayDetails);
-      savedEntries.push(entry);
-      document.status = "approved";
-      document.selected = false;
-      document.approvedPurchaseId = entry.id;
-      document.error = "";
-      touchPurchaseImportEntity(document);
-      updatePurchaseImportBatchProgress(batch.id);
-      saveState({ skipCloud: true });
-    } catch (error) {
-      failedDocuments.push(document);
-      document.status = "needs-review";
-      document.selected = false;
-      document.error = String(error?.message || error || "Could not save purchase");
-      document.validationErrors = uniqueMessages([document.error, ...(document.validationErrors || [])]);
-      touchPurchaseImportEntity(document);
+  try {
+    documents.forEach(document => { document.status = "approving"; });
+    renderPurchaseImportInbox();
+    const savedEntries = [];
+    const failedDocuments = [];
+    for (const document of documents) {
+      try {
+        await ensurePurchaseImportDistance(document);
+        const duplicate = purchaseImportExistingDuplicate(document.parsed);
+        if (duplicate) throw new Error(`Invoice ${document.parsed.invoiceNumber} is already saved`);
+        const entry = createPurchaseEntryFromImportDocument(document);
+        await rememberPurchaseEwayRoute(entry.ewayDetails);
+        savedEntries.push(entry);
+        document.status = "approved";
+        document.selected = false;
+        document.approvedPurchaseId = entry.id;
+        document.error = "";
+        touchPurchaseImportEntity(document);
+        updatePurchaseImportBatchProgress(batch.id);
+        saveState({ skipCloud: true });
+      } catch (error) {
+        failedDocuments.push(document);
+        document.status = "needs-review";
+        document.selected = false;
+        document.error = String(error?.message || error || "Could not save purchase");
+        document.validationErrors = uniqueMessages([document.error, ...(document.validationErrors || [])]);
+        touchPurchaseImportEntity(document);
+      }
     }
+    refreshPurchaseImportBatchValidation(batch.id);
+    updatePurchaseImportBatchProgress(batch.id);
+    applyPurchaseImportSavedView(savedEntries);
+    saveState();
+    renderAll();
+    const canSyncNow = cloudReadyForSync();
+    const synced = canSyncNow ? await syncCloudNow(false) : false;
+    if (canSyncNow && !synced) {
+      savedEntries.forEach(entry => markEntitySyncStatus(entry, SYNC_STATUS_FAILED));
+      documents.filter(document => document.status === "approved").forEach(document => markEntitySyncStatus(document, SYNC_STATUS_FAILED));
+      markEntitySyncStatus(batch, SYNC_STATUS_FAILED);
+      saveState({ skipCloud: true });
+    }
+    if (failedDocuments.length) activePurchaseImportDocumentId = failedDocuments[0].id;
+    const savedText = `${savedEntries.length} purchase${savedEntries.length === 1 ? "" : "s"} saved`;
+    const companyText = purchaseImportSavedCompanySummary(savedEntries);
+    const failedText = purchaseImportFailedSummary(failedDocuments);
+    const vehicleText = copiedVehicleCount ? ` Vehicle copied to ${copiedVehicleCount} invoice${copiedVehicleCount === 1 ? "" : "s"}.` : "";
+    if (failedDocuments.length) toast(`${savedText}${companyText}. ${failedDocuments.length} needs review${failedText}.${vehicleText}`);
+    else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
+    else toast(`${canSyncNow ? `${savedText}${companyText} and synced` : `${savedText}${companyText}`}.${vehicleText}`.trim());
+  } catch (error) {
+    console.error("Purchase import approval failed", error);
+    toast(`Approve failed: ${String(error?.message || error || "Unexpected error")}`);
+  } finally {
+    purchaseImportApproving = false;
+    renderAll();
   }
-  refreshPurchaseImportBatchValidation(batch.id);
-  updatePurchaseImportBatchProgress(batch.id);
-  applyPurchaseImportSavedView(savedEntries);
-  saveState();
-  renderAll();
-  const canSyncNow = cloudReadyForSync();
-  const synced = canSyncNow ? await syncCloudNow(false) : false;
-  if (canSyncNow && !synced) {
-    savedEntries.forEach(entry => markEntitySyncStatus(entry, SYNC_STATUS_FAILED));
-    documents.filter(document => document.status === "approved").forEach(document => markEntitySyncStatus(document, SYNC_STATUS_FAILED));
-    markEntitySyncStatus(batch, SYNC_STATUS_FAILED);
-    saveState({ skipCloud: true });
-  }
-  purchaseImportApproving = false;
-  if (failedDocuments.length) activePurchaseImportDocumentId = failedDocuments[0].id;
-  renderAll();
-  const savedText = `${savedEntries.length} purchase${savedEntries.length === 1 ? "" : "s"} saved`;
-  const companyText = purchaseImportSavedCompanySummary(savedEntries);
-  const failedText = purchaseImportFailedSummary(failedDocuments);
-  const vehicleText = copiedVehicleCount ? ` Vehicle copied to ${copiedVehicleCount} invoice${copiedVehicleCount === 1 ? "" : "s"}.` : "";
-  if (failedDocuments.length) toast(`${savedText}${companyText}. ${failedDocuments.length} needs review${failedText}.${vehicleText}`);
-  else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
-  else toast(`${canSyncNow ? `${savedText}${companyText} and synced` : `${savedText}${companyText}`}.${vehicleText}`.trim());
 }
 
 function purchaseImportApprovalDocuments(batchId) {
