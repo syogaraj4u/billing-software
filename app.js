@@ -12599,13 +12599,16 @@ function renderPurchaseImportSummary(batch, documents = []) {
     selectAll.indeterminate = Boolean(selected.length && selected.length < ready.length);
   }
   const selection = $("#purchaseImportSelection");
-  if (selection) selection.textContent = purchaseImportSelectionText(selected);
+  if (selection) selection.textContent = selected.length
+    ? purchaseImportSelectionText(selected)
+    : ready.length ? `${ready.length} ready invoice${ready.length === 1 ? "" : "s"} will be saved` : purchaseImportSelectionText(selected);
   const approve = $("#purchaseImportApproveBtn");
   if (approve) {
-    approve.disabled = !selected.length || counts.processing > 0 || purchaseImportApproving;
+    const approvalCount = selected.length || ready.length;
+    approve.disabled = !ready.length || counts.processing > 0 || purchaseImportApproving;
     approve.innerHTML = purchaseImportApproving
       ? '<i data-lucide="loader-circle"></i><span>Saving...</span>'
-      : `<i data-lucide="check-check"></i><span>Approve &amp; Save ${selected.length || ""}</span>`;
+      : `<i data-lucide="check-check"></i><span>Approve &amp; Save ${approvalCount || ""}</span>`;
   }
   const discard = $("#purchaseImportDiscardBtn");
   if (discard) discard.disabled = !batch || counts.processing > 0 || counts.approved > 0 || purchaseImportApproving;
@@ -13264,16 +13267,16 @@ async function approveSelectedPurchaseImports() {
   if (!batch) return;
   persistActivePurchaseImportDraft();
   refreshPurchaseImportBatchValidation(batch.id);
-  const documents = purchaseImportDocuments(batch.id).filter(document => document.status === "ready" && document.selected);
+  const documents = purchaseImportApprovalDocuments(batch.id);
   if (!documents.length) {
     renderPurchaseImportInbox();
-    return toast("Select at least one ready invoice");
+    return toast("No ready invoices to approve. Open the highlighted invoices and fix required fields.");
   }
   purchaseImportApproving = true;
   documents.forEach(document => { document.status = "approving"; });
   renderPurchaseImportInbox();
   const savedEntries = [];
-  let failedCount = 0;
+  const failedDocuments = [];
   for (const document of documents) {
     try {
       await ensurePurchaseImportDistance(document);
@@ -13287,8 +13290,10 @@ async function approveSelectedPurchaseImports() {
       document.approvedPurchaseId = entry.id;
       document.error = "";
       touchPurchaseImportEntity(document);
+      updatePurchaseImportBatchProgress(batch.id);
+      saveState({ skipCloud: true });
     } catch (error) {
-      failedCount += 1;
+      failedDocuments.push(document);
       document.status = "needs-review";
       document.selected = false;
       document.error = String(error?.message || error || "Could not save purchase");
@@ -13298,7 +13303,7 @@ async function approveSelectedPurchaseImports() {
   }
   refreshPurchaseImportBatchValidation(batch.id);
   updatePurchaseImportBatchProgress(batch.id);
-  applyPurchaseImportSavedMonthFilter(savedEntries);
+  applyPurchaseImportSavedView(savedEntries);
   saveState();
   renderAll();
   const canSyncNow = cloudReadyForSync();
@@ -13310,17 +13315,53 @@ async function approveSelectedPurchaseImports() {
     saveState({ skipCloud: true });
   }
   purchaseImportApproving = false;
+  if (failedDocuments.length) activePurchaseImportDocumentId = failedDocuments[0].id;
   renderAll();
   const savedText = `${savedEntries.length} purchase${savedEntries.length === 1 ? "" : "s"} saved`;
-  if (failedCount) toast(`${savedText}. ${failedCount} needs review.`);
+  const companyText = purchaseImportSavedCompanySummary(savedEntries);
+  const failedText = purchaseImportFailedSummary(failedDocuments);
+  if (failedDocuments.length) toast(`${savedText}${companyText}. ${failedDocuments.length} needs review${failedText}.`);
   else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
-  else toast(canSyncNow ? `${savedText} and synced` : savedText);
+  else toast(canSyncNow ? `${savedText}${companyText} and synced` : `${savedText}${companyText}`);
+}
+
+function purchaseImportApprovalDocuments(batchId) {
+  const ready = purchaseImportDocuments(batchId).filter(document => document.status === "ready");
+  const selected = ready.filter(document => document.selected);
+  return selected.length ? selected : ready;
+}
+
+function applyPurchaseImportSavedView(savedEntries = []) {
+  applyPurchaseImportSavedMonthFilter(savedEntries);
+  const profileIds = [...new Set(savedEntries.map(entry => entry.profileId).filter(Boolean))];
+  if (!profileIds.length || profileIds.includes(activeProfileId())) return;
+  setActiveProfileId(profileIds[0]);
 }
 
 function applyPurchaseImportSavedMonthFilter(savedEntries = []) {
   const months = [...new Set(savedEntries.map(entryMonthKey).filter(Boolean))];
   if (!months.length) return;
   entryMonthFilters.purchase = months.length === 1 ? months[0] : ALL_MONTHS_KEY;
+}
+
+function purchaseImportSavedCompanySummary(savedEntries = []) {
+  if (!savedEntries.length) return "";
+  const groups = savedEntries.reduce((map, entry) => {
+    const name = profileName(entry.profileId);
+    map.set(name, (map.get(name) || 0) + 1);
+    return map;
+  }, new Map());
+  const text = [...groups.entries()]
+    .map(([name, count]) => `${count} ${name}`)
+    .join(", ");
+  return text ? ` (${text})` : "";
+}
+
+function purchaseImportFailedSummary(failedDocuments = []) {
+  const first = failedDocuments.find(document => document.error);
+  if (!first) return "";
+  const number = first.parsed?.invoiceNumber || first.fileName || "invoice";
+  return `: ${number} - ${first.error}`;
 }
 
 function createPurchaseEntryFromImportDocument(document) {
