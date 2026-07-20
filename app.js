@@ -660,6 +660,7 @@ function normalizeState(value) {
   });
   value.sales.forEach(entry => normalizeEntryForState(entry, "sale", value.parties, value.items));
   value.creditNotes.forEach(entry => normalizeEntryForState(entry, "creditNote", value.parties, value.items));
+  repairDuplicateCreditNoteNumbers(value.creditNotes);
   value.purchases.forEach(entry => normalizeEntryForState(entry, "purchase", value.parties, value.items));
   value.purchaseReturns.forEach(entry => normalizeEntryForState(entry, "purchaseReturn", value.parties, value.items));
   value.purchaseOrders.forEach(entry => normalizeEntryForState(entry, "po", value.parties, value.items));
@@ -1481,9 +1482,16 @@ function normalizeCloudEntityMeta(target, source = target) {
   target.syncStatus = source.syncStatus || SYNC_STATUS_SYNCED;
   target.createdAt = source.createdAt || source.created_at || "";
   target.updatedAt = source.updatedAt || source.updated_at || "";
-  target.createdBy = source.createdBy || source.created_by || "";
+  target.createdBy = cloudUuid(source.createdBy || source.created_by) || "";
   target.lastSyncedAt = source.lastSyncedAt || source.last_synced_at || "";
   return target;
+}
+
+function cloudUuid(value, fallback = null) {
+  const raw = String(value || "").trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw)) return raw;
+  const backup = String(fallback || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(backup) ? backup : null;
 }
 
 function normalizeSaleAddressSnapshots(entry, parties = []) {
@@ -1969,6 +1977,57 @@ function nextCreditNoteNumber(profileId, excludeId = "") {
 function creditNoteNumberExists(number, excludeId = "") {
   const target = String(number || "").trim();
   return state.creditNotes.some(entry => entry.id !== excludeId && String(entry.number || "").trim() === target);
+}
+
+function repairDuplicateCreditNoteNumbers(entries = []) {
+  const byProfile = new Map();
+  entries.forEach((entry, index) => {
+    const profileId = entry.profileId || "";
+    if (!byProfile.has(profileId)) byProfile.set(profileId, []);
+    byProfile.get(profileId).push({ entry, index });
+  });
+  byProfile.forEach(rows => {
+    const used = new Set();
+    rows
+      .sort((a, b) => creditNoteRepairRank(a) - creditNoteRepairRank(b))
+      .forEach(({ entry }) => {
+        const number = String(entry.number || "").trim();
+        const key = number.toLowerCase();
+        if (number && !used.has(key)) {
+          used.add(key);
+          return;
+        }
+        const nextNumber = nextAvailableCreditNoteNumberForRows(entry.profileId, used);
+        if (!nextNumber) return;
+        entry.number = nextNumber;
+        used.add(nextNumber.toLowerCase());
+        entry.updatedAt = entry.updatedAt || new Date().toISOString();
+        if (entry.syncStatus === SYNC_STATUS_SYNCED) entry.syncStatus = newLocalSyncStatus();
+      });
+  });
+}
+
+function creditNoteRepairRank(row) {
+  const entry = row.entry || {};
+  const syncedRank = entry.syncStatus === SYNC_STATUS_SYNCED ? 0 : 1;
+  const time = new Date(entry.lastSyncedAt || entry.createdAt || entry.date || "1970-01-01").getTime();
+  return (syncedRank * 1_000_000_000_000_000) + (Number.isNaN(time) ? 0 : time) + row.index;
+}
+
+function nextAvailableCreditNoteNumberForRows(profileId, usedNumbers = new Set()) {
+  const rule = creditNoteNumberRule(profileId);
+  if (!rule) return "";
+  let sequence = rule.start;
+  usedNumbers.forEach(number => {
+    const parsed = creditNoteSequenceFromNumber(profileId, number);
+    if (parsed) sequence = Math.max(sequence, parsed + 1);
+  });
+  let nextNumber = formatCreditNoteNumber(profileId, sequence);
+  while (usedNumbers.has(nextNumber.toLowerCase())) {
+    sequence += 1;
+    nextNumber = formatCreditNoteNumber(profileId, sequence);
+  }
+  return nextNumber;
 }
 
 function normalizeGstin(value) {
@@ -3870,7 +3929,7 @@ function cloudDeletionTombstoneRow(workspaceId, tombstone, syncedAt, userId) {
     profile_id: tombstone.profileId || "",
     document_number: tombstone.documentNumber || "",
     deleted_at: cloudTimestamp(tombstone.deletedAt) || syncedAt,
-    deleted_by: tombstone.deletedBy || userId,
+    deleted_by: cloudUuid(tombstone.deletedBy, userId),
     before_data: tombstone.beforeData ? clone(tombstone.beforeData) : null,
     data: clone(tombstone),
     ...cloudSyncColumns(tombstone, syncedAt, userId)
@@ -3969,7 +4028,7 @@ function cloudLineRows(workspaceId, entry, kind, syncedAt, userId) {
       sync_status: SYNC_STATUS_SYNCED,
       created_at: syncedAt,
       updated_at: syncedAt,
-      created_by: userId,
+      created_by: cloudUuid(userId),
       last_synced_at: syncedAt
     };
     if (kind !== "sale") base.gross_rate = lineGrossRate(line);
@@ -3983,7 +4042,7 @@ function cloudSyncColumns(entity = {}, syncedAt, userId) {
     sync_status: SYNC_STATUS_SYNCED,
     created_at: cloudTimestamp(entity.createdAt) || syncedAt,
     updated_at: cloudTimestamp(entity.updatedAt) || syncedAt,
-    created_by: entity.createdBy || userId,
+    created_by: cloudUuid(entity.createdBy, userId),
     last_synced_at: syncedAt
   };
 }
@@ -4062,7 +4121,7 @@ function cloudAuditRow(entityType, entityId, action, before, after, syncedAt, us
     before_data: before ? clone(before) : null,
     after_data: after ? clone(after) : null,
     source: "web-app",
-    created_by: userId,
+    created_by: cloudUuid(userId),
     created_at: syncedAt
   };
 }
@@ -4089,7 +4148,7 @@ async function saveDailyCloudBackup(nextState, syncedAt, userId) {
       workspace_id: cloudWorkspace.id,
       backup_date: today(),
       data: clone(nextState),
-      created_by: userId,
+      created_by: cloudUuid(userId),
       created_at: syncedAt
     }, { onConflict: "workspace_id,backup_date" });
   if (error) throw error;
@@ -4106,7 +4165,7 @@ function entityWithLocalMeta(entity, existingEntity = null) {
     syncStatus: newLocalSyncStatus(),
     createdAt: existingEntity?.createdAt || now,
     updatedAt: now,
-    createdBy: existingEntity?.createdBy || currentCloudUserId() || "",
+    createdBy: cloudUuid(existingEntity?.createdBy, currentCloudUserId()) || "",
     lastSyncedAt: existingEntity?.lastSyncedAt || ""
   };
 }
@@ -4225,7 +4284,7 @@ function markReconciliationEntityChanged(entity) {
   entity.syncStatus = newLocalSyncStatus();
   entity.createdAt = entity.createdAt || now;
   entity.updatedAt = now;
-  entity.createdBy = entity.createdBy || currentCloudUserId() || "";
+  entity.createdBy = cloudUuid(entity.createdBy, currentCloudUserId()) || "";
 }
 
 function applyReconciliationMatch(transaction, bookEntry) {
@@ -6986,7 +7045,7 @@ function recordEntryDeletion(kind, entry) {
     syncStatus: newLocalSyncStatus(),
     createdAt: existing?.createdAt || now,
     updatedAt: now,
-    createdBy: existing?.createdBy || currentCloudUserId() || "",
+    createdBy: cloudUuid(existing?.createdBy, currentCloudUserId()) || "",
     lastSyncedAt: existing?.lastSyncedAt || ""
   });
   if (existingIndex >= 0) state.deletionTombstones[existingIndex] = tombstone;
@@ -13949,7 +14008,7 @@ function touchPartyMasterEntity(party) {
   party.syncStatus = newLocalSyncStatus();
   party.createdAt = party.createdAt || now;
   party.updatedAt = now;
-  party.createdBy = party.createdBy || currentCloudUserId() || "";
+  party.createdBy = cloudUuid(party.createdBy, currentCloudUserId()) || "";
 }
 
 function appendPartyAlias(party, alias) {
