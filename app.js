@@ -12975,6 +12975,7 @@ function persistActivePurchaseImportDraft() {
     collectPurchaseImportReviewForm(form, document.parsed),
     document.fileName
   );
+  propagatePurchaseImportVehicle(document);
   document.error = "";
   document.status = "ready";
   refreshPurchaseImportBatchValidation(document.batchId);
@@ -12993,6 +12994,7 @@ function savePurchaseImportReview(event) {
     collectPurchaseImportReviewForm(event.target, document.parsed),
     document.fileName
   );
+  propagatePurchaseImportVehicle(document);
   document.error = "";
   if (!["approved", "extracting"].includes(document.status)) document.status = "ready";
   refreshPurchaseImportBatchValidation(document.batchId);
@@ -13133,6 +13135,20 @@ function handlePurchaseImportReviewChange(event) {
   const form = event.target.closest("#purchaseImportReviewForm");
   const document = purchaseImportDocumentById(form?.dataset.importReviewId);
   if (!form || !document) return;
+  if (event.target.name === "ewayVehicleNo") {
+    document.parsed = normalizePurchaseImportParsedForState(
+      collectPurchaseImportReviewForm(form, document.parsed),
+      document.fileName
+    );
+    const changedCount = propagatePurchaseImportVehicle(document);
+    refreshPurchaseImportBatchValidation(document.batchId);
+    updatePurchaseImportBatchProgress(document.batchId);
+    touchPurchaseImportEntity(document);
+    saveState();
+    renderPurchaseImportSummary(purchaseImportBatchById(document.batchId), purchaseImportDocuments(document.batchId));
+    if (changedCount) toast(`Vehicle number copied to ${changedCount} same-supplier invoice${changedCount === 1 ? "" : "s"}`);
+    return;
+  }
   if (["ewayTransType", "ewayDestinationPreset"].includes(event.target.name)) {
     updatePurchaseImportEwayVisibility(form);
     maybeSchedulePurchaseImportDistanceFromForm(form, document, event.target.name, true);
@@ -13329,6 +13345,39 @@ function purchaseImportApprovalDocuments(batchId) {
   const ready = purchaseImportDocuments(batchId).filter(document => document.status === "ready");
   const selected = ready.filter(document => document.selected);
   return selected.length ? selected : ready;
+}
+
+function propagatePurchaseImportVehicle(sourceDocument) {
+  const sourceParsed = sourceDocument?.parsed || {};
+  const vehicleNo = normalizeVehicleNumber(sourceParsed.ewayDetails?.vehicleNo || "");
+  if (!sourceDocument || !vehicleNo) return 0;
+  const supplierKey = purchaseImportSupplierGroupKey(sourceParsed);
+  if (!supplierKey) return 0;
+  let changedCount = 0;
+  purchaseImportDocuments(sourceDocument.batchId).forEach(document => {
+    if (document.id === sourceDocument.id) return;
+    if (["approved", "duplicate", "failed", "queued", "extracting", "approving"].includes(document.status)) return;
+    if (purchaseImportSupplierGroupKey(document.parsed || {}) !== supplierKey) return;
+    const currentDetails = normalizePurchaseEwayDetails(document.parsed?.ewayDetails || {});
+    if (currentDetails.vehicleNo === vehicleNo) return;
+    document.parsed = normalizePurchaseImportParsedForState({
+      ...(document.parsed || {}),
+      ewayDetails: {
+        ...currentDetails,
+        vehicleNo
+      }
+    }, document.fileName);
+    touchPurchaseImportEntity(document);
+    changedCount += 1;
+  });
+  return changedCount;
+}
+
+function purchaseImportSupplierGroupKey(parsed = {}) {
+  const gstin = normalizeGstin(parsed.supplierGstin);
+  if (gstin) return `gstin:${gstin}`;
+  const name = normalizeMergeText(parsed.supplierName);
+  return name ? `name:${name}` : "";
 }
 
 function applyPurchaseImportSavedView(savedEntries = []) {
