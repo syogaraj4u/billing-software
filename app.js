@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.20.1";
+const APP_BUILD = "2026.07.21.1";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -38,6 +38,7 @@ const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
 const DISALLOWED_HSN_CODES = new Set(["85176290"]);
 const DEFAULT_SALE_GST_RATE = 18;
+const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-21-local-first-v1";
 const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
@@ -142,6 +143,50 @@ const EWAY_PIN_PREFIX_STATE_CODES = {
   625: 33,
   628: 33
 };
+
+const PURCHASE_SUPPLIER_PROFILES = [
+  {
+    id: "reliance-retail",
+    label: "Reliance Retail Limited",
+    gstins: ["33AABCR1718E1ZW", "29AABCR1718E1ZL"],
+    aliases: ["reliance", "reliance retail", "reliance digital"],
+    invoicePatterns: [/GST\s+RECEIPT\s+SUMMARY/i, /Net\s+Sales\s+Value/i],
+    parser: parseReliancePurchaseInvoiceText
+  },
+  {
+    id: "harshith-enterprises",
+    label: "Harshith Enterprises",
+    gstins: ["37ALHPP0600M1Z2"],
+    aliases: ["harshith enterprises", "infinite apple authorised reseller", "infinite apple authorized reseller"],
+    invoicePatterns: [/\bTPT\/\d{2}-\d{2}\/\d+\b/i],
+    parser: parseHarshithPurchaseInvoiceText
+  },
+  {
+    id: "cell9-mobile-store",
+    label: "CELL9 Mobile Store",
+    gstins: ["37AJDPM5524D1ZF"],
+    aliases: ["cell9", "cell 9", "cell9 mobile store"],
+    invoicePatterns: [/\bCELL\s*\/\s*\d+\b/i],
+    parser: parseCell9PurchaseInvoiceText,
+    postProcess: normalizeCell9PurchaseParsed
+  },
+  {
+    id: "mango-mobiles",
+    label: "Mango Mobiles",
+    gstins: [],
+    aliases: ["mango mobiles", "mango mobile"],
+    invoicePatterns: [],
+    parser: null
+  },
+  {
+    id: "just-deal",
+    label: "Just Deal",
+    gstins: [],
+    aliases: ["just deal"],
+    invoicePatterns: [],
+    parser: null
+  }
+];
 
 const OFFICIAL_GST_PROFILES = [
   {
@@ -1453,6 +1498,9 @@ function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "
     buyerPlace: String(parsed.buyerPlace || "").trim(),
     invoiceNumber: String(parsed.invoiceNumber || "").trim(),
     invoiceDate: String(parsed.invoiceDate || ""),
+    supplierProfileId: String(parsed.supplierProfileId || "").trim(),
+    extractionSource: String(parsed.extractionSource || "").trim(),
+    extractionConfidence: String(parsed.extractionConfidence || "").trim(),
     taxable: round2(parsed.taxable),
     gst: round2(parsed.gst),
     total: round2(parsed.total),
@@ -12251,8 +12299,10 @@ async function extractPurchaseInvoiceParsedFromFile(file) {
       console.warn("Local PDF text extraction unavailable", error);
     }
   }
-  let parsed = pdfText ? parseSpecialPurchaseInvoiceText(pdfText, file.name) : null;
+  const profileParsed = pdfText ? parseSpecialPurchaseInvoiceText(pdfText, file.name) : null;
+  let parsed = supplierProfileParseReady(profileParsed) ? profileParsed : null;
   if (!parsed) parsed = await extractPurchaseInvoiceWithCloud(file);
+  if (!parsed && profileParsed) parsed = profileParsed;
   if (!parsed && file.type === "application/pdf") {
     if (!pdfText.trim()) {
       parsed = buildManualReviewPurchase(file, "No readable text found in PDF. Please review and enter values manually.");
@@ -12264,7 +12314,7 @@ async function extractPurchaseInvoiceParsedFromFile(file) {
     parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
   }
   if (pdfText.trim()) parsed = applyPurchasePaymentAdjustments(parsed, pdfText);
-  parsed = normalizeCell9PurchaseParsed(parsed);
+  parsed = applyPurchaseSupplierProfileRules(parsed, pdfText, file.name);
   parsed = await enrichPurchasePincodes(parsed);
   parsed.fileName = parsed.fileName || file.name;
   parsed.attachments = [attachment];
@@ -14047,9 +14097,88 @@ function parsePurchaseInvoiceText(text, fileName) {
 }
 
 function parseSpecialPurchaseInvoiceText(text, fileName) {
-  if (isReliancePurchaseInvoice(text)) return parseReliancePurchaseInvoiceText(text, fileName);
-  if (isHarshithPurchaseInvoice(text)) return parseHarshithPurchaseInvoiceText(text, fileName);
-  return null;
+  return parsePurchaseWithSupplierProfile(text, fileName);
+}
+
+function parsePurchaseWithSupplierProfile(text = "", fileName = "") {
+  const profile = detectPurchaseSupplierProfile({ text, fileName });
+  if (!profile?.parser) return null;
+  try {
+    const parsed = profile.parser(text, fileName, profile);
+    return tagPurchaseSupplierProfile(parsed, profile, "supplier-profile");
+  } catch (error) {
+    console.warn(`Supplier profile ${profile.id} parser failed`, error);
+    return null;
+  }
+}
+
+function applyPurchaseSupplierProfileRules(parsed = {}, text = "", fileName = "") {
+  if (!parsed) return parsed;
+  const profile = detectPurchaseSupplierProfile({ text, fileName, parsed });
+  if (!profile) return parsed;
+  let result = parsed;
+  if (typeof profile.postProcess === "function") {
+    result = profile.postProcess(result, text, fileName, profile) || result;
+  }
+  return tagPurchaseSupplierProfile(result, profile, result.extractionSource || "supplier-profile-rules");
+}
+
+function detectPurchaseSupplierProfile({ text = "", fileName = "", parsed = {} } = {}) {
+  const haystack = normalizePurchaseSupplierProfileText([
+    text,
+    fileName,
+    parsed.fileName,
+    parsed.supplierName,
+    parsed.supplierGstin,
+    parsed.invoiceNumber
+  ].filter(Boolean).join("\n"));
+  const gstins = new Set([
+    ...extractGstinsFromText(text),
+    normalizeGstin(parsed.supplierGstin),
+    normalizeGstin(String(fileName || "").match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i)?.[0])
+  ].filter(Boolean));
+  return PURCHASE_SUPPLIER_PROFILES.find(profile => (
+    profile.gstins?.some(gstin => gstins.has(normalizeGstin(gstin)))
+    || profile.aliases?.some(alias => haystack.includes(normalizePurchaseSupplierProfileText(alias)))
+    || profile.invoicePatterns?.some(pattern => pattern.test(`${text}\n${fileName}\n${parsed.invoiceNumber || ""}`))
+  )) || null;
+}
+
+function extractGstinsFromText(text = "") {
+  return [...new Set((String(text || "").match(/\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/gi) || []).map(normalizeGstin))];
+}
+
+function normalizePurchaseSupplierProfileText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tagPurchaseSupplierProfile(parsed = {}, profile = {}, source = "supplier-profile") {
+  if (!parsed) return parsed;
+  return {
+    ...parsed,
+    supplierProfileId: profile.id || parsed.supplierProfileId || "",
+    extractionSource: source,
+    extractionConfidence: supplierProfileParseReady(parsed) ? "high" : (parsed.extractionConfidence || "review"),
+    reviewMessages: uniqueMessages(parsed.reviewMessages || [])
+  };
+}
+
+function supplierProfileParseReady(parsed = null) {
+  if (!parsed) return false;
+  const hasSupplier = isValidGstin(parsed.supplierGstin) && String(parsed.supplierName || "").trim();
+  const hasBuyer = Boolean(profileByGstin(parsed.buyerGstin) || profileById(parsed.profileId));
+  const hasHeader = String(parsed.invoiceNumber || "").trim() && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.invoiceDate || ""));
+  const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
+  const hasLines = lines.some(line => String(line.name || "").trim() && num(line.qty) > 0 && (num(line.grossRate) > 0 || num(line.rate) > 0));
+  const taxable = num(parsed.extractedTaxes?.taxable || parsed.taxable);
+  const gst = num(parsed.extractedTaxes?.gst || parsed.gst || num(parsed.extractedTaxes?.cgst) + num(parsed.extractedTaxes?.sgst) + num(parsed.extractedTaxes?.igst));
+  const total = num(parsed.extractedTaxes?.total || parsed.total);
+  const totalsMatch = !taxable || !total || amountsClose(round2(taxable + gst + num(parsed.roundOff)), total, 1);
+  return hasSupplier && hasBuyer && hasHeader && hasLines && totalsMatch;
 }
 
 function isHarshithPurchaseInvoice(text) {
@@ -14175,6 +14304,104 @@ function harshithBuyerAddress(lines = []) {
   const address = addressLine.replace(/^CUSTOMER\s+ADDRESS\s*/i, "").replace(/^:\s*/, "").trim();
   const city = cityLine.replace(/^CITY\s*:\s*/i, "").trim();
   return [address, city].filter(Boolean).join(", ");
+}
+
+function parseCell9PurchaseInvoiceText(text, fileName) {
+  const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
+  const buyerGstin = normalizeGstin(
+    cleaned.match(/\bGST\s*:?\s*([0-9A-Z]{15})/i)?.[1]
+    || cleaned.match(/Customer\s*-?\s*GSTIN\s*:?\s*([0-9A-Z]{15})/i)?.[1]
+    || ""
+  );
+  const profile = profileByGstin(buyerGstin) || activeProfile();
+  const invoiceNumber = cleaned.match(/\bBILLNO\s*:?\s*(CELL\s*\/\s*\d+)/i)?.[1]?.replace(/\s+/g, "")
+    || cleaned.match(/\b(CELL\s*\/\s*\d+)\b/i)?.[1]?.replace(/\s+/g, "")
+    || findInvoiceNumber(lines)
+    || nextEntryNumber("purchase", profile.id);
+  const invoiceDate = toDateInput(cleaned.match(/\bDATE\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i)?.[1] || "")
+    || findInvoiceDate(cleaned)
+    || today();
+  const item = cell9ItemLine(cleaned, lines);
+  const tax = cell9TaxSummary(cleaned, item);
+  const qty = num(item.qty) || 1;
+  const taxable = tax.taxable || round2(qty * num(item.rate));
+  const gst = tax.gst || round2(tax.total - taxable);
+  const total = tax.total || round2(taxable + gst);
+  const parsedLine = {
+    name: normalizeImportedItemName(item.name || "CELL9 Purchase"),
+    hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
+    qty,
+    rate: qty ? round2(taxable / qty) : taxable,
+    grossRate: qty ? round2(total / qty) : total,
+    gstRate: inferGstRate(taxable, gst),
+    imeiNumbers: item.imeiNumbers || ""
+  };
+  return {
+    fileName,
+    profileId: profile.id,
+    supplierName: "CELL9 MOBILE STORE",
+    supplierGstin: "37AJDPM5524D1ZF",
+    supplierAddress: "# 18-915, Church Street, Opp. Pragathi Book Centre, Chittoor - 517001",
+    supplierPlace: "Andhra Pradesh",
+    buyerName: profile.businessName || cell9BuyerName(lines) || profile.label || "",
+    buyerGstin: normalizeGstin(profile.gstin || buyerGstin),
+    buyerAddress: cell9BuyerAddress(lines),
+    buyerPlace: profile.state || stateNameFromGstin(buyerGstin) || "",
+    invoiceNumber,
+    invoiceDate,
+    taxable,
+    gst,
+    total,
+    roundOff: purchasePaymentAdjustmentFromText(cleaned),
+    extractedTaxes: {
+      taxable,
+      cgst: round2(gst / 2),
+      sgst: round2(gst - round2(gst / 2)),
+      igst: 0,
+      gst,
+      total
+    },
+    reviewMessages: item.name ? [] : ["CELL9 invoice detected, but item details were not fully readable. Review item values before saving."],
+    lines: [parsedLine]
+  };
+}
+
+function cell9ItemLine(text = "", lines = []) {
+  const tableLine = lines.find(line => /\b(?:I\s*)?PHONE\s*:\s*I\s*PHONE|\bIPHONE\b/i.test(line) && /\d/.test(line)) || "";
+  const tableText = [tableLine, ...lines.slice(Math.max(0, lines.indexOf(tableLine) + 1), Math.max(0, lines.indexOf(tableLine) + 8))].join(" ");
+  const qtyRateAmount = tableText.replace(/,/g, "").match(/\|\s*(\d+(?:\.\d+)?)\s*\|?\s*(\d+(?:\.\d{1,2})?)\s*\|?\s*(\d+(?:\.\d{1,2})?)\s*\|?/);
+  const nameMatch = tableText.match(/(?:I\s*)?PHONE\s*:\s*(I\s*PHONE\s+\d+(?:\s+\d+\s*GB)?)/i)
+    || tableText.match(/\b(I\s*PHONE\s+\d+(?:\s+\d+\s*GB)?)/i);
+  const imeiNumbers = [...new Set((tableText.match(/\b\d{14,17}\b/g) || []))].join("\n");
+  return {
+    name: nameMatch?.[1] || tableLine,
+    hsn: DEFAULT_SALE_HSN,
+    qty: qtyRateAmount ? Number(qtyRateAmount[1]) : 1,
+    rate: qtyRateAmount ? Number(qtyRateAmount[2]) : 0,
+    amount: qtyRateAmount ? Number(qtyRateAmount[3]) : 0,
+    imeiNumbers
+  };
+}
+
+function cell9TaxSummary(text = "", item = {}) {
+  const cgst = amountAfterLabel(text, /CGST\s+9\.?00?\s*%?/i)
+    || amountAfterLabel(text, /CGST\s+Amount\s*:?/i);
+  const sgst = amountAfterLabel(text, /SGST\s+9\.?00?\s*%?/i)
+    || amountAfterLabel(text, /SGST\s+Amount\s*:?/i);
+  const gst = round2(cgst + sgst);
+  const total = amountAfterLabel(text, /TOTAL\s+\d+(?:\.\d+)?\s*/i) || num(item.amount);
+  const taxable = total && gst ? round2(total - gst) : round2(num(item.qty) * num(item.rate));
+  return { taxable, cgst, sgst, igst: 0, gst, total };
+}
+
+function cell9BuyerName(lines = []) {
+  return lines.find(line => /skanda|nirvana|lakshmi|kala|khairanya|shiva|hari/i.test(line) && !/cell\s*9|mobile store/i.test(line)) || "";
+}
+
+function cell9BuyerAddress(lines = []) {
+  const city = lines.find(line => /^CHITTOOR|^TIRUPATI/i.test(line)) || "";
+  return city;
 }
 
 function isReliancePurchaseInvoice(text) {
