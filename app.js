@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.9";
+const APP_BUILD = "2026.07.21.10";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -1477,6 +1477,8 @@ function normalizeDeletionEntityType(value) {
   const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (["purchase", "purchases"].includes(normalized)) return "purchase";
   if (["po", "purchase_order", "purchase_orders", "purchaseorder", "purchaseorders"].includes(normalized)) return "po";
+  if (["purchase_import_batch", "purchase_import_batches", "purchaseimportbatch"].includes(normalized)) return "purchase_import_batch";
+  if (["purchase_import_document", "purchase_import_documents", "purchaseimportdocument"].includes(normalized)) return "purchase_import_document";
   return "";
 }
 
@@ -1487,7 +1489,9 @@ function deletionTombstoneTimestamp(tombstone = {}) {
 function applyDeletionTombstones(targetState = {}) {
   const mappings = [
     ["purchase", "purchases"],
-    ["po", "purchaseOrders"]
+    ["po", "purchaseOrders"],
+    ["purchase_import_batch", "purchaseImportBatches"],
+    ["purchase_import_document", "purchaseImportDocuments"]
   ];
   let changed = false;
   mappings.forEach(([entityType, stateKey]) => {
@@ -3929,6 +3933,29 @@ async function purgeCloudDeletedEntries(tombstones = []) {
         .in("id", batch);
       if (entryError) throw entryError;
     }
+  }
+  const importDocuments = [...new Set(tombstones
+    .filter(tombstone => normalizeDeletionEntityType(tombstone.entityType) === "purchase_import_document")
+    .map(tombstone => String(tombstone.entityId || "").trim())
+    .filter(Boolean))];
+  const importBatches = [...new Set(tombstones
+    .filter(tombstone => normalizeDeletionEntityType(tombstone.entityType) === "purchase_import_batch")
+    .map(tombstone => String(tombstone.entityId || "").trim())
+    .filter(Boolean))];
+  await deleteCloudRowsByIds(CLOUD_ROW_TABLES.purchaseImportDocuments, "id", importDocuments);
+  await deleteCloudRowsByIds(CLOUD_ROW_TABLES.purchaseImportBatches, "id", importBatches);
+}
+
+async function deleteCloudRowsByIds(table, idColumn, ids = []) {
+  if (!cloudClient || !cloudWorkspace || !ids.length) return;
+  for (let index = 0; index < ids.length; index += 250) {
+    const batch = ids.slice(index, index + 250);
+    const { error } = await cloudClient
+      .from(table)
+      .delete()
+      .eq("workspace_id", cloudWorkspace.id)
+      .in(idColumn, batch);
+    if (error) throw error;
   }
 }
 
@@ -13733,17 +13760,31 @@ function createPurchaseEntryFromImportDocument(document) {
 
 async function discardActivePurchaseImportBatch() {
   const batch = purchaseImportBatchById(activePurchaseImportBatchId);
-  if (!batch) return;
+  if (!batch) {
+    toast("No import batch selected");
+    return;
+  }
   const documents = purchaseImportDocuments(batch.id);
+  if (!documents.length) {
+    recordImportEntityDeletion("purchase_import_batch", batch);
+    state.purchaseImportBatches = state.purchaseImportBatches.filter(row => row.id !== batch.id);
+    activePurchaseImportBatchId = "";
+    activePurchaseImportDocumentId = "";
+    saveState();
+    renderPurchaseImportInbox();
+    deletePurchaseImportBatchRowsFromCloud(batch.id, []).catch(error => {
+      console.warn("Could not remove empty import batch from cloud", error);
+    });
+    toast("Empty import batch cleared");
+    return;
+  }
   const approvedCount = documents.filter(document => document.status === "approved").length;
   const pendingCount = documents.length - approvedCount;
-  const message = approvedCount
-    ? `Clear this import batch from the inbox? ${approvedCount} approved purchase${approvedCount === 1 ? "" : "s"} will stay saved. ${pendingCount} unapproved upload${pendingCount === 1 ? "" : "s"} will be discarded.`
-    : `Discard ${documents.length} uploaded invoice${documents.length === 1 ? "" : "s"}?`;
-  if (!confirm(message)) return;
   const storagePaths = documents.filter(document => document.status !== "approved").flatMap(document => document.parsed?.attachments || [])
     .filter(attachment => attachment.bucket === PURCHASE_ATTACHMENT_BUCKET && attachment.storagePath)
     .map(attachment => attachment.storagePath);
+  documents.forEach(document => recordImportEntityDeletion("purchase_import_document", document));
+  recordImportEntityDeletion("purchase_import_batch", batch);
   purchaseUploadQueue = purchaseUploadQueue.filter(job => job.batchId !== batch.id);
   documents.forEach(document => purchaseImportFiles.delete(document.id));
   state.purchaseImportDocuments = state.purchaseImportDocuments.filter(document => document.batchId !== batch.id);
@@ -13752,11 +13793,58 @@ async function discardActivePurchaseImportBatch() {
   activePurchaseImportDocumentId = "";
   saveState();
   renderPurchaseImportInbox();
+  let cleanupFailed = false;
+  if (cloudReadyForSync()) {
+    try {
+      await deletePurchaseImportBatchRowsFromCloud(batch.id, documents.map(document => document.id));
+    } catch (error) {
+      cleanupFailed = true;
+      console.warn("Could not remove discarded import batch from cloud", error);
+    }
+  }
   if (storagePaths.length && cloudClient && cloudSession) {
     const { error } = await cloudClient.storage.from(PURCHASE_ATTACHMENT_BUCKET).remove(storagePaths);
-    if (error) console.warn("Could not remove discarded purchase files", error);
+    if (error) {
+      cleanupFailed = true;
+      console.warn("Could not remove discarded purchase files", error);
+    }
   }
-  toast(approvedCount ? "Import batch cleared. Approved purchases are still saved." : "Import batch discarded");
+  if (cleanupFailed) toast("Batch discarded locally. Cloud cleanup will retry on sync.");
+  else toast(approvedCount ? `Import batch cleared. ${approvedCount} approved saved purchase${approvedCount === 1 ? "" : "s"} stayed saved.` : `Discarded ${pendingCount} uploaded invoice${pendingCount === 1 ? "" : "s"}.`);
+}
+
+function recordImportEntityDeletion(entityType, entity = {}) {
+  const normalizedType = normalizeDeletionEntityType(entityType);
+  const entityId = String(entity?.id || "").trim();
+  if (!normalizedType || !entityId) return null;
+  const now = new Date().toISOString();
+  const key = `${normalizedType}:${entityId}`;
+  const existingIndex = state.deletionTombstones.findIndex(row => deletionTombstoneMergeKey(row) === key);
+  const existing = existingIndex >= 0 ? state.deletionTombstones[existingIndex] : null;
+  const tombstone = normalizeDeletionTombstoneForState({
+    id: key,
+    entityType: normalizedType,
+    entityId,
+    profileId: entity?.parsed?.profileId || "",
+    documentNumber: entity?.parsed?.invoiceNumber || entity?.fileName || entity?.label || "",
+    deletedAt: now,
+    deletedBy: currentCloudUserId() || "",
+    beforeData: clone(entity),
+    syncStatus: newLocalSyncStatus(),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    createdBy: cloudUuid(existing?.createdBy, currentCloudUserId()) || "",
+    lastSyncedAt: existing?.lastSyncedAt || ""
+  });
+  if (existingIndex >= 0) state.deletionTombstones[existingIndex] = tombstone;
+  else state.deletionTombstones.push(tombstone);
+  return tombstone;
+}
+
+async function deletePurchaseImportBatchRowsFromCloud(batchId, documentIds = []) {
+  if (!cloudReadyForSync()) return;
+  await deleteCloudRowsByIds(CLOUD_ROW_TABLES.purchaseImportDocuments, "id", documentIds);
+  await deleteCloudRowsByIds(CLOUD_ROW_TABLES.purchaseImportBatches, "id", [batchId]);
 }
 
 function applyPurchasePaymentAdjustments(parsed = {}, text = "") {
