@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.6";
+const APP_BUILD = "2026.07.21.7";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -1493,14 +1493,15 @@ function normalizePurchaseImportParsedForState(parsed = {}, fallbackFileName = "
   const lines = (Array.isArray(parsed.lines) ? parsed.lines : []).map(line => {
     const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
     const grossRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
+    const cleanLine = normalizePurchaseLineImeiInfo(line);
     return {
-      name: String(line.name || line.itemName || "").trim(),
-      hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+      name: cleanLine.name,
+      hsn: normalizeLineHsn(cleanLine.hsn) || DEFAULT_SALE_HSN,
       qty: num(line.qty),
       rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
       grossRate,
       gstRate,
-      imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
+      imeiNumbers: cleanLine.imeiNumbers
     };
   });
   const parsedEwayDetails = parsed.ewayDetails && typeof parsed.ewayDetails === "object"
@@ -6758,7 +6759,7 @@ function renderPurchaseItemReview(lines = []) {
     const item = state.items.find(row => row.id === line.itemId) || {};
     const hsn = lineHsn(line, item);
     return `<tr>
-      <td data-label="Item">${escapeHtml(item.name || itemName(line.itemId))}</td>
+      <td data-label="Item">${escapeHtml(item.name || itemName(line.itemId))}${invoiceImeiMarkup(line.imeiNumbers)}</td>
       <td data-label="HSN/SAC">${escapeHtml(hsn)}</td>
       <td data-label="Qty" class="num">${num(line.qty)}</td>
       <td data-label="Rate per quantity" class="num">${money(lineGrossRate(line))}</td>
@@ -6799,15 +6800,98 @@ function blankLine(kind) {
 }
 
 function imeiNumbersFromText(value) {
-  return String(value || "")
-    .replace(/\bimei(?:\s*(?:nos?|numbers?))?\b\s*[:#-]?/ig, " ")
-    .split(/[\s,;|]+/)
-    .map(part => part.trim())
-    .filter(part => part.length >= 5);
+  const text = String(value || "").toUpperCase();
+  const candidates = text.match(/\b(?:\d{14,17}|[A-Z0-9]{8,20})\b/g) || [];
+  return candidates.filter(part => {
+    if (/^\d{14,17}$/.test(part)) return true;
+    if (!/[A-Z]/.test(part) || !/\d/.test(part)) return false;
+    if (/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(part)) return false;
+    if (/^(?:85171300|84713090)$/.test(part)) return false;
+    return true;
+  });
 }
 
 function normalizeImeiNumbers(value) {
   return [...new Set(imeiNumbersFromText(value))].join("\n");
+}
+
+function imeiSourceTextFromLine(line = {}) {
+  return [
+    line.imeiNumbers,
+    line.imei,
+    line.imeis,
+    line.serialNumber,
+    line.serialNumbers,
+    line.serialNo,
+    line.serialNos,
+    line.name,
+    line.itemName,
+    line.productName,
+    line.productDesc,
+    line.description
+  ].filter(Boolean).join(" ");
+}
+
+function stripImeiInfoFromText(value = "") {
+  return String(value || "")
+    .replace(/\b(?:imei|serial)(?:\s*(?:nos?|numbers?))?\b\s*[:#.-]?\s*[A-Z0-9,\s/-]+$/ig, " ")
+    .replace(/\b\d{14,17}\b/g, " ")
+    .replace(/\b[A-Z0-9]{8,20}\b/g, token => (/[A-Z]/.test(token) && /\d/.test(token) ? " " : token))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizePurchaseLineImeiInfo(line = {}) {
+  const imeiNumbers = normalizeImeiNumbers(imeiSourceTextFromLine(line));
+  const rawName = String(line.name || line.itemName || line.productName || line.productDesc || "").trim();
+  return {
+    ...line,
+    name: normalizeImportedItemName(stripImeiInfoFromText(rawName) || rawName),
+    itemName: normalizeImportedItemName(stripImeiInfoFromText(line.itemName || rawName) || line.itemName || rawName),
+    hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+    imeiNumbers
+  };
+}
+
+function productNameLine(value = "") {
+  return /\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(value);
+}
+
+function purchaseSerialGroupsByProduct(lines = []) {
+  const groups = [];
+  let current = null;
+  lines.forEach(line => {
+    const value = String(line || "").trim();
+    if (!value) return;
+    if (/Bank\s+Details|Account\s+No|IFSC|Account\s+holder|Authorized\s+Signatory|Receivers?\s+Signature/i.test(value)) {
+      if (current?.imeis.length) groups.push(current);
+      current = null;
+      return;
+    }
+    if (productNameLine(value)) {
+      if (current?.imeis.length) groups.push(current);
+      current = {
+        name: normalizeImportedItemName(stripImeiInfoFromText(value)),
+        imeis: []
+      };
+    }
+    if (!current) return;
+    current.imeis.push(...imeiNumbersFromText(value));
+  });
+  if (current?.imeis.length) groups.push(current);
+  return groups.map(group => ({
+    name: group.name,
+    imeiNumbers: [...new Set(group.imeis)].join("\n")
+  }));
+}
+
+function serialGroupForItemName(itemName = "", serialGroups = []) {
+  const normalizedName = normalizeImportedItemName(itemName);
+  const normalizedKey = normalizePurchaseSupplierProfileText(normalizedName);
+  return serialGroups.find(group => {
+    const groupKey = normalizePurchaseSupplierProfileText(group.name);
+    return groupKey === normalizedKey || groupKey.includes(normalizedKey) || normalizedKey.includes(groupKey);
+  })?.imeiNumbers || "";
 }
 
 function invoiceImeiMarkup(value) {
@@ -10949,10 +11033,11 @@ function ewayItem(line, serialNo, taxMode) {
   const gstRate = num(line.gstRate);
   const imeis = imeiNumbersFromText(line.imeiNumbers);
   const name = itemNameByLine(line, item, serialNo);
+  const uniqueImeis = [...new Set(imeis)];
   return {
     itemNo: serialNo,
     productName: name,
-    productDesc: imeis.length ? [...new Set(imeis)].join(", ") : name,
+    productDesc: uniqueImeis.length ? `${name} | IMEI: ${uniqueImeis.join(", ")}` : name,
     hsnCode: lineHsn(line, item),
     quantity: num(line.qty),
     qtyUnit: "PCS",
@@ -12598,15 +12683,16 @@ function purchaseImportPreviewLines(parsed = {}) {
   return (parsed.lines || []).map(line => {
     const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
     const grossRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
+    const cleanLine = normalizePurchaseLineImeiInfo(line);
     return {
       itemId: "",
-      itemName: line.name || "",
-      hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+      itemName: cleanLine.name || "",
+      hsn: normalizeLineHsn(cleanLine.hsn) || DEFAULT_SALE_HSN,
       qty: num(line.qty),
       grossRate,
       rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
       gstRate,
-      imeiNumbers: normalizeImeiNumbers(line.imeiNumbers || "")
+      imeiNumbers: cleanLine.imeiNumbers
     };
   });
 }
@@ -14392,7 +14478,7 @@ function imobilesItemLines(lines = [], supplierProfile = {}) {
     const rate = purchaseMoneyValue(match[4]);
     const total = purchaseMoneyValue(match[5]);
     const imeiNumbers = normalizeImeiNumbers((lines[index + 2] || "").match(/IMEI\/SERIAL\s+NO\.?\s*(.+)$/i)?.[1] || "");
-    rows.push({
+    rows.push(normalizePurchaseLineImeiInfo({
       name: normalizeImportedItemName(line),
       hsn: supplierProfileLineHsn(match[2], supplierProfile),
       qty,
@@ -14400,7 +14486,7 @@ function imobilesItemLines(lines = [], supplierProfile = {}) {
       grossRate: qty ? round2(total * 1.18 / qty) : inclusiveRateFromTaxable(rate, DEFAULT_SALE_GST_RATE),
       gstRate: DEFAULT_SALE_GST_RATE,
       imeiNumbers
-    });
+    }));
   }
   return rows;
 }
@@ -14428,11 +14514,12 @@ function imobilesBuyerAddress(lines = []) {
 function normalizeIMobilesPurchaseParsed(parsed = {}, text = "", fileName = "", supplierProfile = null) {
   const withDefaults = applyMobileSupplierProfileDefaults(parsed, text, fileName, supplierProfile);
   withDefaults.lines = (withDefaults.lines || []).map(line => {
+    const cleanLine = normalizePurchaseLineImeiInfo(line);
     const rate = num(line.rate) || taxableRateFromInclusive(line.grossRate, line.gstRate || DEFAULT_SALE_GST_RATE);
     return {
-      ...line,
-      name: normalizeImportedItemName(line.name || ""),
-      hsn: supplierProfileLineHsn(line.hsn, supplierProfile),
+      ...cleanLine,
+      name: normalizeImportedItemName(cleanLine.name || ""),
+      hsn: supplierProfileLineHsn(cleanLine.hsn, supplierProfile),
       rate,
       grossRate: num(line.grossRate) || inclusiveRateFromTaxable(rate, line.gstRate || DEFAULT_SALE_GST_RATE),
       gstRate: line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate)
@@ -14465,14 +14552,15 @@ function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = 
   const lineGst = round2(itemLines.reduce((sum, item) => sum + item.gst, 0));
   const lineTotal = round2(itemLines.reduce((sum, item) => sum + item.total, 0));
   const taxSummaryMatchesTotal = tax.taxable && tax.gst && (!tax.total || amountsClose(round2(tax.taxable + tax.gst), tax.total, 1));
-  const parsedLines = itemLines.map(item => ({
+  const serialGroups = purchaseSerialGroupsByProduct(lines);
+  const parsedLines = itemLines.map(item => normalizePurchaseLineImeiInfo({
     name: normalizeImportedItemName(item.name),
     hsn: supplierProfileLineHsn(item.hsn, supplierProfile),
     qty: item.qty,
     rate: item.rate,
     grossRate: item.qty ? round2(item.total / item.qty) : item.total,
     gstRate: item.gstRate || inferGstRate(item.taxable, item.gst),
-    imeiNumbers: item.imeiNumbers || ""
+    imeiNumbers: item.imeiNumbers || serialGroupForItemName(item.name, serialGroups)
   }));
   const taxable = taxSummaryMatchesTotal ? tax.taxable : (lineTaxable || tax.taxable);
   const gst = taxSummaryMatchesTotal ? tax.gst : (lineGst || tax.gst || round2((tax.total || 0) - taxable));
@@ -14778,12 +14866,13 @@ function applyMobileSupplierProfileDefaults(parsed = {}, text = "", fileName = "
 function normalizeVyaparMobilePurchaseParsed(parsed = {}, text = "", fileName = "", supplierProfile = null) {
   const withDefaults = applyMobileSupplierProfileDefaults(parsed, text, fileName, supplierProfile);
   withDefaults.lines = (withDefaults.lines || []).map(line => {
+    const cleanLine = normalizePurchaseLineImeiInfo(line);
     const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
     const grossRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
     return {
-      ...line,
-      name: normalizeImportedItemName(line.name || ""),
-      hsn: supplierProfileLineHsn(line.hsn, supplierProfile),
+      ...cleanLine,
+      name: normalizeImportedItemName(cleanLine.name || ""),
+      hsn: supplierProfileLineHsn(cleanLine.hsn, supplierProfile),
       rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
       grossRate,
       gstRate
