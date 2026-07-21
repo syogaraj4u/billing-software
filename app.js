@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.4";
+const APP_BUILD = "2026.07.21.5";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -14317,8 +14317,12 @@ function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = 
   const invoiceDate = toDateInput(cleaned.match(/\bDate\s*:?\s*([0-9]{1,2}[-\/.][0-9]{1,2}[-\/.][0-9]{2,4})/i)?.[1] || "")
     || findInvoiceDate(cleaned)
     || today();
-  const itemLines = vyaparMobileItemLines(lines);
+  const itemLines = vyaparMobileItemLines(lines, supplierProfile);
   const tax = vyaparMobileTaxSummary(lines, itemLines);
+  const lineTaxable = round2(itemLines.reduce((sum, item) => sum + item.taxable, 0));
+  const lineGst = round2(itemLines.reduce((sum, item) => sum + item.gst, 0));
+  const lineTotal = round2(itemLines.reduce((sum, item) => sum + item.total, 0));
+  const taxSummaryMatchesTotal = tax.taxable && tax.gst && (!tax.total || amountsClose(round2(tax.taxable + tax.gst), tax.total, 1));
   const parsedLines = itemLines.map(item => ({
     name: normalizeImportedItemName(item.name),
     hsn: supplierProfileLineHsn(item.hsn, supplierProfile),
@@ -14328,9 +14332,9 @@ function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = 
     gstRate: item.gstRate || inferGstRate(item.taxable, item.gst),
     imeiNumbers: item.imeiNumbers || ""
   }));
-  const taxable = tax.taxable || round2(itemLines.reduce((sum, item) => sum + item.taxable, 0));
-  const gst = tax.gst || round2(itemLines.reduce((sum, item) => sum + item.gst, 0));
-  const total = tax.total || round2(itemLines.reduce((sum, item) => sum + item.total, 0)) || round2(taxable + gst);
+  const taxable = taxSummaryMatchesTotal ? tax.taxable : (lineTaxable || tax.taxable);
+  const gst = taxSummaryMatchesTotal ? tax.gst : (lineGst || tax.gst || round2((tax.total || 0) - taxable));
+  const total = tax.total || lineTotal || round2(taxable + gst);
   return applyMobileSupplierProfileDefaults({
     fileName,
     profileId: profile.id,
@@ -14368,12 +14372,15 @@ function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = 
   }, text, fileName, supplierProfile);
 }
 
-function vyaparMobileItemLines(lines = []) {
+function vyaparMobileItemLines(lines = [], supplierProfile = {}) {
+  const tableRows = vyaparMobileStructuredItemLines(vyaparMobileTableLines(lines), supplierProfile);
+  if (tableRows.length) return tableRows.slice(0, 30);
   const rows = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
+  const scanLines = vyaparMobileTableLines(lines);
+  for (let index = 0; index < scanLines.length; index += 1) {
+    const line = scanLines[index];
     if (!/\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(line) || !/[₹0-9]/.test(line)) continue;
-    const windowText = lines.slice(index, Math.min(lines.length, index + 7)).join(" ");
+    const windowText = scanLines.slice(index, Math.min(scanLines.length, index + 7)).join(" ");
     const normalized = windowText.replace(/[₹,]/g, "");
     const hsnMatch = normalized.match(/\b(85171300|84713090|\d{8})\b/);
     const hsn = hsnMatch?.[1] || DEFAULT_SALE_HSN;
@@ -14411,6 +14418,151 @@ function vyaparMobileItemLines(lines = []) {
   return rows.slice(0, 30);
 }
 
+function vyaparMobileTableLines(lines = []) {
+  const start = lines.findIndex(line => /^#\s*Item\s+name\b/i.test(line));
+  if (start < 0) return lines;
+  const end = lines.findIndex((line, index) => index > start && /^Total\s+\d+\b/i.test(line));
+  return lines.slice(start + 1, end > start ? end : lines.length);
+}
+
+function vyaparMobileStructuredItemLines(tableLines = [], supplierProfile = {}) {
+  const rows = [];
+  let pendingName = "";
+  let pendingTax = 0;
+  for (let index = 0; index < tableLines.length; index += 1) {
+    const line = tableLines[index];
+    const normalized = line.replace(/[₹]/g, " ").replace(/\s+/g, " ").trim();
+    const valuesOnLine = vyaparMobileMoneyValues(normalized);
+    if (!/\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(normalized) && valuesOnLine.length === 1 && valuesOnLine[0] > 1000) {
+      pendingTax = valuesOnLine[0];
+    }
+    if (!/^\d+\s+/.test(normalized) && /\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(normalized)) {
+      const nameOnly = normalized.replace(/\s+[0-9,]+(?:\.\d{1,2})?\s*$/g, "").trim();
+      pendingName = nameOnly || normalized;
+      pendingTax = vyaparMobileMoneyValues(normalized).find(value => value > 1000) || 0;
+    }
+    let match = normalized.match(/^(\d+)\s+(.+?)\s+(\d{4,8})\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)\s*(?:\((\d+(?:\.\d+)?)%\))?\s+([0-9,]+(?:\.\d{1,2})?)/i);
+    if (match) {
+      rows.push(vyaparMobileBuildRow({
+        name: match[2],
+        hsn: match[3],
+        qty: match[4],
+        rate: match[5],
+        gst: match[6],
+        total: match[8],
+        gstRate: match[7],
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+      continue;
+    }
+    match = normalized.match(/^(\d+)\s+(\d{4,8})\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)\s*(?:\((\d+(?:\.\d+)?)%\))?\s+([0-9,]+(?:\.\d{1,2})?)/i);
+    if (match && pendingName) {
+      const nextNamePart = /^\d+\s*GB\b/i.test(tableLines[index + 1] || "") ? ` ${(tableLines[index + 1] || "").trim()}` : "";
+      if (nextNamePart) index += 1;
+      rows.push(vyaparMobileBuildRow({
+        name: `${pendingName}${nextNamePart}`,
+        hsn: match[2],
+        qty: match[3],
+        rate: match[4],
+        gst: match[5],
+        total: match[7],
+        gstRate: match[6],
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+      continue;
+    }
+    match = normalized.match(/^(\d+)\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)/i);
+    if (match && pendingName) {
+      const qty = purchaseMoneyValue(match[2]);
+      const rate = purchaseMoneyValue(match[3]);
+      const total = purchaseMoneyValue(match[4]);
+      rows.push(vyaparMobileBuildRow({
+        name: pendingName,
+        hsn: "",
+        qty,
+        rate,
+        gst: pendingTax || round2(total - qty * rate),
+        total,
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+      continue;
+    }
+    match = normalized.match(/^(\d+)\s+\d{14,17},?\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d+)?)/i);
+    if (match && pendingName) {
+      const qty = purchaseMoneyValue(match[2]);
+      const gst = purchaseMoneyValue(match[3]);
+      const total = purchaseMoneyValue(match[4]);
+      const rate = purchaseMoneyValue(tableLines[index + 1] || "") || (qty ? round2((total - gst) / qty) : 0);
+      rows.push(vyaparMobileBuildRow({
+        name: pendingName,
+        hsn: "",
+        qty,
+        rate,
+        gst,
+        total,
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+      continue;
+    }
+    match = normalized.match(/^(\d+)\s+(.+?)\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)$/i);
+    if (match && /\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(match[2])) {
+      const nextText = `${tableLines[index + 1] || ""} ${tableLines[index + 2] || ""}`;
+      const gst = pendingTax || vyaparMobileMoneyValues(nextText).find(value => value > 1000) || 0;
+      const total = Math.max(...vyaparMobileMoneyValues(nextText).filter(value => value > 1000), 0) || round2(purchaseMoneyValue(match[3]) * purchaseMoneyValue(match[4]) + gst);
+      rows.push(vyaparMobileBuildRow({
+        name: match[2],
+        hsn: "",
+        qty: match[3],
+        rate: match[4],
+        gst,
+        total,
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+    }
+  }
+  return rows.filter(row => row.name && row.qty > 0 && row.total > 0);
+}
+
+function vyaparMobileBuildRow({ name, hsn, qty, rate, gst, total, gstRate, supplierProfile }) {
+  const parsedQty = purchaseMoneyValue(qty) || 1;
+  const parsedRate = purchaseMoneyValue(rate);
+  const parsedTotal = purchaseMoneyValue(total);
+  const taxable = parsedRate ? round2(parsedRate * parsedQty) : round2(parsedTotal - purchaseMoneyValue(gst));
+  const parsedGst = purchaseMoneyValue(gst) || round2(parsedTotal - taxable);
+  return {
+    name: normalizeImportedItemName(name),
+    hsn: supplierProfileLineHsn(hsn, supplierProfile),
+    qty: parsedQty,
+    rate: parsedQty ? round2(taxable / parsedQty) : taxable,
+    taxable,
+    gst: parsedGst,
+    total: parsedTotal || round2(taxable + parsedGst),
+    gstRate: Number(gstRate) || inferGstRate(taxable, parsedGst),
+    imeiNumbers: ""
+  };
+}
+
+function purchaseMoneyValue(value) {
+  const match = String(value || "").match(/[0-9][0-9,]*(?:\.\d+)?/);
+  return match ? Number(match[0].replace(/,/g, "")) : 0;
+}
+
+function vyaparMobileMoneyValues(value = "") {
+  return (String(value || "").match(/[0-9][0-9,]*(?:\.\d+)?/g) || [])
+    .map(part => Number(part.replace(/,/g, "")))
+    .filter(value => Number.isFinite(value));
+}
+
 function vyaparMobileQtyRateFromValues(values = [], total = 0, gstRate = DEFAULT_SALE_GST_RATE) {
   const qtyCandidates = [...new Set(values.filter(value => value > 0 && value <= 500 && Number.isInteger(value)))];
   const rateCandidates = [...new Set(values.filter(value => value > 1000 && value < 300000 && value !== total))];
@@ -14428,11 +14580,19 @@ function vyaparMobileQtyRateFromValues(values = [], total = 0, gstRate = DEFAULT
 
 function vyaparMobileTaxSummary(lines = [], itemLines = []) {
   const text = lines.join("\n").replace(/[₹,]/g, "");
+  const total = vyaparMobileInvoiceTotal(lines);
+  const printedSummary = lines.join("\n").match(/\bTOTAL\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)\b/i);
+  if (printedSummary) {
+    const taxable = purchaseMoneyValue(printedSummary[1]);
+    const gst = purchaseMoneyValue(printedSummary[2]);
+    if (taxable && gst && (!total || amountsClose(round2(taxable + gst), total, 1))) {
+      return { taxable, cgst: 0, sgst: 0, igst: gst, gst, total: total || round2(taxable + gst) };
+    }
+  }
   const subtotal = amountAfterLabel(text, /Sub\s*Total\s*:?\s*/i);
   const igst = amountAfterLabel(text, /IGST(?:@\d+(?:\.\d+)?%)?\s*:?\s*/i);
   const cgst = amountAfterLabel(text, /CGST(?:@\d+(?:\.\d+)?%)?\s*:?\s*/i);
   const sgst = amountAfterLabel(text, /SGST(?:@\d+(?:\.\d+)?%)?\s*:?\s*/i);
-  const total = vyaparMobileInvoiceTotal(lines);
   const taxable = subtotal || round2(itemLines.reduce((sum, item) => sum + item.taxable, 0));
   const gst = round2(cgst + sgst + igst) || round2((total || 0) - taxable);
   return { taxable, cgst, sgst, igst, gst, total };
@@ -15273,6 +15433,8 @@ function normalizeImportedItemName(value) {
   const cleaned = cleanImportedItemNameText(value);
   const appleName = normalizeAppleProductName(cleaned);
   if (appleName) return appleName;
+  const ipadName = normalizeAppleIpadProductName(cleaned);
+  if (ipadName) return ipadName;
   const generic = cleaned
     .replace(/\s*\([^)]*(?:color|colour|clr|sku|code|ean|imei|serial|batch|hsn|gb|tb)[^)]*\)\s*/gi, " ")
     .replace(/\s*\[[^\]]*(?:color|colour|clr|sku|code|ean|imei|serial|batch|hsn|gb|tb)[^\]]*\]\s*/gi, " ")
@@ -15308,6 +15470,19 @@ function normalizeAppleProductName(value) {
   const variant = normalizeAppleVariant(modelTail);
   const storage = normalizeAppleStorage(compact);
   return ["iPhone", series, variant, storage].filter(Boolean).join(" ");
+}
+
+function normalizeAppleIpadProductName(value) {
+  const text = cleanImportedItemNameText(value);
+  if (!/\bipad\b|i\s*pad/i.test(text)) return "";
+  const compact = text
+    .replace(/\bapple\b/gi, " ")
+    .replace(/\bi\s*pad\b/gi, "iPad")
+    .replace(/\s+/g, " ")
+    .trim();
+  const chip = compact.match(/\bA\d{1,2}\b/i)?.[0]?.toUpperCase() || "";
+  const storage = normalizeAppleStorage(compact);
+  return ["iPad", chip, storage].filter(Boolean).join(" ");
 }
 
 function normalizeAppleVariant(value) {
