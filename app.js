@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.3";
+const APP_BUILD = "2026.07.21.4";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -13778,7 +13778,8 @@ async function extractPurchaseInvoiceWithCloud(file) {
         mimeType: file.type || "application/octet-stream",
         base64,
         activeProfileId: activeProfileId(),
-        profiles: state.settings.profiles
+        profiles: state.settings.profiles,
+        supplierProfiles: purchaseSupplierProfilePayload()
       }
     });
     if (error) throw error;
@@ -13787,6 +13788,50 @@ async function extractPurchaseInvoiceWithCloud(file) {
     console.warn("Cloud purchase extractor unavailable", error);
     return null;
   }
+}
+
+function purchaseSupplierProfilePayload() {
+  return PURCHASE_SUPPLIER_PROFILES
+    .filter(profile => profile.gstins?.length || profile.defaultPincode)
+    .map(profile => ({
+      id: profile.id,
+      label: profile.label,
+      gstins: profile.gstins || [],
+      aliases: profile.aliases || [],
+      defaultPincode: profile.defaultPincode || "",
+      defaultPlace: profile.defaultPlace || "",
+      defaultAddress: profile.defaultAddress || "",
+      notes: purchaseSupplierProfileNotes(profile)
+    }));
+}
+
+function purchaseSupplierProfileNotes(profile = {}) {
+  if (profile.id === "mango-mobiles") {
+    return [
+      "Scanned tax invoice. Supplier header: MANGO MOBILES, GSTIN 33CHUPM4245C1ZB, Theni 625531.",
+      "Invoice no appears beside 'Invoice no:' and date beside 'Date of Invoice'.",
+      "HSN may be printed as 8517; normalize mobile HSN to 85171300.",
+      "Price column is taxable unit rate. Amount column is GST-inclusive line total.",
+      "Two 9% tax columns represent total 18% tax; when buyer state differs from supplier, treat tax as IGST 18%.",
+      "Do not treat IMEI numbers as amounts."
+    ];
+  }
+  if (profile.id === "disco-mobile" || profile.id === "just-deal") {
+    return [
+      "Price/Unit is taxable unit rate. Amount is GST-inclusive line total.",
+      "Use default supplier PIN when the invoice address does not show a PIN.",
+      "Do not treat serial or IMEI numbers as amounts."
+    ];
+  }
+  return [];
+}
+
+function supplierProfileLineHsn(value, supplierProfile = {}) {
+  const hsn = normalizeLineHsn(value);
+  if (["mango-mobiles", "disco-mobile", "just-deal"].includes(supplierProfile.id) && (!hsn || hsn === "8517")) {
+    return DEFAULT_SALE_HSN;
+  }
+  return hsn || DEFAULT_SALE_HSN;
 }
 
 async function enrichPurchasePincodes(parsed = {}) {
@@ -14276,7 +14321,7 @@ function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = 
   const tax = vyaparMobileTaxSummary(lines, itemLines);
   const parsedLines = itemLines.map(item => ({
     name: normalizeImportedItemName(item.name),
-    hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
+    hsn: supplierProfileLineHsn(item.hsn, supplierProfile),
     qty: item.qty,
     rate: item.rate,
     grossRate: item.qty ? round2(item.total / item.qty) : item.total,
@@ -14436,7 +14481,7 @@ function normalizeVyaparMobilePurchaseParsed(parsed = {}, text = "", fileName = 
     return {
       ...line,
       name: normalizeImportedItemName(line.name || ""),
-      hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+      hsn: supplierProfileLineHsn(line.hsn, supplierProfile),
       rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
       grossRate,
       gstRate
