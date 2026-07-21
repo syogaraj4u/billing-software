@@ -14048,7 +14048,133 @@ function parsePurchaseInvoiceText(text, fileName) {
 
 function parseSpecialPurchaseInvoiceText(text, fileName) {
   if (isReliancePurchaseInvoice(text)) return parseReliancePurchaseInvoiceText(text, fileName);
+  if (isHarshithPurchaseInvoice(text)) return parseHarshithPurchaseInvoiceText(text, fileName);
   return null;
+}
+
+function isHarshithPurchaseInvoice(text) {
+  return /harshith\s+enterprises/i.test(text)
+    || normalizeGstin(String(text || "").match(/\b37ALHPP0600M1Z2\b/i)?.[0]) === "37ALHPP0600M1Z2";
+}
+
+function parseHarshithPurchaseInvoiceText(text, fileName) {
+  const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
+  const buyerGstin = normalizeGstin(
+    cleaned.match(/Customer\s*-?\s*GSTIN\s*:?\s*([0-9A-Z]{15})/i)?.[1]
+    || cleaned.match(/Customer\s+GSTIN\s*:?\s*([0-9A-Z]{15})/i)?.[1]
+    || ""
+  );
+  const profile = profileByGstin(buyerGstin) || activeProfile();
+  const supplierGstin = normalizeGstin(
+    cleaned.match(/GSTIN\s*:?\s*(37ALHPP0600M1Z2)/i)?.[1]
+    || "37ALHPP0600M1Z2"
+  );
+  const invoiceNumber = cleaned.match(/\b(TPT\/\d{2}-\d{2}\/\d+)\b/i)?.[1]
+    || findInvoiceNumber(lines)
+    || nextEntryNumber("purchase", profile.id);
+  const invoiceDate = toDateInput(cleaned.match(/\bDate\s*:\s*([0-9]{1,2}[-\/.][0-9]{1,2}[-\/.][0-9]{2,4})/i)?.[1] || "")
+    || findInvoiceDate(cleaned)
+    || today();
+  const item = harshithItemLine(lines);
+  const tax = harshithTaxSummary(cleaned, item);
+  const gstRate = item.gstRate || inferGstRate(tax.taxable, tax.gst);
+  const qty = num(item.qty) || 1;
+  const taxable = tax.taxable || round2(qty * num(item.rate));
+  const total = tax.total || round2(taxable + tax.gst);
+  const lineTotal = total || taxable;
+  const parsedLine = {
+    name: normalizeImportedItemName(item.name || "Harshith Purchase"),
+    hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
+    qty,
+    rate: qty ? round2(taxable / qty) : taxable,
+    grossRate: qty ? round2(lineTotal / qty) : lineTotal,
+    gstRate,
+    imeiNumbers: item.imeiNumbers || ""
+  };
+  return {
+    fileName,
+    profileId: profile.id,
+    supplierName: "HARSHITH ENTERPRISES",
+    supplierGstin,
+    supplierAddress: "# 166, Air Bypass Road, Tirupati - 517501",
+    supplierPlace: stateNameFromGstin(supplierGstin) || "Andhra Pradesh",
+    buyerName: profile.businessName || harshithBuyerName(cleaned) || profile.label || "",
+    buyerGstin: normalizeGstin(profile.gstin || buyerGstin),
+    buyerAddress: harshithBuyerAddress(lines),
+    buyerPlace: profile.state || stateNameFromGstin(buyerGstin) || "",
+    invoiceNumber,
+    invoiceDate,
+    taxable,
+    gst: tax.gst,
+    total,
+    roundOff: purchasePaymentAdjustmentFromText(cleaned),
+    extractedTaxes: {
+      taxable,
+      cgst: tax.cgst,
+      sgst: tax.sgst,
+      igst: tax.igst,
+      gst: tax.gst,
+      total
+    },
+    reviewMessages: item.name ? [] : ["Harshith invoice detected, but item details were not fully readable. Review item values before saving."],
+    lines: [parsedLine]
+  };
+}
+
+function harshithItemLine(lines = []) {
+  const index = lines.findIndex(line => /\b85171300\b/.test(line) && /\d/.test(line));
+  const line = index >= 0 ? lines[index] : "";
+  const normalized = line.replace(/,/g, "");
+  const match = normalized.match(/^\s*(?:\d+\s+)?(.+?)\s+(85171300)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d{1,2})?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d{1,2})?)\s*$/i);
+  const imeiNumbers = lines.slice(index + 1, index + 8).join(" ").match(/\b\d{14,17}\b/g)?.join("\n") || "";
+  if (!match) {
+    return {
+      name: line.split(/\b85171300\b/)[0]?.replace(/^\d+\s*/, "").trim() || "Harshith Purchase",
+      hsn: DEFAULT_SALE_HSN,
+      qty: 1,
+      rate: 0,
+      gstRate: DEFAULT_SALE_GST_RATE,
+      imeiNumbers
+    };
+  }
+  return {
+    name: match[1],
+    hsn: match[2],
+    qty: Number(match[3]),
+    rate: Number(match[4]),
+    gstRate: round2(Number(match[5]) + Number(match[6])),
+    imeiNumbers
+  };
+}
+
+function harshithTaxSummary(text = "", item = {}) {
+  const taxable = amountAfterLabel(text, /(?:^|\n)\s*Total\s+\d+(?:\.\d+)?\s+/i)
+    || amountAfterLabel(text, /Taxable\s+Value\s*/i)
+    || round2(num(item.qty) * num(item.rate));
+  const cgst = amountAfterLabel(text, /CGST\s+Amount\s*:/i);
+  const sgst = amountAfterLabel(text, /SGST\s+Amount\s*:/i);
+  const igst = amountAfterLabel(text, /IGST\s+Amount\s*:/i);
+  const gst = round2(cgst + sgst + igst);
+  const total = amountAfterLabel(text, /Net\s+Amount\s+/i) || round2(taxable + gst);
+  return { taxable, cgst, sgst, igst, gst, total };
+}
+
+function amountAfterLabel(text = "", labelPattern) {
+  const match = String(text || "").match(new RegExp(`${labelPattern.source}\\s*([0-9,]+(?:\\.\\d{1,2})?)`, labelPattern.flags.includes("i") ? "i" : ""));
+  return match ? Number(match[1].replace(/,/g, "")) : 0;
+}
+
+function harshithBuyerName(text = "") {
+  return String(text || "").match(/CUSTOMER\s+NAME\s*:?\s*(.+?)(?:\s+TPT\/|\n|$)/i)?.[1]?.trim() || "";
+}
+
+function harshithBuyerAddress(lines = []) {
+  const addressLine = lines.find(line => /CUSTOMER\s+ADDRESS/i.test(line)) || "";
+  const cityLine = lines.find(line => /^CITY\s*:/i.test(line)) || "";
+  const address = addressLine.replace(/^CUSTOMER\s+ADDRESS\s*/i, "").replace(/^:\s*/, "").trim();
+  const city = cityLine.replace(/^CITY\s*:\s*/i, "").trim();
+  return [address, city].filter(Boolean).join(", ");
 }
 
 function isReliancePurchaseInvoice(text) {
