@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.2";
+const APP_BUILD = "2026.07.21.3";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -38,7 +38,7 @@ const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
 const DISALLOWED_HSN_CODES = new Set(["85176290"]);
 const DEFAULT_SALE_GST_RATE = 18;
-const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-21-local-first-v1";
+const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-21-local-first-v2";
 const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
@@ -173,18 +173,38 @@ const PURCHASE_SUPPLIER_PROFILES = [
   {
     id: "mango-mobiles",
     label: "Mango Mobiles",
-    gstins: [],
+    gstins: ["33CHUPM4245C1ZB"],
     aliases: ["mango mobiles", "mango mobile"],
-    invoicePatterns: [],
-    parser: null
+    invoicePatterns: [/MANGO\s+MOBILES/i],
+    parser: null,
+    postProcess: applyMobileSupplierProfileDefaults,
+    defaultPincode: "625531",
+    defaultPlace: "Theni",
+    defaultAddress: "NO 854 CUMBUM MAIN ROAD, NEAR VIJSYS ELECTRICALS, THENI"
   },
   {
     id: "just-deal",
     label: "Just Deal",
-    gstins: [],
-    aliases: ["just deal"],
-    invoicePatterns: [],
-    parser: null
+    gstins: ["33DKWPA3089L1ZM"],
+    aliases: ["just deal", "just deals"],
+    invoicePatterns: [/JUST\s+DEAL/i],
+    parser: parseJustDealPurchaseInvoiceText,
+    postProcess: normalizeVyaparMobilePurchaseParsed,
+    defaultPincode: "625516",
+    defaultPlace: "Cumbum",
+    defaultAddress: "OLD CHECKPOST BACKSIDE NO.11, NO.155L CUMBUM, THENI DIST"
+  },
+  {
+    id: "disco-mobile",
+    label: "Disco Mobile",
+    gstins: ["33AARFD4472C1ZJ"],
+    aliases: ["disco mobile", "disco mobiles"],
+    invoicePatterns: [/DISCO\s+MOBILE/i],
+    parser: parseDiscoPurchaseInvoiceText,
+    postProcess: normalizeVyaparMobilePurchaseParsed,
+    defaultPincode: "625516",
+    defaultPlace: "Cumbum",
+    defaultAddress: "332 L.F. ROAD, CUMBUM"
   }
 ];
 
@@ -14224,6 +14244,205 @@ function supplierProfileParseReady(parsed = null) {
   const total = num(parsed.extractedTaxes?.total || parsed.total);
   const totalsMatch = !taxable || !total || amountsClose(round2(taxable + gst + num(parsed.roundOff)), total, 1);
   return hasSupplier && hasBuyer && hasHeader && hasLines && totalsMatch;
+}
+
+function parseDiscoPurchaseInvoiceText(text, fileName, profile) {
+  return parseVyaparMobilePurchaseInvoiceText(text, fileName, profile);
+}
+
+function parseJustDealPurchaseInvoiceText(text, fileName, profile) {
+  return parseVyaparMobilePurchaseInvoiceText(text, fileName, profile);
+}
+
+function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = {}) {
+  const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
+  const supplierGstin = normalizeGstin(
+    supplierProfile.gstins?.find(gstin => cleaned.includes(gstin))
+    || supplierProfile.gstins?.[0]
+    || extractGstinsFromText(cleaned)[0]
+  );
+  const buyerGstin = extractGstinsFromText(cleaned).find(gstin => gstin !== supplierGstin && profileByGstin(gstin))
+    || normalizeGstin(cleaned.match(/GSTIN\s+Number\s*:?\s*([0-9A-Z]{15})/i)?.[1])
+    || "";
+  const profile = profileByGstin(buyerGstin) || activeProfile();
+  const invoiceNumber = cleaned.match(/\bInvoice\s+No\.?\s*:?\s*([A-Z0-9\-\/]+)/i)?.[1]
+    || findInvoiceNumber(lines)
+    || nextEntryNumber("purchase", profile.id);
+  const invoiceDate = toDateInput(cleaned.match(/\bDate\s*:?\s*([0-9]{1,2}[-\/.][0-9]{1,2}[-\/.][0-9]{2,4})/i)?.[1] || "")
+    || findInvoiceDate(cleaned)
+    || today();
+  const itemLines = vyaparMobileItemLines(lines);
+  const tax = vyaparMobileTaxSummary(lines, itemLines);
+  const parsedLines = itemLines.map(item => ({
+    name: normalizeImportedItemName(item.name),
+    hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
+    qty: item.qty,
+    rate: item.rate,
+    grossRate: item.qty ? round2(item.total / item.qty) : item.total,
+    gstRate: item.gstRate || inferGstRate(item.taxable, item.gst),
+    imeiNumbers: item.imeiNumbers || ""
+  }));
+  const taxable = tax.taxable || round2(itemLines.reduce((sum, item) => sum + item.taxable, 0));
+  const gst = tax.gst || round2(itemLines.reduce((sum, item) => sum + item.gst, 0));
+  const total = tax.total || round2(itemLines.reduce((sum, item) => sum + item.total, 0)) || round2(taxable + gst);
+  return applyMobileSupplierProfileDefaults({
+    fileName,
+    profileId: profile.id,
+    supplierName: supplierProfile.label || findSupplierName(lines, supplierGstin) || "Mobile Supplier",
+    supplierGstin,
+    supplierAddress: supplierProfile.defaultAddress || findSupplierAddress(lines, supplierGstin),
+    supplierPlace: supplierProfile.defaultPlace || stateNameFromGstin(supplierGstin) || "",
+    buyerName: profile.businessName || vyaparMobileBuyerName(lines) || profile.label || "",
+    buyerGstin: normalizeGstin(profile.gstin || buyerGstin),
+    buyerAddress: vyaparMobileBuyerAddress(lines),
+    buyerPlace: profile.state || stateNameFromGstin(buyerGstin) || "",
+    invoiceNumber,
+    invoiceDate,
+    taxable,
+    gst,
+    total,
+    roundOff: purchasePaymentAdjustmentFromText(cleaned),
+    extractedTaxes: {
+      taxable,
+      cgst: tax.cgst,
+      sgst: tax.sgst,
+      igst: tax.igst || gst,
+      gst,
+      total
+    },
+    reviewMessages: parsedLines.length ? [] : [`${supplierProfile.label || "Supplier"} invoice detected, but item details were not fully readable. Review item values before saving.`],
+    lines: parsedLines.length ? parsedLines : [{
+      name: `${supplierProfile.label || "Mobile"} Purchase`,
+      hsn: DEFAULT_SALE_HSN,
+      qty: 1,
+      rate: taxable,
+      grossRate: total,
+      gstRate: inferGstRate(taxable, gst)
+    }]
+  }, text, fileName, supplierProfile);
+}
+
+function vyaparMobileItemLines(lines = []) {
+  const rows = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(line) || !/[₹0-9]/.test(line)) continue;
+    const windowText = lines.slice(index, Math.min(lines.length, index + 7)).join(" ");
+    const normalized = windowText.replace(/[₹,]/g, "");
+    const hsnMatch = normalized.match(/\b(85171300|84713090|\d{8})\b/);
+    const hsn = hsnMatch?.[1] || DEFAULT_SALE_HSN;
+    const nameMatch = windowText.match(/\b(?:APPLE\s+)?(?:I\s*)?PHONE\s+\d+(?:\s+PRO\s+MAX|\s+PRO|\s+PLUS)?(?:\s+\d+\s*GB)?|\b(?:APPLE\s+)?I\s*PAD[^₹|]*/i);
+    const name = normalizeImportedItemName(nameMatch?.[0] || line.split(/\b85171300\b|\b84713090\b/)[0]);
+    const numericText = hsnMatch
+      ? normalized.slice(hsnMatch.index + hsnMatch[0].length)
+      : normalized.slice(nameMatch ? nameMatch.index + nameMatch[0].length : 0);
+    const gstRateMatch = normalized.match(/\((\d+(?:\.\d+)?)\s*%\)|\b(\d+(?:\.\d+)?)\s*%/);
+    const gstRate = Number(gstRateMatch?.[1] || gstRateMatch?.[2] || DEFAULT_SALE_GST_RATE);
+    const amountValues = [...numericText.matchAll(/(\d+(?:\.\d{1,2})?)/g)]
+      .map(match => match[1])
+      .filter(value => !/^\d{14,17}$/.test(value))
+      .map(Number)
+      .filter(value => value > 0 && value !== Number(hsn) && value !== gstRate);
+    const largeValues = amountValues.filter(value => value > 1000);
+    const total = largeValues.length ? largeValues[largeValues.length - 1] : 0;
+    const qtyRate = vyaparMobileQtyRateFromValues(amountValues, total, gstRate);
+    const qty = qtyRate.qty || 1;
+    const rate = qtyRate.rate || (total ? round2(total / (1 + gstRate / 100) / qty) : 0);
+    const taxable = rate ? round2(rate * qty) : round2(total / (1 + gstRate / 100));
+    const imeiNumbers = [...new Set(windowText.match(/\b\d{14,17}\b/g) || [])].join("\n");
+    if (name && taxable > 0) rows.push({
+      name,
+      hsn,
+      qty,
+      rate: qty ? round2(taxable / qty) : taxable,
+      taxable,
+      gst: round2(total - taxable),
+      total,
+      gstRate,
+      imeiNumbers
+    });
+  }
+  return rows.slice(0, 30);
+}
+
+function vyaparMobileQtyRateFromValues(values = [], total = 0, gstRate = DEFAULT_SALE_GST_RATE) {
+  const qtyCandidates = [...new Set(values.filter(value => value > 0 && value <= 500 && Number.isInteger(value)))];
+  const rateCandidates = [...new Set(values.filter(value => value > 1000 && value < 300000 && value !== total))];
+  let best = { qty: qtyCandidates[0] || 1, rate: rateCandidates[0] || 0, score: Infinity };
+  qtyCandidates.forEach(qty => {
+    rateCandidates.forEach(rate => {
+      const inclusive = round2(qty * rate * (1 + gstRate / 100));
+      const taxable = round2(qty * rate);
+      const score = Math.min(Math.abs(inclusive - total), Math.abs(taxable - total));
+      if (score < best.score) best = { qty, rate, score };
+    });
+  });
+  return { qty: best.qty, rate: best.rate };
+}
+
+function vyaparMobileTaxSummary(lines = [], itemLines = []) {
+  const text = lines.join("\n").replace(/[₹,]/g, "");
+  const subtotal = amountAfterLabel(text, /Sub\s*Total\s*:?\s*/i);
+  const igst = amountAfterLabel(text, /IGST(?:@\d+(?:\.\d+)?%)?\s*:?\s*/i);
+  const cgst = amountAfterLabel(text, /CGST(?:@\d+(?:\.\d+)?%)?\s*:?\s*/i);
+  const sgst = amountAfterLabel(text, /SGST(?:@\d+(?:\.\d+)?%)?\s*:?\s*/i);
+  const total = vyaparMobileInvoiceTotal(lines);
+  const taxable = subtotal || round2(itemLines.reduce((sum, item) => sum + item.taxable, 0));
+  const gst = round2(cgst + sgst + igst) || round2((total || 0) - taxable);
+  return { taxable, cgst, sgst, igst, gst, total };
+}
+
+function vyaparMobileInvoiceTotal(lines = []) {
+  const candidates = lines
+    .filter(line => /\bTotal\b/i.test(line) && !/Tax\s+Summary|Taxable|HSN|Total\s+Tax/i.test(line))
+    .map(line => lastAmount(line))
+    .filter(value => value > 1000);
+  const received = amountAfterLabel(lines.join("\n"), /Received\s*:?\s*/i);
+  return Math.max(0, ...candidates, received);
+}
+
+function vyaparMobileBuyerName(lines = []) {
+  const start = lines.findIndex(line => /^Bill\s+To\b/i.test(line));
+  return start >= 0 ? (lines[start + 1] || "") : "";
+}
+
+function vyaparMobileBuyerAddress(lines = []) {
+  const start = lines.findIndex(line => /^Bill\s+To\b/i.test(line));
+  if (start < 0) return "";
+  const end = lines.findIndex((line, index) => index > start && /Invoice\s+Details|GSTIN|State:|#\s*Item/i.test(line));
+  return lines.slice(start + 2, end > start ? end : start + 8).join(", ");
+}
+
+function applyMobileSupplierProfileDefaults(parsed = {}, text = "", fileName = "", supplierProfile = null) {
+  const profile = supplierProfile || detectPurchaseSupplierProfile({ text, fileName, parsed });
+  if (!profile) return parsed;
+  const pin = normalizePincode(profile.defaultPincode || "");
+  if (pin && !extractPreferredPincode(parsed.supplierAddress || parsed.supplierPlace)) {
+    parsed.supplierAddress = addressWithPincode(parsed.supplierAddress || profile.defaultAddress || "", pin);
+    parsed.supplierPlace = parsed.supplierPlace || profile.defaultPlace || "";
+    parsed.supplierPincodeSource = parsed.supplierPincodeSource || "supplier-profile";
+  }
+  if (!parsed.supplierName && profile.label) parsed.supplierName = profile.label;
+  if (!parsed.supplierGstin && profile.gstins?.[0]) parsed.supplierGstin = normalizeGstin(profile.gstins[0]);
+  return parsed;
+}
+
+function normalizeVyaparMobilePurchaseParsed(parsed = {}, text = "", fileName = "", supplierProfile = null) {
+  const withDefaults = applyMobileSupplierProfileDefaults(parsed, text, fileName, supplierProfile);
+  withDefaults.lines = (withDefaults.lines || []).map(line => {
+    const gstRate = line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate);
+    const grossRate = num(line.grossRate) || inclusiveRateFromTaxable(line.rate, gstRate);
+    return {
+      ...line,
+      name: normalizeImportedItemName(line.name || ""),
+      hsn: normalizeLineHsn(line.hsn) || DEFAULT_SALE_HSN,
+      rate: num(line.rate) || taxableRateFromInclusive(grossRate, gstRate),
+      grossRate,
+      gstRate
+    };
+  });
+  return withDefaults;
 }
 
 function isHarshithPurchaseInvoice(text) {
