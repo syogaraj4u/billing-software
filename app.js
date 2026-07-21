@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.1";
+const APP_BUILD = "2026.07.21.2";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -558,6 +558,7 @@ let cloudLoading = false;
 let cloudSyncTimer = null;
 let cloudWorkspaceAutoSwitchPending = "";
 let lastCloudSyncError = "";
+let cloudRowSyncUnavailableReason = "";
 let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
@@ -3478,6 +3479,21 @@ function isMissingCloudTableError(error = {}) {
   return error.code === "42P01" || /does not exist|schema cache|Could not find the table/i.test(error.message || "");
 }
 
+function isCloudRowSchemaNotReadyError(error = {}) {
+  const text = cloudErrorText(error);
+  return isMissingCloudTableError(error)
+    || error.code === "PGRST204"
+    || /Could not find .* column|column .* does not exist|schema cache/i.test(text);
+}
+
+function setCloudRowSyncUnavailable(error = {}) {
+  const text = cloudErrorText(error);
+  cloudRowSyncUnavailableReason = text
+    ? `Cloud row tables need the latest database setup or Supabase schema cache refresh: ${text}`
+    : "Cloud row tables need the latest database setup or Supabase schema cache refresh.";
+  lastCloudSyncError = cloudRowSyncUnavailableReason;
+}
+
 function cloudRowData(row = {}, fallback = {}) {
   return normalizeCloudEntityMeta({ ...fallback, ...(row.data || {}) }, {
     syncStatus: row.sync_status || SYNC_STATUS_SYNCED,
@@ -3576,6 +3592,7 @@ async function syncCloudNow(showToast) {
     return false;
   }
   clearTimeout(cloudSyncTimer);
+  if (showToast) cloudRowSyncUnavailableReason = "";
   const selectedProfileId = activeProfileId();
   const selectColumns = "id,name,owner_id,member_emails,data,updated_at,created_at";
   const { data: latestWorkspace, error: readError } = await cloudClient
@@ -3602,14 +3619,20 @@ async function syncCloudNow(showToast) {
   const syncedAt = new Date().toISOString();
   uploadState = markStateSyncStatus(uploadState, SYNC_STATUS_SYNCED, syncedAt);
   restoreDeviceActiveProfile(uploadState, selectedProfileId);
-  try {
-    await syncNormalizedCloudTables(uploadState, previousState, syncedAt);
-  } catch (syncError) {
-    lastCloudSyncError = cloudErrorText(syncError);
-    console.warn("Normalized cloud sync failed", syncError);
-    if (showToast) toast(normalizedSyncErrorMessage(syncError));
-    else toast("Cloud row sync failed");
-    return false;
+  if (!cloudRowSyncUnavailableReason) {
+    try {
+      await syncNormalizedCloudTables(uploadState, previousState, syncedAt);
+    } catch (syncError) {
+      console.warn("Normalized cloud sync failed", syncError);
+      if (isCloudRowSchemaNotReadyError(syncError)) {
+        setCloudRowSyncUnavailable(syncError);
+      } else {
+        lastCloudSyncError = cloudErrorText(syncError);
+        if (showToast) toast(normalizedSyncErrorMessage(syncError));
+        else toast("Cloud row sync failed");
+        return false;
+      }
+    }
   }
   const { data, error } = await cloudClient
     .from(CLOUD_WORKSPACE_TABLE)
@@ -3626,18 +3649,18 @@ async function syncCloudNow(showToast) {
     else toast("Cloud sync failed");
     return false;
   }
-  lastCloudSyncError = "";
+  lastCloudSyncError = cloudRowSyncUnavailableReason;
   cloudWorkspace = data;
   cloudWorkspaces = cloudWorkspaces.map(row => row.id === data.id ? data : row);
   state = restoreDeviceActiveProfile(normalizeState(clone(data.data || uploadState)), selectedProfileId);
   saveState({ skipCloud: true, skipLocalBackup: true });
   renderAll();
-  if (showToast) toast("Cloud synced");
+  if (showToast) toast(cloudRowSyncUnavailableReason ? "Cloud synced. Row tables will resume after database setup refresh." : "Cloud synced");
   return true;
 }
 
 function normalizedSyncErrorMessage(error = {}) {
-  if (isMissingCloudTableError(error)) return "Cloud row tables are not ready. Run the latest database setup.";
+  if (isCloudRowSchemaNotReadyError(error)) return "Cloud row tables are not ready. Run the latest database setup or refresh Supabase schema cache.";
   return error.message || "Cloud row sync failed";
 }
 
@@ -3697,16 +3720,30 @@ async function syncSingleEntryToCloud(kind, entry) {
   const lineTable = cloudEntryLineTable(kind);
   const parentColumn = cloudEntryLineParentColumn(kind);
   if (!table || !lineTable || !parentColumn) return false;
+  if (cloudRowSyncUnavailableReason) {
+    markEntitySyncStatus(entry, SYNC_STATUS_SYNCED, syncedAt);
+    saveState({ skipCloud: true, skipLocalBackup: true });
+    return true;
+  }
   const { error: entryError } = await cloudClient
     .from(table)
     .upsert(cloudEntryRow(cloudWorkspace.id, entry, kind, syncedAt, userId), { onConflict: "workspace_id,id" });
-  if (entryError) throw entryError;
-  await replaceCloudLineRowsForEntry(
-    lineTable,
-    parentColumn,
-    entry.id,
-    cloudLineRows(cloudWorkspace.id, entry, kind, syncedAt, userId)
-  );
+  if (entryError) {
+    if (!isCloudRowSchemaNotReadyError(entryError)) throw entryError;
+    setCloudRowSyncUnavailable(entryError);
+  } else {
+    try {
+      await replaceCloudLineRowsForEntry(
+        lineTable,
+        parentColumn,
+        entry.id,
+        cloudLineRows(cloudWorkspace.id, entry, kind, syncedAt, userId)
+      );
+    } catch (lineError) {
+      if (!isCloudRowSchemaNotReadyError(lineError)) throw lineError;
+      setCloudRowSyncUnavailable(lineError);
+    }
+  }
   markEntitySyncStatus(entry, SYNC_STATUS_SYNCED, syncedAt);
   saveState({ skipCloud: true, skipLocalBackup: true });
   return true;
@@ -3716,10 +3753,18 @@ async function syncSinglePartyToCloud(party) {
   if (!cloudClient || !cloudSession || !cloudWorkspace || !party?.id) return false;
   const syncedAt = new Date().toISOString();
   const userId = currentCloudUserId();
+  if (cloudRowSyncUnavailableReason) {
+    markEntitySyncStatus(party, SYNC_STATUS_SYNCED, syncedAt);
+    saveState({ skipCloud: true, skipLocalBackup: true });
+    return true;
+  }
   const { error } = await cloudClient
     .from(CLOUD_ROW_TABLES.parties)
     .upsert(cloudPartyRow(cloudWorkspace.id, party, syncedAt, userId), { onConflict: "workspace_id,id" });
-  if (error) throw error;
+  if (error) {
+    if (!isCloudRowSchemaNotReadyError(error)) throw error;
+    setCloudRowSyncUnavailable(error);
+  }
   markEntitySyncStatus(party, SYNC_STATUS_SYNCED, syncedAt);
   saveState({ skipCloud: true, skipLocalBackup: true });
   return true;
