@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.8";
+const APP_BUILD = "2026.07.21.9";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -198,6 +198,17 @@ const PURCHASE_SUPPLIER_PROFILES = [
     defaultPincode: "600078",
     defaultPlace: "Chennai",
     defaultAddress: "27/67 Road/Street: Anna Main Road MGR Nagar, Chennai"
+  },
+  {
+    id: "chennai-mobiles",
+    label: "The Chennai Mobiles",
+    gstins: ["33AAFFC1582L1ZG"],
+    aliases: ["the chennai mobiles", "chennai mobiles"],
+    invoicePatterns: [/\b26-SI-AKM1-\d+\b/i, /\bAKM-\d+\b/i],
+    parser: parseChennaiMobilesPurchaseInvoiceText,
+    defaultPincode: "631001",
+    defaultPlace: "Arakkonam",
+    defaultAddress: "5, Gandhi Road, Arakkonam, Ranipet District, Vellore, Tamil Nadu"
   },
   {
     id: "just-deal",
@@ -14467,7 +14478,7 @@ function detectPurchaseSupplierProfile({ text = "", fileName = "", parsed = {} }
   ].filter(Boolean));
   return PURCHASE_SUPPLIER_PROFILES.find(profile => (
     profile.gstins?.some(gstin => gstins.has(normalizeGstin(gstin)))
-    || profile.aliases?.some(alias => haystack.includes(normalizePurchaseSupplierProfileText(alias)))
+    || profile.aliases?.some(alias => purchaseSupplierAliasMatches(haystack, alias))
     || profile.invoicePatterns?.some(pattern => pattern.test(`${text}\n${fileName}\n${parsed.invoiceNumber || ""}`))
   )) || null;
 }
@@ -14482,6 +14493,12 @@ function normalizePurchaseSupplierProfileText(value = "") {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function purchaseSupplierAliasMatches(haystack = "", alias = "") {
+  const normalizedAlias = normalizePurchaseSupplierProfileText(alias);
+  if (!normalizedAlias) return false;
+  return new RegExp(`(?:^| )${escapeRegExp(normalizedAlias)}(?: |$)`).test(haystack);
 }
 
 function tagPurchaseSupplierProfile(parsed = {}, profile = {}, source = "supplier-profile") {
@@ -14621,6 +14638,128 @@ function imobilesBuyerAddress(lines = []) {
   const gstIndex = lines.findIndex((line, index) => index > start && /GSTIN\s*:/i.test(line));
   if (start < 0 || gstIndex < 0) return "";
   return lines.slice(start + 2, gstIndex).map(line => line.split(/\s{2,}/)[0]?.trim()).filter(Boolean).join(", ");
+}
+
+function parseChennaiMobilesPurchaseInvoiceText(text, fileName, supplierProfile = {}) {
+  const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
+  const supplierGstin = normalizeGstin(
+    cleaned.match(/\b(?:HO\s+GST|GSTN)\s*:?\s*(33AAFFC1582L1ZG)/i)?.[1]
+    || supplierProfile.gstins?.[0]
+    || "33AAFFC1582L1ZG"
+  );
+  const buyerGstin = extractGstinsFromText(cleaned).find(gstin => gstin !== supplierGstin && profileByGstin(gstin)) || "";
+  const profile = profileByGstin(buyerGstin) || activeProfile();
+  const invoiceNumber = cleaned.match(/\bInvoice\s+No\s*:?\s*([A-Z0-9/-]+)/i)?.[1]
+    || findInvoiceNumber(lines)
+    || nextEntryNumber("purchase", profile.id);
+  const invoiceDate = toDateInput(cleaned.match(/\bInvoice\s+Date\s*:?\s*([0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4})/i)?.[1] || "")
+    || findInvoiceDate(cleaned)
+    || today();
+  const parsedLines = chennaiMobilesItemLines(lines);
+  const taxable = round2(parsedLines.reduce((sum, line) => sum + num(line.rate) * num(line.qty), 0));
+  const igst18 = amountAfterLabel(cleaned, /\(\+\)\s*igst\s*18%\s*:/i);
+  const igst5 = amountAfterLabel(cleaned, /\(\+\)\s*igst\s*5%\s*:/i);
+  const gst = round2(igst18 + igst5) || round2(parsedLines.reduce((sum, line) => sum + (num(line.grossRate) - num(line.rate)) * num(line.qty), 0));
+  const total = amountAfterLabel(cleaned, /\bTOTAL\s*:/i) || round2(taxable + gst);
+  return applyMobileSupplierProfileDefaults({
+    fileName,
+    profileId: profile.id,
+    supplierName: "The Chennai Mobiles",
+    supplierGstin,
+    supplierAddress: supplierProfile.defaultAddress || findSupplierAddress(lines, supplierGstin),
+    supplierPlace: supplierProfile.defaultPlace || stateNameFromGstin(supplierGstin) || "",
+    buyerName: profile.businessName || chennaiMobilesBuyerName(lines) || profile.label || "",
+    buyerGstin: normalizeGstin(profile.gstin || buyerGstin),
+    buyerAddress: chennaiMobilesBuyerAddress(lines),
+    buyerPlace: profile.state || stateNameFromGstin(buyerGstin) || "",
+    invoiceNumber,
+    invoiceDate,
+    taxable,
+    gst,
+    total,
+    roundOff: purchasePaymentAdjustmentFromText(cleaned),
+    extractedTaxes: {
+      taxable,
+      cgst: 0,
+      sgst: 0,
+      igst: gst,
+      gst,
+      total
+    },
+    reviewMessages: parsedLines.length ? [] : ["Chennai Mobiles invoice detected, but item rows were not fully readable. Review item values before saving."],
+    lines: parsedLines.length ? parsedLines : [{
+      name: "Chennai Mobiles Purchase",
+      hsn: DEFAULT_SALE_HSN,
+      qty: 1,
+      rate: taxable,
+      grossRate: total,
+      gstRate: inferGstRate(taxable, gst)
+    }]
+  }, text, fileName, supplierProfile);
+}
+
+function chennaiMobilesItemLines(lines = []) {
+  const rows = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const normalized = lines[index].replace(/[₹,]/g, "").replace(/\s+/g, " ").trim();
+    const match = normalized.match(/^(\d+)\s+(?:(.+?)\s+)?(\d{4,8})\s+(\d+(?:\.\d+)?)\s+([0-9]+(?:\.\d{1,2})?)\s+(\d+(?:\.\d+)?)\s+([0-9]+(?:\.\d{1,2})?)\s+([0-9]+(?:\.\d{1,2})?)\s+([0-9]+(?:\.\d+)?)\s+([0-9]+(?:\.\d{1,2})?)$/i);
+    if (!match) continue;
+    const qty = purchaseMoneyValue(match[5]) || 1;
+    const grossRate = purchaseMoneyValue(match[4]);
+    const grossTotal = purchaseMoneyValue(match[6]);
+    const gstRate = purchaseMoneyValue(match[9]) || DEFAULT_SALE_GST_RATE;
+    const taxable = purchaseMoneyValue(match[10]);
+    const name = chennaiMobilesItemName(lines, index, match[2]);
+    const imeiNumbers = chennaiMobilesImeiNumbers(lines, index);
+    rows.push(normalizePurchaseLineImeiInfo({
+      name: normalizeImportedItemName(name || "Chennai Mobiles Purchase"),
+      hsn: normalizeLineHsn(match[3]) || DEFAULT_SALE_HSN,
+      qty,
+      rate: qty ? round2(taxable / qty) : taxable,
+      grossRate: qty ? round2((grossTotal || grossRate * qty) / qty) : grossRate,
+      gstRate,
+      imeiNumbers
+    }));
+  }
+  return rows;
+}
+
+function chennaiMobilesItemName(lines = [], rowIndex = 0, inlineName = "") {
+  const parts = [];
+  for (let index = rowIndex - 1; index >= Math.max(0, rowIndex - 4); index -= 1) {
+    const line = String(lines[index] || "").trim();
+    if (!line || /^Imei\/Batch/i.test(line)) continue;
+    if (/^\d{8,17}\b/.test(line.replace(/,/g, "").trim())) continue;
+    if (/^\d+\s+.*\b\d{4,8}\b\s+\d/i.test(line.replace(/[₹,]/g, "").trim())) break;
+    if (/^(UNIT|PRICE|SLNO|GST|BILLED|SHIPPED|Place of supply|MOB No|GSTN No|TOTAL|SUB TOTAL)/i.test(line)) break;
+    parts.unshift(line);
+  }
+  const combined = [...parts, inlineName].filter(Boolean).join(" ");
+  return combined.replace(/\b[A-Z]{2,5}\d{3,5}\s*-\s*/g, "").replace(/\s+/g, " ").trim();
+}
+
+function chennaiMobilesImeiNumbers(lines = [], rowIndex = 0) {
+  const values = [];
+  for (let index = rowIndex + 1; index < Math.min(lines.length, rowIndex + 5); index += 1) {
+    const line = String(lines[index] || "");
+    if (/^\w{2,5}\d{3,5}\s+-|^\d+\s+\d{4,8}\b|^\(\+\)|^TOTAL\b|^SUB TOTAL\b/i.test(line.replace(/[₹,]/g, "").trim())) break;
+    values.push(...(line.match(/\b\d{14,17}\b/g) || []));
+  }
+  return [...new Set(values)].join("\n");
+}
+
+function chennaiMobilesBuyerName(lines = []) {
+  const line = lines.find(row => /^Name\s*:/i.test(row) && !/HO\s+ADDRESS/i.test(row)) || "";
+  return line.match(/^Name\s*:\s*(.+?)(?:\s+Name\s*:|$)/i)?.[1]?.trim() || "";
+}
+
+function chennaiMobilesBuyerAddress(lines = []) {
+  const addressLine = lines.find(row => /^Address\s*:/i.test(row)) || "";
+  const pincodeLine = lines.find(row => /^Pincode\s*:/i.test(row)) || "";
+  const address = addressLine.match(/^Address\s*:\s*(.+?)(?:\s+Address\s*:|$)/i)?.[1]?.trim() || "";
+  const pincode = pincodeLine.match(/^Pincode\s*:\s*(\d{6})/i)?.[1] || "";
+  return addressWithPincode(address, pincode);
 }
 
 function normalizeIMobilesPurchaseParsed(parsed = {}, text = "", fileName = "", supplierProfile = null) {
@@ -14799,6 +14938,21 @@ function vyaparMobileStructuredItemLines(tableLines = [], supplierProfile = {}) 
       pendingTax = 0;
       continue;
     }
+    match = normalized.match(/^(\d+)\s+(.+?)\s+(\d{4,8})\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)$/i);
+    if (match && /\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(match[2])) {
+      rows.push(vyaparMobileBuildRow({
+        name: match[2],
+        hsn: match[3],
+        qty: match[4],
+        rate: match[5],
+        gst: pendingTax || round2(purchaseMoneyValue(match[6]) - purchaseMoneyValue(match[4]) * purchaseMoneyValue(match[5])),
+        total: match[6],
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+      continue;
+    }
     match = normalized.match(/^(\d+)\s+(\d{4,8})\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)\s*(?:\((\d+(?:\.\d+)?)%\))?\s+([0-9,]+(?:\.\d{1,2})?)/i);
     if (match && pendingName) {
       const nextNamePart = /^\d+\s*GB\b/i.test(tableLines[index + 1] || "") ? ` ${(tableLines[index + 1] || "").trim()}` : "";
@@ -14854,6 +15008,25 @@ function vyaparMobileStructuredItemLines(tableLines = [], supplierProfile = {}) 
       pendingTax = 0;
       continue;
     }
+    match = normalized.match(/^(\d+)\s+\d{14,17},?\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)$/i);
+    if (match && pendingName) {
+      const qty = purchaseMoneyValue(match[2]);
+      const rate = purchaseMoneyValue(match[3]);
+      const nextText = `${tableLines[index + 1] || ""} ${tableLines[index + 2] || ""}`;
+      const total = Math.max(...vyaparMobileMoneyValues(nextText).filter(value => value > 1000), 0) || round2(qty * rate + pendingTax);
+      rows.push(vyaparMobileBuildRow({
+        name: pendingName,
+        hsn: "",
+        qty,
+        rate,
+        gst: pendingTax || round2(total - qty * rate),
+        total,
+        supplierProfile
+      }));
+      pendingName = "";
+      pendingTax = 0;
+      continue;
+    }
     match = normalized.match(/^(\d+)\s+(.+?)\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)$/i);
     if (match && /\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(match[2])) {
       const nextText = `${tableLines[index + 1] || ""} ${tableLines[index + 2] || ""}`;
@@ -14901,6 +15074,7 @@ function purchaseMoneyValue(value) {
 
 function vyaparMobileMoneyValues(value = "") {
   return (String(value || "").match(/[0-9][0-9,]*(?:\.\d+)?/g) || [])
+    .filter(part => !/^\d{14,17}$/.test(part.replace(/,/g, "")))
     .map(part => Number(part.replace(/,/g, "")))
     .filter(value => Number.isFinite(value));
 }
