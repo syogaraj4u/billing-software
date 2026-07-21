@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.7";
+const APP_BUILD = "2026.07.21.8";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -45,6 +45,11 @@ const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
 const EWAY_DISTANCE_FUNCTION = "estimate-eway-distance";
 const GSTIN_PINCODE_FUNCTION = "resolve-purchase-pincodes";
 const ALL_MONTHS_KEY = "all";
+const LOCAL_OCR_MAX_PDF_PAGES = 4;
+const LOCAL_OCR_SCRIPT_URLS = [
+  "./vendor/tesseract.min.js",
+  "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"
+];
 
 const EWAY_ADDRESS_PRESETS = [
   {
@@ -12454,6 +12459,7 @@ async function extractPurchaseImportDocument({ batchId, documentId, file }) {
 async function extractPurchaseInvoiceParsedFromFile(file) {
   const attachment = await createPurchaseAttachment(file);
   let pdfText = "";
+  let ocrText = "";
   if (file.type === "application/pdf") {
     try {
       pdfText = await extractPdfText(file);
@@ -12463,20 +12469,34 @@ async function extractPurchaseInvoiceParsedFromFile(file) {
   }
   const profileParsed = pdfText ? parseSpecialPurchaseInvoiceText(pdfText, file.name) : null;
   let parsed = supplierProfileParseReady(profileParsed) ? profileParsed : null;
+  let localOcrParsed = null;
+  if (!parsed && shouldRunLocalPurchaseOcr(file, pdfText)) {
+    try {
+      ocrText = await extractPurchaseInvoiceWithLocalOcr(file);
+      if (ocrText.trim()) {
+        localOcrParsed = parsePurchaseInvoiceText(ocrText, file.name);
+        parsed = supplierProfileParseReady(localOcrParsed) ? localOcrParsed : null;
+      }
+    } catch (error) {
+      console.warn("Local OCR purchase extraction unavailable", error);
+    }
+  }
   if (!parsed) parsed = await extractPurchaseInvoiceWithCloud(file);
+  if (!parsed && localOcrParsed) parsed = localOcrParsed;
   if (!parsed && profileParsed) parsed = profileParsed;
   if (!parsed && file.type === "application/pdf") {
-    if (!pdfText.trim()) {
+    if (!pdfText.trim() && !ocrText.trim()) {
       parsed = buildManualReviewPurchase(file, "No readable text found in PDF. Please review and enter values manually.");
     } else {
-      parsed = parsePurchaseInvoiceText(pdfText, file.name);
+      parsed = parsePurchaseInvoiceText([pdfText, ocrText].filter(text => text.trim()).join("\n"), file.name);
     }
   }
   if (!parsed) {
-    parsed = buildManualReviewPurchase(file, "Image extraction needs the cloud invoice extractor. Please review and enter values manually.");
+    parsed = buildManualReviewPurchase(file, "Image extraction needs OCR or the cloud invoice extractor. Please review and enter values manually.");
   }
-  if (pdfText.trim()) parsed = applyPurchasePaymentAdjustments(parsed, pdfText);
-  parsed = applyPurchaseSupplierProfileRules(parsed, pdfText, file.name);
+  const extractionText = [pdfText, ocrText].filter(text => text.trim()).join("\n");
+  if (extractionText.trim()) parsed = applyPurchasePaymentAdjustments(parsed, extractionText);
+  parsed = applyPurchaseSupplierProfileRules(parsed, extractionText, file.name);
   parsed = await enrichPurchasePincodes(parsed);
   parsed.fileName = parsed.fileName || file.name;
   parsed.attachments = [attachment];
@@ -13886,6 +13906,98 @@ async function extractPurchaseInvoiceWithCloud(file) {
     console.warn("Cloud purchase extractor unavailable", error);
     return null;
   }
+}
+
+function shouldRunLocalPurchaseOcr(file, pdfText = "") {
+  if (file.type?.startsWith("image/")) return true;
+  if (file.type === "application/pdf" && String(pdfText || "").trim().length < 80) return true;
+  return false;
+}
+
+async function extractPurchaseInvoiceWithLocalOcr(file) {
+  const tesseract = await loadLocalOcrLibrary();
+  const sources = file.type === "application/pdf"
+    ? await renderPdfPagesForLocalOcr(file)
+    : [file];
+  const textParts = [];
+  for (const source of sources) {
+    const result = await tesseract.recognize(source, "eng", {
+      logger: message => {
+        if (message?.status === "recognizing text") {
+          console.debug(`Local OCR ${Math.round((message.progress || 0) * 100)}%`);
+        }
+      }
+    });
+    const text = result?.data?.text || "";
+    if (text.trim()) textParts.push(text);
+  }
+  return textParts.join("\n");
+}
+
+async function loadLocalOcrLibrary() {
+  if (window.Tesseract?.recognize) return window.Tesseract;
+  let lastError = null;
+  for (const url of LOCAL_OCR_SCRIPT_URLS) {
+    try {
+      await loadScriptOnce(url, "local-ocr-tesseract");
+      if (window.Tesseract?.recognize) return window.Tesseract;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Local OCR library is not available");
+}
+
+function loadScriptOnce(src, key) {
+  const existing = document.querySelector(`script[data-loader-key="${key}"][src="${src}"]`);
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  if (existing?.dataset.loading === "true") {
+    return new Promise((resolve, reject) => {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.dataset.loaderKey = key;
+    script.dataset.loading = "true";
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      script.dataset.loading = "false";
+      resolve();
+    };
+    script.onerror = () => {
+      script.dataset.loading = "false";
+      reject(new Error(`Could not load ${src}`));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+async function renderPdfPagesForLocalOcr(file) {
+  if (!window.pdfjsLib) throw new Error("PDF reader is not loaded");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = window.NativeBilling?.isNative
+    ? "./vendor/pdf.worker.min.mjs"
+    : "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const images = [];
+  const pageCount = Math.min(pdf.numPages, LOCAL_OCR_MAX_PDF_PAGES);
+  for (let pageNo = 1; pageNo <= pageCount; pageNo += 1) {
+    const page = await pdf.getPage(pageNo);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    images.push(await new Promise(resolve => canvas.toBlob(blob => resolve(blob), "image/png", 0.92)));
+  }
+  return images.filter(Boolean);
 }
 
 function purchaseSupplierProfilePayload() {
