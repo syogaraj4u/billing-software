@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.5";
+const APP_BUILD = "2026.07.21.6";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -181,6 +181,18 @@ const PURCHASE_SUPPLIER_PROFILES = [
     defaultPincode: "625531",
     defaultPlace: "Theni",
     defaultAddress: "NO 854 CUMBUM MAIN ROAD, NEAR VIJSYS ELECTRICALS, THENI"
+  },
+  {
+    id: "i-mobiles",
+    label: "I Mobiles",
+    gstins: ["33CPSPN5785A1ZK"],
+    aliases: ["i mobiles", "imobiles", "i mobile"],
+    invoicePatterns: [/\bI\s+MOBILES\b/i, /\bSI\/KKN\/\d+\b/i],
+    parser: parseIMobilesPurchaseInvoiceText,
+    postProcess: normalizeIMobilesPurchaseParsed,
+    defaultPincode: "600078",
+    defaultPlace: "Chennai",
+    defaultAddress: "27/67 Road/Street: Anna Main Road MGR Nagar, Chennai"
   },
   {
     id: "just-deal",
@@ -13816,6 +13828,14 @@ function purchaseSupplierProfileNotes(profile = {}) {
       "Do not treat IMEI numbers as amounts."
     ];
   }
+  if (profile.id === "i-mobiles") {
+    return [
+      "Supplier header: I MOBILES, GSTIN 33CPSPN5785A1ZK, Chennai 600078.",
+      "Invoice number appears as SI/KKN/number and invoice date appears beside 'Invoice Date'.",
+      "Item rows show product name, HSN 85171300, qty, taxable rate, and taxable amount. IMEI/SERIAL NO is not an amount.",
+      "This supplier may bill within Tamil Nadu; keep CGST and SGST separate when buyer GSTIN also starts with 33."
+    ];
+  }
   if (profile.id === "disco-mobile" || profile.id === "just-deal") {
     return [
       "Price/Unit is taxable unit rate. Amount is GST-inclusive line total.",
@@ -14297,6 +14317,128 @@ function parseDiscoPurchaseInvoiceText(text, fileName, profile) {
 
 function parseJustDealPurchaseInvoiceText(text, fileName, profile) {
   return parseVyaparMobilePurchaseInvoiceText(text, fileName, profile);
+}
+
+function parseIMobilesPurchaseInvoiceText(text, fileName, supplierProfile = {}) {
+  const cleaned = text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ");
+  const lines = cleaned.split("\n").map(line => line.trim()).filter(Boolean);
+  const supplierGstin = normalizeGstin(
+    supplierProfile.gstins?.find(gstin => cleaned.includes(gstin))
+    || supplierProfile.gstins?.[0]
+    || extractGstinsFromText(cleaned)[0]
+  );
+  const buyerGstin = extractGstinsFromText(cleaned).find(gstin => gstin !== supplierGstin && profileByGstin(gstin)) || "";
+  const profile = profileByGstin(buyerGstin) || activeProfile();
+  const invoiceNumber = cleaned.match(/\bInvoice\s+No\s*:?\s*([A-Z0-9/-]+)/i)?.[1]
+    || findInvoiceNumber(lines)
+    || nextEntryNumber("purchase", profile.id);
+  const invoiceDate = toDateInput(cleaned.match(/\bInvoice\s+Date\s*:?\s*([0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4})/i)?.[1] || "")
+    || findInvoiceDate(cleaned)
+    || today();
+  const parsedLines = imobilesItemLines(lines, supplierProfile);
+  const lineTaxable = round2(parsedLines.reduce((sum, line) => sum + num(line.rate) * num(line.qty), 0));
+  const cgst = amountAfterLabel(cleaned, /CGST\s*9%\s*/i);
+  const sgst = amountAfterLabel(cleaned, /SGST\s*9%\s*/i);
+  const igst = amountAfterLabel(cleaned, /IGST\s*(?:@\s*)?18(?:\.0)?%?\s*/i);
+  const gst = round2(cgst + sgst + igst) || round2(parsedLines.reduce((sum, line) => sum + (inclusiveRateFromTaxable(line.rate, line.gstRate) - line.rate) * line.qty, 0));
+  const total = imobilesNetTotal(lines) || round2(lineTaxable + gst);
+  const taxable = lineTaxable || round2(total - gst);
+  return applyMobileSupplierProfileDefaults({
+    fileName,
+    profileId: profile.id,
+    supplierName: supplierProfile.label || "I Mobiles",
+    supplierGstin,
+    supplierAddress: supplierProfile.defaultAddress || findSupplierAddress(lines, supplierGstin),
+    supplierPlace: supplierProfile.defaultPlace || stateNameFromGstin(supplierGstin) || "",
+    buyerName: profile.businessName || imobilesBuyerName(lines) || profile.label || "",
+    buyerGstin: normalizeGstin(profile.gstin || buyerGstin),
+    buyerAddress: imobilesBuyerAddress(lines),
+    buyerPlace: profile.state || stateNameFromGstin(buyerGstin) || "",
+    invoiceNumber,
+    invoiceDate,
+    taxable,
+    gst,
+    total,
+    roundOff: round2(total - taxable - gst),
+    extractedTaxes: {
+      taxable,
+      cgst,
+      sgst,
+      igst,
+      gst,
+      total
+    },
+    reviewMessages: parsedLines.length ? [] : ["I Mobiles invoice detected, but item rows were not fully readable. Review item values before saving."],
+    lines: parsedLines.length ? parsedLines : [{
+      name: "I Mobiles Purchase",
+      hsn: DEFAULT_SALE_HSN,
+      qty: 1,
+      rate: taxable,
+      grossRate: total,
+      gstRate: inferGstRate(taxable, gst)
+    }]
+  }, text, fileName, supplierProfile);
+}
+
+function imobilesItemLines(lines = [], supplierProfile = {}) {
+  const rows = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/\b(?:iphone|i\s*phone|ipad|i\s*pad)\b/i.test(line)) continue;
+    const valuesLine = lines[index + 1] || "";
+    const match = valuesLine.replace(/₹/g, " ").match(/^\s*(\d+)\s+(\d{4,8})\s+(\d+(?:\.\d+)?)\s+([0-9,]+(?:\.\d{1,2})?)\s+([0-9,]+(?:\.\d{1,2})?)/);
+    if (!match) continue;
+    const qty = purchaseMoneyValue(match[3]) || 1;
+    const rate = purchaseMoneyValue(match[4]);
+    const total = purchaseMoneyValue(match[5]);
+    const imeiNumbers = normalizeImeiNumbers((lines[index + 2] || "").match(/IMEI\/SERIAL\s+NO\.?\s*(.+)$/i)?.[1] || "");
+    rows.push({
+      name: normalizeImportedItemName(line),
+      hsn: supplierProfileLineHsn(match[2], supplierProfile),
+      qty,
+      rate,
+      grossRate: qty ? round2(total * 1.18 / qty) : inclusiveRateFromTaxable(rate, DEFAULT_SALE_GST_RATE),
+      gstRate: DEFAULT_SALE_GST_RATE,
+      imeiNumbers
+    });
+  }
+  return rows;
+}
+
+function imobilesNetTotal(lines = []) {
+  const line = lines.find(row => /^Net\s+Total\b/i.test(row));
+  if (!line) return 0;
+  const values = vyaparMobileMoneyValues(line).filter(value => value > 1000);
+  return values.length ? values[values.length - 1] : 0;
+}
+
+function imobilesBuyerName(lines = []) {
+  const start = lines.findIndex(line => /^Billed\s+To/i.test(line));
+  if (start < 0) return "";
+  return (lines[start + 1] || "").split(/\s{2,}/)[0]?.trim() || "";
+}
+
+function imobilesBuyerAddress(lines = []) {
+  const start = lines.findIndex(line => /^Billed\s+To/i.test(line));
+  const gstIndex = lines.findIndex((line, index) => index > start && /GSTIN\s*:/i.test(line));
+  if (start < 0 || gstIndex < 0) return "";
+  return lines.slice(start + 2, gstIndex).map(line => line.split(/\s{2,}/)[0]?.trim()).filter(Boolean).join(", ");
+}
+
+function normalizeIMobilesPurchaseParsed(parsed = {}, text = "", fileName = "", supplierProfile = null) {
+  const withDefaults = applyMobileSupplierProfileDefaults(parsed, text, fileName, supplierProfile);
+  withDefaults.lines = (withDefaults.lines || []).map(line => {
+    const rate = num(line.rate) || taxableRateFromInclusive(line.grossRate, line.gstRate || DEFAULT_SALE_GST_RATE);
+    return {
+      ...line,
+      name: normalizeImportedItemName(line.name || ""),
+      hsn: supplierProfileLineHsn(line.hsn, supplierProfile),
+      rate,
+      grossRate: num(line.grossRate) || inclusiveRateFromTaxable(rate, line.gstRate || DEFAULT_SALE_GST_RATE),
+      gstRate: line.gstRate === undefined || line.gstRate === null ? DEFAULT_SALE_GST_RATE : num(line.gstRate)
+    };
+  });
+  return withDefaults;
 }
 
 function parseVyaparMobilePurchaseInvoiceText(text, fileName, supplierProfile = {}) {
