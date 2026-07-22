@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.22.3";
+const APP_BUILD = "2026.07.22.4";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -626,6 +626,7 @@ let purchaseUploadWorkers = 0;
 let activePurchaseImportBatchId = "";
 let activePurchaseImportDocumentId = "";
 let purchaseImportApproving = false;
+let purchaseImportApprovalProgress = null;
 const purchaseImportFiles = new Map();
 const purchaseImportDistanceRequests = new Map();
 const PURCHASE_IMPORT_CONCURRENCY = 2;
@@ -1440,6 +1441,7 @@ function normalizePurchaseImportDocumentForState(document = {}) {
     validationWarnings: uniqueMessages(document.validationWarnings || []),
     duplicatePurchaseId: String(document.duplicatePurchaseId || ""),
     approvedPurchaseId: String(document.approvedPurchaseId || ""),
+    processingStep: String(document.processingStep || ""),
     error: String(document.error || "")
   };
   normalizeCloudEntityMeta(normalized, document);
@@ -3793,13 +3795,13 @@ async function syncNormalizedCloudTables(nextState, previousState, syncedAt) {
     row => cloudPurchaseImportDocumentRow(workspaceId, row, syncedAt, userId)
   );
   await Promise.all([
-    replaceCloudLineRows(CLOUD_ROW_TABLES.saleItems, nextState.sales.flatMap(entry => cloudLineRows(workspaceId, entry, "sale", syncedAt, userId))),
-    replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseItems, nextState.purchases.flatMap(entry => cloudLineRows(workspaceId, entry, "purchase", syncedAt, userId))),
-    replaceCloudLineRows(CLOUD_ROW_TABLES.purchaseOrderItems, nextState.purchaseOrders.flatMap(entry => cloudLineRows(workspaceId, entry, "po", syncedAt, userId)))
+    syncCloudEntryLineChanges(CLOUD_ROW_TABLES.saleItems, "sale", nextState.sales, previousState.sales, syncedAt, userId),
+    syncCloudEntryLineChanges(CLOUD_ROW_TABLES.purchaseItems, "purchase", nextState.purchases, previousState.purchases, syncedAt, userId),
+    syncCloudEntryLineChanges(CLOUD_ROW_TABLES.purchaseOrderItems, "po", nextState.purchaseOrders, previousState.purchaseOrders, syncedAt, userId)
   ]);
   await Promise.all([
-    replaceOptionalCloudLineRows(CLOUD_ROW_TABLES.creditNoteItems, nextState.creditNotes.flatMap(entry => cloudLineRows(workspaceId, entry, "creditNote", syncedAt, userId))),
-    replaceOptionalCloudLineRows(CLOUD_ROW_TABLES.purchaseReturnItems, nextState.purchaseReturns.flatMap(entry => cloudLineRows(workspaceId, entry, "purchaseReturn", syncedAt, userId)))
+    syncOptionalCloudEntryLineChanges(CLOUD_ROW_TABLES.creditNoteItems, "creditNote", nextState.creditNotes, previousState.creditNotes, syncedAt, userId),
+    syncOptionalCloudEntryLineChanges(CLOUD_ROW_TABLES.purchaseReturnItems, "purchaseReturn", nextState.purchaseReturns, previousState.purchaseReturns, syncedAt, userId)
   ]);
   await insertCloudAuditRows(buildCloudAuditRows(previousState, nextState, syncedAt, userId));
   await saveDailyCloudBackup(nextState, syncedAt, userId);
@@ -3826,7 +3828,7 @@ async function syncSingleEntryToCloud(kind, entry) {
     setCloudRowSyncUnavailable(entryError);
   } else {
     try {
-      await replaceCloudLineRowsForEntry(
+      await upsertCloudLineRowsForEntry(
         lineTable,
         parentColumn,
         entry.id,
@@ -4009,20 +4011,30 @@ async function syncOptionalCloudEntityTable(table, idColumn, currentRows = [], p
   }
 }
 
-async function replaceCloudLineRows(table, rows = []) {
-  const { error: deleteError } = await cloudClient
-    .from(table)
-    .delete()
-    .eq("workspace_id", cloudWorkspace.id);
-  if (deleteError) throw deleteError;
-  if (!rows.length) return;
-  const { error } = await cloudClient.from(table).insert(rows);
-  if (error) throw error;
+async function syncCloudEntryLineChanges(table, kind, currentEntries = [], previousEntries = [], syncedAt, userId) {
+  const parentColumn = cloudEntryLineParentColumn(kind);
+  const previousById = new Map(previousEntries.map(entry => [entry.id, entry]));
+  const currentIds = new Set(currentEntries.map(entry => entry.id).filter(Boolean));
+  const changedEntries = currentEntries.filter(entry => {
+    const previous = previousById.get(entry.id);
+    return !previous || cloudAuditComparable(previous) !== cloudAuditComparable(entry);
+  });
+  const removedIds = previousEntries.map(entry => entry.id).filter(id => id && !currentIds.has(id));
+
+  await deleteCloudLineRowsByParentIds(table, parentColumn, removedIds);
+  for (const entry of changedEntries) {
+    await upsertCloudLineRowsForEntry(
+      table,
+      parentColumn,
+      entry.id,
+      cloudLineRows(cloudWorkspace.id, entry, kind, syncedAt, userId)
+    );
+  }
 }
 
-async function replaceOptionalCloudLineRows(table, rows = []) {
+async function syncOptionalCloudEntryLineChanges(table, kind, currentEntries = [], previousEntries = [], syncedAt, userId) {
   try {
-    await replaceCloudLineRows(table, rows);
+    await syncCloudEntryLineChanges(table, kind, currentEntries, previousEntries, syncedAt, userId);
     return true;
   } catch (error) {
     if (isMissingCloudTableError(error)) return false;
@@ -4030,17 +4042,34 @@ async function replaceOptionalCloudLineRows(table, rows = []) {
   }
 }
 
-async function replaceCloudLineRowsForEntry(table, parentColumn, entryId, rows = []) {
-  const query = cloudClient
+async function deleteCloudLineRowsByParentIds(table, parentColumn, ids = []) {
+  for (let index = 0; index < ids.length; index += 250) {
+    const batch = ids.slice(index, index + 250);
+    const { error } = await cloudClient
+      .from(table)
+      .delete()
+      .eq("workspace_id", cloudWorkspace.id)
+      .in(parentColumn, batch);
+    if (error) throw error;
+  }
+}
+
+async function upsertCloudLineRowsForEntry(table, parentColumn, entryId, rows = []) {
+  const conflictColumns = `workspace_id,${parentColumn},line_index`;
+  for (let index = 0; index < rows.length; index += 250) {
+    const { error } = await cloudClient
+      .from(table)
+      .upsert(rows.slice(index, index + 250), { onConflict: conflictColumns });
+    if (error) throw error;
+  }
+  const staleQuery = cloudClient
     .from(table)
     .delete()
     .eq("workspace_id", cloudWorkspace.id)
-    .eq(parentColumn, entryId);
-  const { error: deleteError } = await query;
-  if (deleteError) throw deleteError;
-  if (!rows.length) return;
-  const { error } = await cloudClient.from(table).insert(rows);
-  if (error) throw error;
+    .eq(parentColumn, entryId)
+    .gte("line_index", rows.length);
+  const { error: staleError } = await staleQuery;
+  if (staleError) throw staleError;
 }
 
 function cloudPartyRow(workspaceId, party, syncedAt, userId) {
@@ -12527,6 +12556,7 @@ function createPurchaseImportDocument(batch, file) {
     validationWarnings: [],
     duplicatePurchaseId: "",
     approvedPurchaseId: "",
+    processingStep: "Waiting to read invoice",
     error: ""
   });
   state.purchaseImportDocuments.push(document);
@@ -12551,6 +12581,7 @@ async function extractPurchaseImportDocument({ batchId, documentId, file }) {
   const document = purchaseImportDocumentById(documentId);
   if (!document) return;
   document.status = "extracting";
+  document.processingStep = "Preparing invoice";
   document.error = "";
   touchPurchaseImportEntity(document);
   updatePurchaseImportBatchProgress(batchId);
@@ -12558,6 +12589,11 @@ async function extractPurchaseImportDocument({ batchId, documentId, file }) {
   renderPurchaseImportInbox();
   try {
     const workingFile = await preparePurchaseInvoiceWorkingFile(file);
+    const preparedDocument = purchaseImportDocumentById(documentId);
+    if (!preparedDocument) return;
+    preparedDocument.processingStep = "Reading invoice details";
+    touchPurchaseImportEntity(preparedDocument);
+    renderPurchaseImportInbox();
     const [fileHash, parsed] = await Promise.all([
       purchaseImportFileHash(file),
       extractPurchaseInvoiceParsedFromFile(workingFile, file)
@@ -12568,12 +12604,14 @@ async function extractPurchaseImportDocument({ batchId, documentId, file }) {
     currentDocument.parsed = normalizePurchaseImportParsedForState(parsed, file.name);
     currentDocument.status = "ready";
     currentDocument.selected = true;
+    currentDocument.processingStep = "";
     currentDocument.error = "";
   } catch (error) {
     const currentDocument = purchaseImportDocumentById(documentId);
     if (!currentDocument) return;
     currentDocument.status = "failed";
     currentDocument.selected = false;
+    currentDocument.processingStep = "";
     currentDocument.error = String(error?.message || error || "Could not read this invoice");
   }
   touchPurchaseImportEntity(purchaseImportDocumentById(documentId));
@@ -12970,8 +13008,9 @@ function renderPurchaseImportSummary(batch, documents = []) {
   if (approve) {
     const approvalCount = selected.length || ready.length;
     approve.disabled = !batch || !documents.length || counts.processing > 0 || purchaseImportApproving;
+    const progress = purchaseImportApprovalProgress;
     approve.innerHTML = purchaseImportApproving
-      ? '<i data-lucide="loader-circle"></i><span>Saving...</span>'
+      ? `<i data-lucide="loader-circle"></i><span>${escapeHtml(progress?.label || "Saving...")}</span>`
       : `<i data-lucide="check-check"></i><span>Approve &amp; Save ${approvalCount || ""}</span>`;
   }
   const discard = $("#purchaseImportDiscardBtn");
@@ -13005,6 +13044,10 @@ function renderPurchaseImportDocumentCard(document) {
   const totals = purchaseImportCalculatedTotals(parsed);
   const selectable = document.status === "ready";
   const attentionCount = (document.validationErrors?.length || 0) + (document.validationWarnings?.length || 0);
+  const processing = ["queued", "extracting", "approving"].includes(document.status);
+  const processingLabel = document.status === "approving"
+    ? (document.processingStep || "Saving purchase")
+    : (document.processingStep || purchaseImportStatusLabel(document.status));
   return `<article class="purchase-import-document ${document.id === activePurchaseImportDocumentId ? "active" : ""}" data-import-doc-id="${escapeHtml(document.id)}" tabindex="0">
     <input class="purchase-import-document-select" type="checkbox" aria-label="Select ${escapeHtml(document.fileName)}" data-import-select-id="${escapeHtml(document.id)}" ${document.selected ? "checked" : ""} ${selectable ? "" : "disabled"}>
     <div class="purchase-import-document-main">
@@ -13014,6 +13057,7 @@ function renderPurchaseImportDocumentCard(document) {
     </div>
     <span class="purchase-import-status ${escapeHtml(document.status)}">${escapeHtml(purchaseImportStatusLabel(document.status))}</span>
     <div class="purchase-import-document-total"><span>${escapeHtml(document.fileName)}</span><strong>${money(totals.total)}</strong></div>
+    ${processing ? `<div class="purchase-import-progress" role="status"><span>${escapeHtml(processingLabel)}</span><i></i></div>` : ""}
   </article>`;
 }
 
@@ -13032,7 +13076,8 @@ function purchaseImportStatusLabel(status) {
 
 function renderPurchaseImportReview(document) {
   if (["queued", "extracting", "approving"].includes(document.status)) {
-    return `<div class="purchase-import-empty"><div><i data-lucide="loader-circle"></i><strong>${escapeHtml(purchaseImportStatusLabel(document.status))} ${escapeHtml(document.fileName)}</strong></div></div>`;
+    const step = document.processingStep || purchaseImportStatusLabel(document.status);
+    return `<div class="purchase-import-empty"><div><i data-lucide="loader-circle"></i><strong>${escapeHtml(step)}</strong><p>${escapeHtml(document.fileName)}</p><div class="purchase-import-progress" role="status"><span>${escapeHtml(step)}</span><i></i></div></div></div>`;
   }
   if (document.status === "failed") {
     const canRetry = purchaseImportFiles.has(document.id);
@@ -13631,6 +13676,7 @@ function retryPurchaseImportDocument(documentId) {
   const file = purchaseImportFiles.get(documentId);
   if (!document || !file) return toast("Select the original file again to retry extraction");
   document.status = "queued";
+  document.processingStep = "Waiting to retry";
   document.error = "";
   document.selected = false;
   touchPurchaseImportEntity(document);
@@ -13654,13 +13700,29 @@ async function approveSelectedPurchaseImports() {
     return toast("No ready invoices to approve. Open the highlighted invoices and fix required fields.");
   }
   purchaseImportApproving = true;
+  purchaseImportApprovalProgress = {
+    current: 0,
+    total: documents.length,
+    label: `Preparing ${documents.length} invoice${documents.length === 1 ? "" : "s"}`
+  };
   try {
-    documents.forEach(document => { document.status = "approving"; });
+    documents.forEach(document => {
+      document.status = "approving";
+      document.processingStep = "Waiting to save";
+    });
     renderPurchaseImportInbox();
     const savedEntries = [];
     const failedDocuments = [];
-    for (const document of documents) {
+    for (const [index, document] of documents.entries()) {
       try {
+        purchaseImportApprovalProgress = {
+          current: index + 1,
+          total: documents.length,
+          label: `Saving ${index + 1} of ${documents.length}`
+        };
+        document.processingStep = `Saving ${index + 1} of ${documents.length}`;
+        renderPurchaseImportSummary(batch, purchaseImportDocuments(batch.id));
+        if (activePurchaseImportDocumentId === document.id) renderPurchaseImportInbox();
         await ensurePurchaseImportDistance(document);
         const duplicate = purchaseImportExistingDuplicate(document.parsed);
         if (duplicate) throw new Error(`Invoice ${document.parsed.invoiceNumber} is already saved`);
@@ -13670,6 +13732,7 @@ async function approveSelectedPurchaseImports() {
         document.status = "approved";
         document.selected = false;
         document.approvedPurchaseId = entry.id;
+        document.processingStep = "";
         document.error = "";
         touchPurchaseImportEntity(document);
         updatePurchaseImportBatchProgress(batch.id);
@@ -13678,6 +13741,7 @@ async function approveSelectedPurchaseImports() {
         failedDocuments.push(document);
         document.status = "needs-review";
         document.selected = false;
+        document.processingStep = "";
         document.error = String(error?.message || error || "Could not save purchase");
         document.validationErrors = uniqueMessages([document.error, ...(document.validationErrors || [])]);
         touchPurchaseImportEntity(document);
@@ -13689,11 +13753,27 @@ async function approveSelectedPurchaseImports() {
     saveState();
     renderAll();
     const canSyncNow = cloudReadyForSync();
+    purchaseImportApprovalProgress = canSyncNow && savedEntries.length
+      ? { current: documents.length, total: documents.length, label: "Verifying cloud save" }
+      : { current: documents.length, total: documents.length, label: "Finishing" };
+    renderPurchaseImportSummary(purchaseImportBatchById(batch.id), purchaseImportDocuments(batch.id));
     const synced = canSyncNow ? await syncCloudNow(false) : false;
-    if (canSyncNow && !synced) {
-      savedEntries.forEach(entry => markEntitySyncStatus(entry, SYNC_STATUS_FAILED));
-      documents.filter(document => document.status === "approved").forEach(document => markEntitySyncStatus(document, SYNC_STATUS_FAILED));
-      markEntitySyncStatus(batch, SYNC_STATUS_FAILED);
+    const verification = canSyncNow && savedEntries.length
+      ? await ensurePurchaseImportCloudRows(savedEntries)
+      : { skipped: true, missing: [] };
+    const missingIds = new Set(verification.missing.map(entry => entry.id));
+    const currentSavedEntries = savedEntries.map(entry => state.purchases.find(row => row.id === entry.id)).filter(Boolean);
+    const currentApprovedDocuments = documents.map(document => purchaseImportDocumentById(document.id)).filter(document => document?.status === "approved");
+    const currentBatch = purchaseImportBatchById(batch.id);
+    currentSavedEntries.forEach(entry => {
+      if (missingIds.has(entry.id) || (!synced && verification.skipped)) markEntitySyncStatus(entry, SYNC_STATUS_FAILED);
+      else if (!verification.skipped) markEntitySyncStatus(entry, SYNC_STATUS_SYNCED, new Date().toISOString());
+    });
+    currentApprovedDocuments.forEach(document => {
+      if (missingIds.has(document.approvedPurchaseId) || !synced) markEntitySyncStatus(document, SYNC_STATUS_FAILED);
+    });
+    if (canSyncNow && (!synced || missingIds.size)) {
+      markEntitySyncStatus(currentBatch, SYNC_STATUS_FAILED);
       saveState({ skipCloud: true });
     }
     if (failedDocuments.length) activePurchaseImportDocumentId = failedDocuments[0].id;
@@ -13702,15 +13782,72 @@ async function approveSelectedPurchaseImports() {
     const failedText = purchaseImportFailedSummary(failedDocuments);
     const vehicleText = copiedVehicleCount ? ` Vehicle copied to ${copiedVehicleCount} invoice${copiedVehicleCount === 1 ? "" : "s"}.` : "";
     if (failedDocuments.length) toast(`${savedText}${companyText}. ${failedDocuments.length} needs review${failedText}.${vehicleText}`);
-    else if (canSyncNow && !synced) toast(`${savedText} locally. Cloud sync failed${cloudFailureSuffix()}`);
+    else if (missingIds.size) toast(`${savedText} locally. ${missingIds.size} cloud row${missingIds.size === 1 ? "" : "s"} need sync retry.`);
+    else if (canSyncNow && !synced) toast(`${savedText}. Purchase rows verified, but cloud backup sync needs retry${cloudFailureSuffix()}`);
     else toast(`${canSyncNow ? `${savedText}${companyText} and synced` : `${savedText}${companyText}`}.${vehicleText}`.trim());
   } catch (error) {
     console.error("Purchase import approval failed", error);
     toast(`Approve failed: ${String(error?.message || error || "Unexpected error")}`);
   } finally {
     purchaseImportApproving = false;
+    purchaseImportApprovalProgress = null;
     renderAll();
   }
+}
+
+async function ensurePurchaseImportCloudRows(entries = []) {
+  let verification = await verifyCloudPurchaseRows(entries);
+  if (verification.skipped || !verification.missing.length) return verification;
+  purchaseImportApprovalProgress = {
+    current: entries.length - verification.missing.length,
+    total: entries.length,
+    label: `Retrying ${verification.missing.length} cloud save${verification.missing.length === 1 ? "" : "s"}`
+  };
+  renderPurchaseImportSummary(
+    purchaseImportBatchById(activePurchaseImportBatchId),
+    purchaseImportDocuments(activePurchaseImportBatchId)
+  );
+  for (const missingEntry of verification.missing) {
+    const currentEntry = state.purchases.find(entry => entry.id === missingEntry.id) || missingEntry;
+    try {
+      await syncSingleEntryToCloud("purchase", currentEntry);
+    } catch (error) {
+      console.warn("Purchase cloud row retry failed", currentEntry.number || currentEntry.id, error);
+    }
+  }
+  verification = await verifyCloudPurchaseRows(entries);
+  return verification;
+}
+
+async function verifyCloudPurchaseRows(entries = []) {
+  if (!cloudReadyForSync() || cloudRowSyncUnavailableReason || !entries.length) {
+    return { skipped: true, missing: [] };
+  }
+  const expected = new Map(entries.filter(entry => entry?.id).map(entry => [entry.id, entry]));
+  const found = new Set();
+  const ids = [...expected.keys()];
+  try {
+    for (let index = 0; index < ids.length; index += 250) {
+      const { data, error } = await cloudClient
+        .from(CLOUD_ROW_TABLES.purchases)
+        .select("id")
+        .eq("workspace_id", cloudWorkspace.id)
+        .in("id", ids.slice(index, index + 250));
+      if (error) throw error;
+      (data || []).forEach(row => found.add(row.id));
+    }
+  } catch (error) {
+    if (isCloudRowSchemaNotReadyError(error)) {
+      setCloudRowSyncUnavailable(error);
+      return { skipped: true, missing: [] };
+    }
+    console.warn("Could not verify approved purchase rows", error);
+    return { skipped: false, missing: [...expected.values()] };
+  }
+  return {
+    skipped: false,
+    missing: ids.filter(id => !found.has(id)).map(id => expected.get(id))
+  };
 }
 
 function purchaseImportApprovalDocuments(batchId) {

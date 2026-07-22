@@ -4713,6 +4713,44 @@ body.invoice-pdf-capture .invoice-preview-frame {
   font-weight: 800;
 }
 
+.purchase-import-progress {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: #536164;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.purchase-import-progress > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.purchase-import-progress > i {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #dce5e7;
+}
+
+.purchase-import-progress > i::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42%;
+  background: #0f766e;
+  content: "";
+  animation: purchase-import-loading 1.15s ease-in-out infinite;
+}
+
+@keyframes purchase-import-loading {
+  from { transform: translateX(-105%); }
+  to { transform: translateX(340%); }
+}
+
 .purchase-import-status {
   padding: 4px 7px;
   border-radius: 8px;
@@ -4762,6 +4800,12 @@ body.invoice-pdf-capture .invoice-preview-frame {
   width: 34px;
   height: 34px;
   margin-bottom: 10px;
+}
+
+.purchase-import-empty .purchase-import-progress {
+  width: min(280px, 70vw);
+  margin: 14px auto 0;
+  text-align: left;
 }
 
 .purchase-import-review-form {
