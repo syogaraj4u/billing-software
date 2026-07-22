@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.22.2";
+const APP_BUILD = "2026.07.22.3";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -54,6 +54,10 @@ const ENTRY_RENDER_LIMIT_MOBILE = 30;
 const ENTRY_RENDER_LIMIT_DESKTOP = 75;
 const ENTRY_RENDER_LOAD_MORE_MOBILE = 30;
 const ENTRY_RENDER_LOAD_MORE_DESKTOP = 75;
+const PURCHASE_IMAGE_OPTIMIZE_MIN_BYTES = 900 * 1024;
+const PURCHASE_IMAGE_OPTIMIZE_MAX_DIMENSION = 2200;
+const PURCHASE_IMAGE_OPTIMIZE_QUALITY = 0.82;
+const CLOUD_READ_PAGE_SIZE = 1000;
 
 const EWAY_ADDRESS_PRESETS = [
   {
@@ -3528,14 +3532,22 @@ async function readNormalizedCloudState(workspaceId) {
 }
 
 async function readCloudTableRows(table, workspaceId) {
-  const { data, error } = await cloudClient
-    .from(table)
-    .select("*")
-    .eq("workspace_id", workspaceId);
-  if (!error) return data || [];
-  if (isMissingCloudTableError(error)) return null;
-  console.warn("Cloud row table read failed", table, error);
-  return [];
+  const rows = [];
+  for (let offset = 0; ; offset += CLOUD_READ_PAGE_SIZE) {
+    const { data, error } = await cloudClient
+      .from(table)
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .range(offset, offset + CLOUD_READ_PAGE_SIZE - 1);
+    if (error) {
+      if (isMissingCloudTableError(error)) return null;
+      console.warn("Cloud row table read failed", table, error);
+      return rows;
+    }
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < CLOUD_READ_PAGE_SIZE) return rows;
+  }
 }
 
 function isMissingCloudTableError(error = {}) {
@@ -12545,9 +12557,10 @@ async function extractPurchaseImportDocument({ batchId, documentId, file }) {
   saveState({ skipCloud: true });
   renderPurchaseImportInbox();
   try {
+    const workingFile = await preparePurchaseInvoiceWorkingFile(file);
     const [fileHash, parsed] = await Promise.all([
       purchaseImportFileHash(file),
-      extractPurchaseInvoiceParsedFromFile(file)
+      extractPurchaseInvoiceParsedFromFile(workingFile, file)
     ]);
     const currentDocument = purchaseImportDocumentById(documentId);
     if (!currentDocument) return;
@@ -12571,8 +12584,8 @@ async function extractPurchaseImportDocument({ batchId, documentId, file }) {
   renderPurchaseImportInbox();
 }
 
-async function extractPurchaseInvoiceParsedFromFile(file) {
-  const attachment = await createPurchaseAttachment(file);
+async function extractPurchaseInvoiceParsedFromFile(file, sourceFile = file) {
+  const attachmentPromise = createPurchaseAttachment(file, sourceFile);
   let pdfText = "";
   let ocrText = "";
   if (file.type === "application/pdf") {
@@ -12584,6 +12597,8 @@ async function extractPurchaseInvoiceParsedFromFile(file) {
   }
   const profileParsed = pdfText ? parseSpecialPurchaseInvoiceText(pdfText, file.name) : null;
   let parsed = supplierProfileParseReady(profileParsed) ? profileParsed : null;
+  const cloudFirst = shouldPreferCloudPurchaseExtraction(file, pdfText);
+  if (!parsed && cloudFirst) parsed = await extractPurchaseInvoiceWithCloud(file);
   let localOcrParsed = null;
   if (!parsed && shouldRunLocalPurchaseOcr(file, pdfText)) {
     try {
@@ -12596,7 +12611,7 @@ async function extractPurchaseInvoiceParsedFromFile(file) {
       console.warn("Local OCR purchase extraction unavailable", error);
     }
   }
-  if (!parsed) parsed = await extractPurchaseInvoiceWithCloud(file);
+  if (!parsed && !cloudFirst) parsed = await extractPurchaseInvoiceWithCloud(file);
   if (!parsed && localOcrParsed) parsed = localOcrParsed;
   if (!parsed && profileParsed) parsed = profileParsed;
   if (!parsed && file.type === "application/pdf") {
@@ -12613,8 +12628,8 @@ async function extractPurchaseInvoiceParsedFromFile(file) {
   if (extractionText.trim()) parsed = applyPurchasePaymentAdjustments(parsed, extractionText);
   parsed = applyPurchaseSupplierProfileRules(parsed, extractionText, file.name);
   parsed = await enrichPurchasePincodes(parsed);
-  parsed.fileName = parsed.fileName || file.name;
-  parsed.attachments = [attachment];
+  parsed.fileName = sourceFile.name || parsed.fileName || file.name;
+  parsed.attachments = [await attachmentPromise];
   return parsed;
 }
 
@@ -14027,11 +14042,74 @@ function normalizeCell9PurchaseLine(line = {}) {
   };
 }
 
-async function createPurchaseAttachment(file) {
+async function preparePurchaseInvoiceWorkingFile(file) {
+  if (!file?.type?.startsWith("image/")) return file;
+  if (file.type === "image/gif" || file.type === "image/svg+xml") return file;
+  if (file.size < PURCHASE_IMAGE_OPTIMIZE_MIN_BYTES) return file;
+  try {
+    const optimized = await compressPurchaseInvoiceImage(file);
+    if (!optimized || optimized.size >= file.size * 0.92) return file;
+    return optimized;
+  } catch (error) {
+    console.warn("Purchase image optimization skipped", error);
+    return file;
+  }
+}
+
+async function compressPurchaseInvoiceImage(file) {
+  const bitmap = await loadImageBitmapForCompression(file);
+  const scale = Math.min(1, PURCHASE_IMAGE_OPTIMIZE_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) return file;
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(bitmap, 0, 0, width, height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", PURCHASE_IMAGE_OPTIMIZE_QUALITY));
+  if (bitmap.close) bitmap.close();
+  if (!blob) return file;
+  const optimizedName = purchaseOptimizedImageName(file.name || "invoice.jpg");
+  return new File([blob], optimizedName, {
+    type: "image/jpeg",
+    lastModified: file.lastModified || Date.now()
+  });
+}
+
+async function loadImageBitmapForCompression(file) {
+  if (window.createImageBitmap) return await window.createImageBitmap(file);
+  return await new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not load image"));
+    };
+    image.src = url;
+  });
+}
+
+function purchaseOptimizedImageName(name = "invoice.jpg") {
+  const clean = String(name || "invoice.jpg").replace(/\.[^.]+$/i, "");
+  return `${clean || "invoice"}-optimized.jpg`;
+}
+
+async function createPurchaseAttachment(file, sourceFile = file) {
   const attachment = {
-    name: file.name,
-    type: file.type || "application/octet-stream",
-    size: file.size,
+    name: sourceFile.name || file.name,
+    type: sourceFile.type || file.type || "application/octet-stream",
+    size: sourceFile.size || file.size,
+    storedName: file.name,
+    storedType: file.type || "application/octet-stream",
+    storedSize: file.size,
+    optimized: Boolean(sourceFile && (sourceFile.name !== file.name || sourceFile.size !== file.size || sourceFile.type !== file.type)),
     uploadedAt: new Date().toISOString(),
     bucket: "",
     storagePath: "",
@@ -14088,6 +14166,12 @@ function shouldRunLocalPurchaseOcr(file, pdfText = "") {
   if (file.type?.startsWith("image/")) return true;
   if (file.type === "application/pdf" && String(pdfText || "").trim().length < 80) return true;
   return false;
+}
+
+function shouldPreferCloudPurchaseExtraction(file, pdfText = "") {
+  if (!cloudClient || !cloudSession) return false;
+  if (file.type?.startsWith("image/")) return false;
+  return file.type === "application/pdf" && String(pdfText || "").trim().length < 80;
 }
 
 async function extractPurchaseInvoiceWithLocalOcr(file) {
@@ -14171,7 +14255,7 @@ async function renderPdfPagesForLocalOcr(file) {
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvasContext: context, viewport }).promise;
-    images.push(await new Promise(resolve => canvas.toBlob(blob => resolve(blob), "image/png", 0.92)));
+    images.push(await new Promise(resolve => canvas.toBlob(blob => resolve(blob), "image/jpeg", 0.86)));
   }
   return images.filter(Boolean);
 }
@@ -14481,10 +14565,15 @@ function addressWithUpdatedPincode(address = "", pincode = "") {
 }
 
 async function fileToBase64(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
-  return btoa(binary);
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || "");
+      resolve(value.includes(",") ? value.split(",").pop() || "" : value);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function buildManualReviewPurchase(file, message) {
