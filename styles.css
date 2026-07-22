@@ -3181,6 +3181,22 @@ html.native-app body {
   background: #f6faf8;
 }
 
+.entry-load-more-row td {
+  text-align: center;
+  background: #fbfdfc;
+  padding: 14px;
+}
+
+.entry-load-more-row .secondary-btn {
+  margin: 0 auto 6px;
+}
+
+.entry-load-more-row small {
+  display: block;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .reconciliation-view {
   min-width: 0;
 }
@@ -3999,6 +4015,7 @@ html.native-app body {
   #dashboardView .table-wrap tbody,
   #salesView .table-wrap tbody,
   #purchasesView .table-wrap tbody,
+  #purchaseOrdersView .table-wrap tbody,
   #itemsView .table-wrap tbody,
   #partiesView .table-wrap tbody {
     display: grid;
@@ -4008,6 +4025,7 @@ html.native-app body {
   #dashboardView .table-wrap tbody tr,
   #salesView .table-wrap tbody tr,
   #purchasesView .table-wrap tbody tr,
+  #purchaseOrdersView .table-wrap tbody tr,
   #itemsView .table-wrap tbody tr,
   #partiesView .table-wrap tbody tr {
     display: grid;
@@ -4020,6 +4038,7 @@ html.native-app body {
   #dashboardView .table-wrap tbody td,
   #salesView .table-wrap tbody td,
   #purchasesView .table-wrap tbody td,
+  #purchaseOrdersView .table-wrap tbody td,
   #itemsView .table-wrap tbody td,
   #partiesView .table-wrap tbody td {
     display: flex;
@@ -4033,6 +4052,7 @@ html.native-app body {
   #dashboardView .table-wrap tbody td::before,
   #salesView .table-wrap tbody td::before,
   #purchasesView .table-wrap tbody td::before,
+  #purchaseOrdersView .table-wrap tbody td::before,
   #itemsView .table-wrap tbody td::before,
   #partiesView .table-wrap tbody td::before {
     content: "";
@@ -4043,6 +4063,7 @@ html.native-app body {
   #dashboardView .table-wrap tbody td:first-child,
   #salesView .table-wrap tbody td:first-child,
   #purchasesView .table-wrap tbody td:first-child,
+  #purchaseOrdersView .table-wrap tbody td:first-child,
   #itemsView .table-wrap tbody td:first-child,
   #partiesView .table-wrap tbody td:first-child {
     font-weight: 700;
@@ -4058,13 +4079,21 @@ html.native-app body {
   #dashboardView .table-wrap .empty-row,
   #salesView .table-wrap .empty-row,
   #purchasesView .table-wrap .empty-row,
+  #purchaseOrdersView .table-wrap .empty-row,
   #itemsView .table-wrap .empty-row,
   #partiesView .table-wrap .empty-row,
   #dashboardView .table-wrap .filter-note-row td,
   #salesView .table-wrap .filter-note-row td,
   #purchasesView .table-wrap .filter-note-row td,
+  #purchaseOrdersView .table-wrap .filter-note-row td,
   #itemsView .table-wrap .filter-note-row td,
-  #partiesView .table-wrap .filter-note-row td {
+  #partiesView .table-wrap .filter-note-row td,
+  #dashboardView .table-wrap .entry-load-more-row td,
+  #salesView .table-wrap .entry-load-more-row td,
+  #purchasesView .table-wrap .entry-load-more-row td,
+  #purchaseOrdersView .table-wrap .entry-load-more-row td,
+  #itemsView .table-wrap .entry-load-more-row td,
+  #partiesView .table-wrap .entry-load-more-row td {
     display: block;
     text-align: center;
     padding: 16px;
@@ -4072,13 +4101,21 @@ html.native-app body {
   #dashboardView .table-wrap .empty-row::before,
   #salesView .table-wrap .empty-row::before,
   #purchasesView .table-wrap .empty-row::before,
+  #purchaseOrdersView .table-wrap .empty-row::before,
   #itemsView .table-wrap .empty-row::before,
   #partiesView .table-wrap .empty-row::before,
   #dashboardView .table-wrap .filter-note-row td::before,
   #salesView .table-wrap .filter-note-row td::before,
   #purchasesView .table-wrap .filter-note-row td::before,
+  #purchaseOrdersView .table-wrap .filter-note-row td::before,
   #itemsView .table-wrap .filter-note-row td::before,
-  #partiesView .table-wrap .filter-note-row td::before {
+  #partiesView .table-wrap .filter-note-row td::before,
+  #dashboardView .table-wrap .entry-load-more-row td::before,
+  #salesView .table-wrap .entry-load-more-row td::before,
+  #purchasesView .table-wrap .entry-load-more-row td::before,
+  #purchaseOrdersView .table-wrap .entry-load-more-row td::before,
+  #itemsView .table-wrap .entry-load-more-row td::before,
+  #partiesView .table-wrap .entry-load-more-row td::before {
     content: "";
   }
   #salesRows td:nth-child(1)::before { content: "Date"; }
@@ -4234,7 +4271,9 @@ html.native-app body {
   #salesRows td.empty-row,
   #purchaseRows td.empty-row,
   #salesRows .filter-note-row td,
-  #purchaseRows .filter-note-row td {
+  #purchaseRows .filter-note-row td,
+  #salesRows .entry-load-more-row td,
+  #purchaseRows .entry-load-more-row td {
     grid-area: auto;
     grid-column: 1 / -1;
     width: 100%;

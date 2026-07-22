@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.21.10";
+const APP_BUILD = "2026.07.22.2";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -50,6 +50,10 @@ const LOCAL_OCR_SCRIPT_URLS = [
   "./vendor/tesseract.min.js",
   "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"
 ];
+const ENTRY_RENDER_LIMIT_MOBILE = 30;
+const ENTRY_RENDER_LIMIT_DESKTOP = 75;
+const ENTRY_RENDER_LOAD_MORE_MOBILE = 30;
+const ENTRY_RENDER_LOAD_MORE_DESKTOP = 75;
 
 const EWAY_ADDRESS_PRESETS = [
   {
@@ -604,6 +608,7 @@ let cloudWorkspaces = [];
 let cloudWorkspace = null;
 let cloudLoading = false;
 let cloudSyncTimer = null;
+let cloudSyncIdleCallback = null;
 let cloudWorkspaceAutoSwitchPending = "";
 let lastCloudSyncError = "";
 let cloudRowSyncUnavailableReason = "";
@@ -611,6 +616,7 @@ let forgotPasswordMode = false;
 let passwordRecoveryMode = false;
 let selectedPurchaseIds = new Set();
 let entryMonthFilters = {};
+let entryRenderLimits = {};
 let purchaseUploadQueue = [];
 let purchaseUploadWorkers = 0;
 let activePurchaseImportBatchId = "";
@@ -2686,6 +2692,7 @@ function bindEvents() {
   $("#newSaleBtn").addEventListener("click", () => openEntry("sale"));
   $("#salesMonthFilter").addEventListener("change", event => {
     entryMonthFilters.sale = event.target.value;
+    resetEntryRenderLimit("sale");
     renderEntries("sale");
   });
   bindIf("#newCreditNoteBtn", "click", () => openCreditNote());
@@ -2702,6 +2709,7 @@ function bindEvents() {
   $("#newPurchaseBtn").addEventListener("click", () => openEntry("purchase"));
   $("#purchaseMonthFilter").addEventListener("change", event => {
     entryMonthFilters.purchase = event.target.value;
+    resetEntryRenderLimit("purchase");
     selectedPurchaseIds.clear();
     renderEntries("purchase");
   });
@@ -2732,6 +2740,7 @@ function bindEvents() {
   bindIf("#tallyHistory", "click", handleTallyHistoryAction);
   bindIf("#poMonthFilter", "change", event => {
     entryMonthFilters.po = event.target.value;
+    resetEntryRenderLimit("po");
     renderEntries("po");
   });
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
@@ -2951,6 +2960,7 @@ function selectCompany(profileId) {
     purchase: defaultEntryMonth("purchase", profileId),
     po: defaultEntryMonth("po", profileId)
   };
+  resetEntryRenderLimit();
   selectedPurchaseIds.clear();
   reconciliationMonth = defaultReconciliationMonth(profileId);
   reconciliationSourceFilterId = "";
@@ -3636,7 +3646,21 @@ async function saveCloudWorkspaceSettings() {
 function scheduleCloudSave() {
   if (!cloudClient || !cloudSession || !cloudWorkspace || cloudLoading) return;
   clearTimeout(cloudSyncTimer);
-  cloudSyncTimer = setTimeout(() => syncCloudNow(false), 900);
+  if (cloudSyncIdleCallback && window.cancelIdleCallback) {
+    window.cancelIdleCallback(cloudSyncIdleCallback);
+    cloudSyncIdleCallback = null;
+  }
+  cloudSyncTimer = setTimeout(() => {
+    const runSync = () => {
+      cloudSyncIdleCallback = null;
+      syncCloudNow(false);
+    };
+    if (window.requestIdleCallback) {
+      cloudSyncIdleCallback = window.requestIdleCallback(runSync, { timeout: 2500 });
+    } else {
+      runSync();
+    }
+  }, 1200);
 }
 
 async function syncCloudNow(showToast) {
@@ -3645,6 +3669,10 @@ async function syncCloudNow(showToast) {
     return false;
   }
   clearTimeout(cloudSyncTimer);
+  if (cloudSyncIdleCallback && window.cancelIdleCallback) {
+    window.cancelIdleCallback(cloudSyncIdleCallback);
+    cloudSyncIdleCallback = null;
+  }
   if (showToast) cloudRowSyncUnavailableReason = "";
   const selectedProfileId = activeProfileId();
   const selectColumns = "id,name,owner_id,member_emails,data,updated_at,created_at";
@@ -5308,6 +5336,38 @@ function restoreReconciliationTransaction(transactionId) {
   renderAll();
 }
 
+function entryInitialRenderLimit() {
+  return isMobileDeviceView() ? ENTRY_RENDER_LIMIT_MOBILE : ENTRY_RENDER_LIMIT_DESKTOP;
+}
+
+function entryRenderLoadMoreStep() {
+  return isMobileDeviceView() ? ENTRY_RENDER_LOAD_MORE_MOBILE : ENTRY_RENDER_LOAD_MORE_DESKTOP;
+}
+
+function resetEntryRenderLimit(kind = "") {
+  if (kind) {
+    delete entryRenderLimits[kind];
+    return;
+  }
+  entryRenderLimits = {};
+}
+
+function entryVisibleLimit(kind, totalCount = 0) {
+  if (!totalCount) return 0;
+  const current = Math.max(0, Math.round(num(entryRenderLimits[kind])));
+  if (current > 0) return Math.min(totalCount, current);
+  const initial = Math.min(totalCount, entryInitialRenderLimit());
+  entryRenderLimits[kind] = initial;
+  return initial;
+}
+
+function showMoreEntries(kind) {
+  const totalCount = monthFilteredEntries(kind).length;
+  const current = entryVisibleLimit(kind, totalCount);
+  entryRenderLimits[kind] = Math.min(totalCount, current + entryRenderLoadMoreStep());
+  renderEntries(kind);
+}
+
 function renderEntries(kind) {
   renderEntryMonthFilter(kind);
   const entries = monthFilteredEntries(kind);
@@ -5321,7 +5381,10 @@ function renderEntries(kind) {
     const visibleIds = new Set(entries.map(entry => entry.id));
     selectedPurchaseIds = new Set([...selectedPurchaseIds].filter(id => visibleIds.has(id)));
   }
-  const rows = entries.sort((a, b) => b.date.localeCompare(a.date)).map(entry => {
+  const sortedEntries = [...entries].sort((a, b) => b.date.localeCompare(a.date));
+  const visibleLimit = entryVisibleLimit(kind, sortedEntries.length);
+  const visibleEntries = sortedEntries.slice(0, visibleLimit);
+  const rows = visibleEntries.map(entry => {
     const cancelled = isCancelledEntry(entry);
     const statusLabel = cancelled ? "Cancelled" : (entry.status || "-");
     const statusClass = cancelled ? "danger" : (entry.status === "Unpaid" ? "warn" : "");
@@ -5357,10 +5420,12 @@ function renderEntries(kind) {
   `;
   }).join("");
   const emptyLabel = emptyEntriesLabel(kind, allEntries.length);
-  const filterNote = entryMonthFilterNote(kind, entries.length, allEntries.length, emptyColspan);
+  const filterNote = entryMonthFilterNote(kind, sortedEntries.length, allEntries.length, emptyColspan);
+  const loadMoreRow = entryLoadMoreRow(kind, visibleEntries.length, sortedEntries.length, emptyColspan);
   const target = kind === "sale" ? "#salesRows" : kind === "purchase" ? "#purchaseRows" : "#poRows";
-  $(target).innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + filterNote;
+  $(target).innerHTML = (rows || emptyRow(emptyColspan, emptyLabel)) + loadMoreRow + filterNote;
   if (kind === "purchase") bindPurchaseSelectors();
+  if (window.lucide) lucide.createIcons();
 }
 
 function renderCreditNotes() {
@@ -5452,6 +5517,18 @@ function entryMonthFilterNote(kind, visibleCount, totalCount, colspan) {
   if (selectedEntryMonth(kind) === ALL_MONTHS_KEY || totalCount <= visibleCount) return "";
   const label = kind === "sale" ? "sales" : kind === "purchase" ? "purchases" : "purchase orders";
   return `<tr class="filter-note-row"><td colspan="${colspan}">Showing ${visibleCount} of ${totalCount} ${label}. Select All months or another month to view older entries.</td></tr>`;
+}
+
+function entryLoadMoreRow(kind, visibleCount, totalCount, colspan) {
+  if (totalCount <= visibleCount) return "";
+  const label = kind === "sale" ? "sales" : kind === "purchase" ? "purchases" : "purchase orders";
+  const remaining = totalCount - visibleCount;
+  return `<tr class="entry-load-more-row"><td colspan="${colspan}">
+    <button class="secondary-btn compact-btn" type="button" onclick="showMoreEntries('${kind}')">
+      <i data-lucide="chevrons-down"></i><span>Load ${Math.min(remaining, entryRenderLoadMoreStep())} more</span>
+    </button>
+    <small>Showing ${visibleCount} of ${totalCount} ${label}</small>
+  </td></tr>`;
 }
 
 function ewayReviewBadge(entry) {
@@ -16120,6 +16197,7 @@ window.openParty = openParty;
 window.deleteParty = deleteParty;
 window.openPaymentSource = openPaymentSource;
 window.selectReconciliationSource = selectReconciliationSource;
+window.showMoreEntries = showMoreEntries;
 window.openReconciliationMatch = openReconciliationMatch;
 window.acceptReconciliationSuggestion = acceptReconciliationSuggestion;
 window.acceptReconciliationDifference = acceptReconciliationDifference;
