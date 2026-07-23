@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.23.2";
+const APP_BUILD = "2026.07.23.3";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -38,7 +38,7 @@ const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
 const DISALLOWED_HSN_CODES = new Set(["85176290"]);
 const DEFAULT_SALE_GST_RATE = 18;
-const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-21-local-first-v2";
+const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-23-cell9-v3";
 const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
@@ -14280,37 +14280,59 @@ function purchaseAdjustmentAmountFromLine(line = "") {
   return amounts.length ? Number(amounts[amounts.length - 1]) : 0;
 }
 
-function normalizeCell9PurchaseParsed(parsed = {}) {
-  if (!isCell9PurchaseParsed(parsed)) return parsed;
-  const lines = (parsed.lines || []).map(normalizeCell9PurchaseLine);
-  if (!lines.some(line => line.cell9Normalized)) return parsed;
-  const cleanLines = lines.map(({ cell9Normalized, ...line }) => line);
-  const taxable = round2(cleanLines.reduce((sum, line) => sum + num(line.qty) * num(line.rate), 0));
-  const gst = round2(cleanLines.reduce((sum, line) => sum + (num(line.grossRate) - num(line.rate)) * num(line.qty), 0));
-  const total = round2(taxable + gst);
-  const cgst = round2(gst / 2);
+function normalizeCell9PurchaseParsed(parsed = {}, text = "", fileName = "") {
+  const textLooksLikeCell9 = /37AJDPM5524D1ZF|\bCELL\s*\/\s*\d+\b/i.test(String(text || ""));
+  if (!isCell9PurchaseParsed(parsed) && !textLooksLikeCell9) return parsed;
+  const textParsed = textLooksLikeCell9
+    ? parseCell9PurchaseInvoiceText(text, fileName || parsed.fileName || "")
+    : null;
+  const source = textParsed && cell9ParsedValuesReady(textParsed)
+    ? {
+        ...parsed,
+        ...textParsed,
+        reviewMessages: uniqueMessages([...(parsed.reviewMessages || []), ...(textParsed.reviewMessages || [])])
+      }
+    : parsed;
+  const sourceLines = Array.isArray(source.lines) ? source.lines : [];
+  const authoritativeTotal = num(source.extractedTaxes?.total || source.total);
+  const lines = sourceLines.map(line => normalizeCell9PurchaseLine(
+    line,
+    sourceLines.length === 1 ? authoritativeTotal : 0
+  ));
+  if (!lines.length) return source;
+  const taxable = round2(lines.reduce((sum, line) => sum + num(line.qty) * num(line.rate), 0));
+  const cgst = round2(lines.reduce((sum, line) => sum + num(line.qty) * num(line.rate) * num(line.gstRate) / 200, 0));
+  const sgst = round2(lines.reduce((sum, line) => sum + num(line.qty) * num(line.rate) * num(line.gstRate) / 200, 0));
+  const gst = round2(cgst + sgst);
+  const total = authoritativeTotal || round2(taxable + gst + num(source.roundOff));
+  const roundOff = round2(total - taxable - gst);
   return {
-    ...parsed,
-    supplierName: parsed.supplierName || "CELL9 MOBILE STORE",
-    supplierGstin: normalizeGstin(parsed.supplierGstin) || "37AJDPM5524D1ZF",
-    supplierAddress: parsed.supplierAddress || "# 18-915, Chruch Street, Opp. Pragathi Book Centre, Chittoor - 517001",
+    ...source,
+    supplierName: source.supplierName || "CELL9 MOBILE STORE",
+    supplierGstin: normalizeGstin(source.supplierGstin) || "37AJDPM5524D1ZF",
+    supplierAddress: source.supplierAddress || "# 18-915, Church Street, Opp. Pragathi Book Centre, Chittoor - 517001",
     taxable,
     gst,
     total,
+    roundOff,
     extractedTaxes: {
       taxable,
       cgst,
-      sgst: round2(gst - cgst),
+      sgst,
       igst: 0,
       gst,
       total
     },
-    reviewMessages: uniqueMessages([
-      ...(parsed.reviewMessages || []),
-      "Cell9 invoice totals normalized from Qty, Rate, and CGST/SGST format."
-    ]),
-    lines: cleanLines
+    reviewMessages: uniqueMessages(source.reviewMessages || []),
+    lines
   };
+}
+
+function cell9ParsedValuesReady(parsed = {}) {
+  return /^CELL\s*\/\s*\d+$/i.test(String(parsed.invoiceNumber || ""))
+    && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.invoiceDate || ""))
+    && num(parsed.total) > 0
+    && (parsed.lines || []).some(line => num(line.qty) > 0 && num(line.grossRate || line.rate) > 0);
 }
 
 function isCell9PurchaseParsed(parsed = {}) {
@@ -14319,7 +14341,7 @@ function isCell9PurchaseParsed(parsed = {}) {
     || /^CELL\s*\/\s*\d+/i.test(String(parsed.invoiceNumber || ""));
 }
 
-function normalizeCell9PurchaseLine(line = {}) {
+function normalizeCell9PurchaseLine(line = {}, authoritativeTotal = 0) {
   const name = normalizeImportedItemName(line.name || "iPhone");
   const qty = num(line.qty) || 1;
   const gstRate = num(line.gstRate) || DEFAULT_SALE_GST_RATE;
@@ -14327,17 +14349,12 @@ function normalizeCell9PurchaseLine(line = {}) {
   const rawGrossRate = num(line.grossRate);
   let taxableRate = rawRate || taxableRateFromInclusive(rawGrossRate, gstRate);
   let grossRate = rawGrossRate || inclusiveRateFromTaxable(taxableRate, gstRate);
-  let normalized = false;
-  const normalizedName = normalizeMergeText(name);
-  const looksLikeIphone15Cell9 = /iphone 15/.test(normalizedName) && /128\s*gb|128gb/.test(normalizedName) && qty === 5;
-  if (looksLikeIphone15Cell9) {
-    taxableRate = 49576.27;
-    grossRate = 58500;
-    normalized = true;
+  if (authoritativeTotal > 0 && qty > 0) {
+    grossRate = round2(authoritativeTotal / qty);
+    taxableRate = taxableRateFromInclusive(grossRate, gstRate);
   } else if (rawGrossRate > 0 && rawGrossRate > rawRate) {
     taxableRate = taxableRateFromInclusive(rawGrossRate, gstRate);
     grossRate = rawGrossRate;
-    normalized = true;
   }
   return {
     ...line,
@@ -14346,8 +14363,7 @@ function normalizeCell9PurchaseLine(line = {}) {
     qty,
     rate: round2(taxableRate),
     grossRate: round2(grossRate),
-    gstRate,
-    cell9Normalized: normalized
+    gstRate
   };
 }
 
@@ -15872,18 +15888,28 @@ function parseCell9PurchaseInvoiceText(text, fileName) {
     || findInvoiceDate(cleaned)
     || today();
   const item = cell9ItemLine(cleaned, lines);
-  const tax = cell9TaxSummary(cleaned, item);
   const qty = num(item.qty) || 1;
-  const taxable = tax.taxable || round2(qty * num(item.rate));
-  const gst = tax.gst || round2(tax.total - taxable);
-  const total = tax.total || round2(taxable + gst);
+  const gstRate = cell9GstRate(cleaned);
+  const total = cell9InvoiceTotal(cleaned, lines, item);
+  const grossRate = total > 0 && qty > 0
+    ? round2(total / qty)
+    : inclusiveRateFromTaxable(item.rate, gstRate);
+  const taxableRate = round2(grossRate > 0
+    ? taxableRateFromInclusive(grossRate, gstRate)
+    : num(item.rate));
+  const taxable = round2(qty * taxableRate);
+  const cgst = round2(taxable * gstRate / 200);
+  const sgst = round2(taxable * gstRate / 200);
+  const gst = round2(cgst + sgst);
+  const invoiceTotal = total || round2(taxable + gst);
+  const roundOff = round2(invoiceTotal - taxable - gst + purchasePaymentAdjustmentFromText(cleaned));
   const parsedLine = {
     name: normalizeImportedItemName(item.name || "CELL9 Purchase"),
     hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
     qty,
-    rate: qty ? round2(taxable / qty) : taxable,
-    grossRate: qty ? round2(total / qty) : total,
-    gstRate: inferGstRate(taxable, gst),
+    rate: round2(taxableRate),
+    grossRate: round2(grossRate),
+    gstRate,
     imeiNumbers: item.imeiNumbers || ""
   };
   return {
@@ -15901,47 +15927,134 @@ function parseCell9PurchaseInvoiceText(text, fileName) {
     invoiceDate,
     taxable,
     gst,
-    total,
-    roundOff: purchasePaymentAdjustmentFromText(cleaned),
+    total: invoiceTotal,
+    roundOff,
     extractedTaxes: {
       taxable,
-      cgst: round2(gst / 2),
-      sgst: round2(gst - round2(gst / 2)),
+      cgst,
+      sgst,
       igst: 0,
       gst,
-      total
+      total: invoiceTotal
     },
-    reviewMessages: item.name ? [] : ["CELL9 invoice detected, but item details were not fully readable. Review item values before saving."],
+    reviewMessages: uniqueMessages([
+      item.name ? "" : "CELL9 invoice detected, but item details were not fully readable. Review item values before saving.",
+      total ? "" : "CELL9 grand total was not readable. Confirm the item rate and invoice total before saving.",
+      item.imeiNumbers ? "" : "CELL9 IMEI numbers were not readable. Confirm them before saving."
+    ]),
     lines: [parsedLine]
   };
 }
 
 function cell9ItemLine(text = "", lines = []) {
   const tableLine = lines.find(line => /\b(?:I\s*)?PHONE\s*:\s*I\s*PHONE|\bIPHONE\b/i.test(line) && /\d/.test(line)) || "";
-  const tableText = [tableLine, ...lines.slice(Math.max(0, lines.indexOf(tableLine) + 1), Math.max(0, lines.indexOf(tableLine) + 8))].join(" ");
-  const qtyRateAmount = tableText.replace(/,/g, "").match(/\|\s*(\d+(?:\.\d+)?)\s*\|?\s*(\d+(?:\.\d{1,2})?)\s*\|?\s*(\d+(?:\.\d{1,2})?)\s*\|?/);
-  const nameMatch = tableText.match(/(?:I\s*)?PHONE\s*:\s*(I\s*PHONE\s+\d+(?:\s+\d+\s*GB)?)/i)
-    || tableText.match(/\b(I\s*PHONE\s+\d+(?:\s+\d+\s*GB)?)/i);
-  const imeiNumbers = [...new Set((tableText.match(/\b\d{14,17}\b/g) || []))].join("\n");
+  const tableIndex = Math.max(0, lines.indexOf(tableLine));
+  const tableText = [tableLine, ...lines.slice(tableIndex + 1, tableIndex + 12)].join(" ");
+  const imeiNumbers = cell9ImeiNumbers(text);
+  const imeis = imeiNumbers ? imeiNumbers.split("\n") : [];
+  const name = cell9ItemName(tableText);
+  const rate = cell9TaxableRate(tableText);
+  const totalLine = lines.find(line => /\bTOTAL\b/i.test(line)) || "";
+  const totalQty = totalLine.match(/\b([1-9]\d?)\s*[\]\|)]/i)?.[1]
+    || totalLine.match(/\bTOTAL\b[^0-9]{0,8}([1-9]\d?)\b/i)?.[1]
+    || "";
   return {
-    name: nameMatch?.[1] || tableLine,
+    name: name || tableLine,
     hsn: DEFAULT_SALE_HSN,
-    qty: qtyRateAmount ? Number(qtyRateAmount[1]) : 1,
-    rate: qtyRateAmount ? Number(qtyRateAmount[2]) : 0,
-    amount: qtyRateAmount ? Number(qtyRateAmount[3]) : 0,
+    qty: imeis.length || Number(totalQty) || 1,
+    rate,
+    amount: 0,
     imeiNumbers
   };
 }
 
-function cell9TaxSummary(text = "", item = {}) {
-  const cgst = amountAfterLabel(text, /CGST\s+9\.?00?\s*%?/i)
-    || amountAfterLabel(text, /CGST\s+Amount\s*:?/i);
-  const sgst = amountAfterLabel(text, /SGST\s+9\.?00?\s*%?/i)
-    || amountAfterLabel(text, /SGST\s+Amount\s*:?/i);
-  const gst = round2(cgst + sgst);
-  const total = amountAfterLabel(text, /TOTAL\s+\d+(?:\.\d+)?\s*/i) || num(item.amount);
-  const taxable = total && gst ? round2(total - gst) : round2(num(item.qty) * num(item.rate));
-  return { taxable, cgst, sgst, igst: 0, gst, total };
+function cell9ItemName(text = "") {
+  const model = String(text || "").match(/(?:I\s*)?PHONE\s*:?\s*(?:I\s*)?PHONE\s*(\d+(?:\s*(?:PRO\s*MAX|PRO|PLUS))?)/i)?.[1]
+    || String(text || "").match(/\bIPHONE\s*(\d+(?:\s*(?:PRO\s*MAX|PRO|PLUS))?)/i)?.[1]
+    || "";
+  const storage = String(text || "").match(/\b(64|128|256|512|1024)\s*GB\b/i)?.[1] || "";
+  if (!model) return "";
+  return `iPhone ${model.replace(/\s+/g, " ").trim()}${storage ? ` ${storage}GB` : ""}`;
+}
+
+function cell9TaxableRate(text = "") {
+  const matches = [...String(text || "").matchAll(/(?:^|[^\d,])(\d{1,2},\d{3}\.\d{2})(?![\d,])/g)];
+  const values = matches.map(match => Number(match[1].replace(/,/g, ""))).filter(value => value >= 1000 && value <= 250000);
+  return values[0] || 0;
+}
+
+function cell9GstRate(text = "") {
+  const cgst = num(String(text || "").match(/\bCGST\s+(\d+(?:\.\d+)?)\s*%/i)?.[1]);
+  const sgst = num(String(text || "").match(/\bSGST\s+(\d+(?:\.\d+)?)\s*%/i)?.[1]);
+  const combined = round2(cgst + sgst);
+  return combined > 0 && combined <= 40 ? combined : DEFAULT_SALE_GST_RATE;
+}
+
+function cell9InvoiceTotal(text = "", lines = [], item = {}) {
+  const wordsTotal = indianAmountWordsValue(
+    String(text || "").match(/\bRUPEES?\s*:?\s*([A-Z][A-Z\s-]+?)(?:\s+\bonly\b|\s*\||\n)/i)?.[1] || ""
+  );
+  if (wordsTotal > 0) return round2(wordsTotal);
+  const totalLine = lines.find(line => /\bTOTAL\b/i.test(line)) || "";
+  const amountMatch = totalLine.match(/(\d{1,2}(?:\s*,\s*\d{2})\s*,\s*\d{3}[.,]\d{2})(?!\d)/);
+  if (amountMatch) return round2(Number(amountMatch[1].replace(/\s|,/g, "")));
+  if (num(item.qty) > 0 && num(item.rate) > 0) {
+    return round2(num(item.qty) * inclusiveRateFromTaxable(item.rate, cell9GstRate(text)));
+  }
+  return 0;
+}
+
+function indianAmountWordsValue(value = "") {
+  const units = {
+    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+    ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+    seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+    sixty: 60, seventy: 70, eighty: 80, ninety: 90
+  };
+  let total = 0;
+  let current = 0;
+  String(value || "").toLowerCase().split(/[^a-z]+/).filter(Boolean).forEach(token => {
+    if (Object.prototype.hasOwnProperty.call(units, token)) {
+      current += units[token];
+    } else if (token === "hundred") {
+      current = (current || 1) * 100;
+    } else if (token === "thousand" || token === "lakh" || token === "lac" || token === "crore") {
+      const scale = token === "thousand" ? 1000 : (token === "crore" ? 10000000 : 100000);
+      total += (current || 1) * scale;
+      current = 0;
+    }
+  });
+  return total + current;
+}
+
+function cell9ImeiNumbers(text = "") {
+  const values = (String(text || "").match(/\b\d{15,17}\b/g) || [])
+    .map(cell9ImeiFromOcrToken)
+    .filter(Boolean);
+  return [...new Set(values)].join("\n");
+}
+
+function cell9ImeiFromOcrToken(value = "") {
+  const digits = String(value || "").replace(/\D/g, "");
+  const candidates = [];
+  for (let index = 0; index <= digits.length - 15; index += 1) {
+    const candidate = digits.slice(index, index + 15);
+    if (/^3\d{14}$/.test(candidate)) candidates.push(candidate);
+  }
+  return candidates.find(cell9ValidImei) || candidates[0] || "";
+}
+
+function cell9ValidImei(value = "") {
+  if (!/^\d{15}$/.test(String(value || ""))) return false;
+  const sum = String(value).split("").reduce((total, digit, index) => {
+    let number = Number(digit);
+    if (index % 2 === 1) {
+      number *= 2;
+      if (number > 9) number -= 9;
+    }
+    return total + number;
+  }, 0);
+  return sum % 10 === 0;
 }
 
 function cell9BuyerName(lines = []) {

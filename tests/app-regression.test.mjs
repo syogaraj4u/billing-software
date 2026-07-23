@@ -55,6 +55,8 @@ function createAppHarness() {
       return normalized;
     },
     normalizePurchaseImportDocumentForState,
+    parseCell9PurchaseInvoiceText,
+    normalizeCell9PurchaseParsed,
     syncCloudEntryLineChanges,
     verifyCloudPurchaseRows,
     setCloud(client, workspace, session = { user: { id: "11111111-1111-4111-8111-111111111111" } }) {
@@ -234,4 +236,107 @@ test("cloud verification returns only purchase IDs that are missing", async () =
   const result = await app.verifyCloudPurchaseRows(entries);
   assert.equal(result.skipped, false);
   assert.equal(Array.from(result.missing, entry => entry.id).join(","), "purchase-2");
+});
+
+const cell9OcrCases = [
+  {
+    number: "CELL/750",
+    itemRow: "| 1 |I PHONE:IPHONE 15 | Bl 49,576.2712,92,500.00]",
+    color: "BLACK",
+    taxRows: "| CGST 9.00% | | |S 208509, 32\n| SGST 9.00% | | [722309 321",
+    totalRow: "| TOTAL I 5] 12,92,500.001",
+    imeis: ["350795422226408", "350795422281791", "350795422310202", "350795422317165", "350795422410267"]
+  },
+  {
+    number: "CELL/749",
+    itemRow: "| 1 |I PHONE:IPHONE 15 | 5B] 49,576.2712,92,500.001",
+    color: "BLACK",
+    taxRows: "| CGST 9.00% | | L_26W300.32|\n| SGST 9.00% | | E277 3099821",
+    totalRow: "| TOTAL 51] 12,92,500.00]",
+    imeis: ["350795421647570", "350795421856965", "350795421934887", "350795422089293", "350795422144429"]
+  },
+  {
+    number: "CELL/751",
+    itemRow: "| 1 |I PHONE:IPHONE 15 [MEINAT, 576.27 | 2, 92 50000",
+    color: "BLUE",
+    taxRows: "| CGST 9.00% | | |_229309.32|\n| SGST 9.00% | =| d= 22 S090",
+    totalRow: "| TOTAL I 51) 12,92, 500200]",
+    imeis: ["350795429134399", "350795429446967", "354196717262628", "354196717472839", "354196717594723"]
+  },
+  {
+    number: "CELL/752",
+    itemRow: "| 1 |I PHONE:IPHONE 15 | B| 49,576.2712,92,500.00]",
+    color: "BLUE",
+    taxRows: "| CGST 9.00% | | | 28300. 32 |\n| SGST 9.00% | | 77, 309.32",
+    totalRow: "| TOTAL [BN 5] |2,92,500.00|",
+    imeis: ["354196717658841", "359641634210882", "359641634373979", "359641638125771", "359641638804755"]
+  }
+];
+
+test("Cell9 OCR profile consistently reads all four photographed invoices", () => {
+  const app = createAppHarness();
+  cell9OcrCases.forEach(invoice => {
+    const ocrText = `
+      MOBILE STORE GSTIN: 37AJDPM5524D1ZF
+      TAX INVOICE
+      | SKANDA DIGITALS BILLNO:${invoice.number} |
+      |GST : 37BSFPB1088P1ZD |
+      | CHITTOOR DATE:20/07/2026 |
+      | SNO DESCRIPTION QTY RATE AMOUNT |
+      ${invoice.itemRow}
+      | | 128GB ${invoice.color} | | | |
+      ${invoice.imeis.map(imei => `| 1${imei} | | | |`).join("\n")}
+      ${invoice.taxRows}
+      ${invoice.totalRow}
+      | RUPEES: Two lakh ninety two thousand five hundred |
+      | only. |
+    `;
+    const parsed = app.parseCell9PurchaseInvoiceText(ocrText, `${invoice.number.replace("/", "-")}.jpeg`);
+    assert.equal(parsed.invoiceNumber, invoice.number);
+    assert.equal(parsed.invoiceDate, "2026-07-20");
+    assert.equal(parsed.buyerGstin, "37BSFPB1088P1ZD");
+    assert.equal(parsed.taxable, 247881.35);
+    assert.equal(parsed.extractedTaxes.cgst, 22309.32);
+    assert.equal(parsed.extractedTaxes.sgst, 22309.32);
+    assert.equal(parsed.gst, 44618.64);
+    assert.equal(parsed.roundOff, 0.01);
+    assert.equal(parsed.total, 292500);
+    assert.equal(parsed.lines[0].name, "iPhone 15 128GB");
+    assert.equal(parsed.lines[0].qty, 5);
+    assert.equal(parsed.lines[0].rate, 49576.27);
+    assert.equal(parsed.lines[0].grossRate, 58500);
+    assert.deepEqual(Array.from(parsed.lines[0].imeiNumbers.split("\n")), invoice.imeis);
+  });
+});
+
+test("Cell9 profile replaces inconsistent cloud totals with OCR-validated values", () => {
+  const app = createAppHarness();
+  const invoice = cell9OcrCases[0];
+  const ocrText = `
+    MOBILE STORE GSTIN: 37AJDPM5524D1ZF
+    | SKANDA DIGITALS BILLNO:${invoice.number} |
+    |GST : 37BSFPB1088P1ZD |
+    | CHITTOOR DATE:20/07/2026 |
+    ${invoice.itemRow}
+    | | 128GB ${invoice.color} | | | |
+    ${invoice.imeis.map(imei => `| 1${imei} |`).join("\n")}
+    ${invoice.totalRow}
+    RUPEES: Two lakh ninety two thousand five hundred only.
+  `;
+  const normalized = app.normalizeCell9PurchaseParsed({
+    supplierName: "CELL9 MOBILE STORE",
+    supplierGstin: "37AJDPM5524D1ZF",
+    invoiceNumber: "CELL/750",
+    invoiceDate: "2026-07-20",
+    taxable: 250621.36,
+    gst: 45111.64,
+    total: 295733,
+    extractedTaxes: { taxable: 250621.36, cgst: 22555.82, sgst: 22555.82, igst: 0, gst: 45111.64, total: 295733 },
+    lines: [{ name: "iPhone 15", hsn: "85171300", qty: 5, rate: 50124.27, gstRate: 18 }]
+  }, ocrText, "CELL-750.jpeg");
+  assert.equal(normalized.taxable, 247881.35);
+  assert.equal(normalized.gst, 44618.64);
+  assert.equal(normalized.roundOff, 0.01);
+  assert.equal(normalized.total, 292500);
+  assert.equal(normalized.lines[0].grossRate, 58500);
 });
