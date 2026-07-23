@@ -1,0 +1,146 @@
+name: Deploy production and staging sites
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build tested Pages artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+
+    steps:
+      - name: Check out tested branch
+        uses: actions/checkout@v4
+
+      - name: Check out production source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .pages-source/production
+
+      - name: Check out staging source
+        id: staging_checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          path: .pages-source/staging
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Run release gate
+        run: |
+          npm run check
+          npm test
+          npm run test:e2e
+
+      - name: Build production and isolated staging sites
+        env:
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+        run: |
+          STAGING_SOURCE=".pages-source/staging"
+          if [ ! -f "$STAGING_SOURCE/index.html" ]; then
+            STAGING_SOURCE=".pages-source/production"
+          fi
+          node scripts/build-pages.mjs \
+            --production-source .pages-source/production \
+            --staging-source "$STAGING_SOURCE" \
+            --output dist/pages \
+            --include-staging
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/pages
+
+  deploy:
+    name: Publish Pages
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy artifact
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  staging-smoke:
+    name: Verify deployed staging
+    runs-on: ubuntu-latest
+    needs: deploy
+    timeout-minutes: 15
+    environment: staging
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run live staging smoke test
+        env:
+          STAGING_BASE_URL: https://billing.nirvanasolutions.in/staging/
+          STAGING_TEST_EMAIL: ${{ secrets.STAGING_TEST_EMAIL }}
+          STAGING_TEST_PASSWORD: ${{ secrets.STAGING_TEST_PASSWORD }}
+        run: |
+          if [ -z "$STAGING_TEST_EMAIL" ] || [ -z "$STAGING_TEST_PASSWORD" ]; then
+            echo "Staging test credentials are not configured; live smoke test skipped."
+            exit 0
+          fi
+          npm run test:e2e:staging
+
+      - name: Upload staging failure report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-playwright-report-${{ github.run_id }}
+          path: |
+            playwright-report-staging/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14

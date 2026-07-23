@@ -5,6 +5,11 @@
   "description": "Native iOS and Android applications for Nirvana Billing.",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
+    "check": "node --check app.js && node --check tally-sync.js",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:staging": "playwright test --config playwright.staging.config.mjs",
+    "web:build": "node scripts/build-pages.mjs",
     "mobile:build": "node scripts/build-mobile.mjs",
     "mobile:sync": "npm run mobile:build && cap sync",
     "mobile:add:ios": "npm run mobile:build && cap add ios",
@@ -33,6 +38,7 @@
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.4.2",
+    "@playwright/test": "^1.61.1",
     "esbuild": "^0.27.2",
     "sharp": "^0.34.5"
   },

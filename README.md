@@ -34,6 +34,19 @@ This app is static HTML, CSS, and JavaScript, so it can run on GitHub Pages.
 
 Publish from the `main` branch root folder.
 
+## Automated Tests and Staging
+
+Run the local release gate with:
+
+```bash
+npm test
+npm run test:e2e
+```
+
+GitHub Actions runs JavaScript syntax checks, production dependency auditing, regression tests, the native web build, the website build, and desktop/mobile Chromium tests on every push and pull request. Failed browser runs retain screenshots, video and Playwright traces as workflow artifacts.
+
+The Pages workflow publishes production at the root domain and a data-isolated staging app under `/staging/`. See `STAGING.md` for the separate Supabase project, GitHub Environment secrets, protected release flow and live staging smoke-test setup.
+
 ## Cloud Setup
 
 1. Create a Supabase project.

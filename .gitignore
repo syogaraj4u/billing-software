@@ -1,5 +1,8 @@
 node_modules/
 mobile/www/
+dist/
+playwright-report/
+test-results/
 output/
 outputs/
 tmp/

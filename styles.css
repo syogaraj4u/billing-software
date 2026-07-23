@@ -5952,3 +5952,20 @@ body.invoice-pdf-capture .invoice-preview-frame {
     border-bottom: 1px solid var(--line);
   }
 }
+html[data-app-environment="staging"] body::before {
+  content: "STAGING";
+  position: fixed;
+  top: 0;
+  left: 50%;
+  z-index: 100000;
+  padding: 4px 10px;
+  border-radius: 0 0 6px 6px;
+  background: #a62b1f;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
