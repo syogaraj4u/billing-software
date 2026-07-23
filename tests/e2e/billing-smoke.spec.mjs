@@ -61,6 +61,38 @@ test("firm switching and sales dialog close controls work", async ({ page }) => 
   expect(pageErrors).toEqual([]);
 });
 
+test("purchase invoices can be dropped and pasted into the attachment inbox", async ({ page }) => {
+  const pageErrors = await openTestApp(page);
+  await login(page);
+  await page.getByRole("button", { name: /Nirvana Solutions/i }).click();
+  await expect(page.locator("#appShell")).toBeVisible();
+  await page.locator('.nav-tab[data-view="purchases"]').click();
+
+  await page.evaluate(() => {
+    const file = new File(["dropped invoice"], "dropped-invoice.png", { type: "image/png" });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    document.querySelector("#purchaseInvoiceDropzone").dispatchEvent(new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer
+    }));
+  });
+  await expect(page.locator("#purchaseImportDialog")).toBeVisible();
+  await expect(page.locator("#purchaseImportDocumentList")).toContainText("dropped-invoice.png");
+
+  await page.evaluate(() => {
+    const file = new File(["pasted invoice"], "copied-invoice.pdf", { type: "application/pdf" });
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: { files: [file], items: [], types: ["Files"] }
+    });
+    document.dispatchEvent(event);
+  });
+  await expect(page.locator("#purchaseImportDocumentList")).toContainText("copied-invoice.pdf");
+  expect(pageErrors).toEqual([]);
+});
+
 test("mobile dashboard and sales flow fit without horizontal overflow", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile"), "Mobile layout assertion");
   const pageErrors = await openTestApp(page);

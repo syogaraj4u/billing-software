@@ -192,6 +192,14 @@
             <button class="primary-btn" id="newPurchaseBtn"><i data-lucide="plus"></i><span>New Purchase</span></button>
           </div>
         </div>
+        <div class="purchase-invoice-dropzone" id="purchaseInvoiceDropzone">
+          <i data-lucide="cloud-upload"></i>
+          <div>
+            <strong>Drop purchase invoices here</strong>
+            <span>PDF or image · You can also paste copied files with Ctrl+V or Cmd+V</span>
+          </div>
+          <button class="secondary-btn" id="purchaseInvoiceBrowseBtn" type="button"><i data-lucide="folder-open"></i><span>Browse Files</span></button>
+        </div>
         <div class="table-wrap panel">
           <table>
             <thead><tr><th><input id="selectAllPurchases" type="checkbox" aria-label="Select all purchases"></th><th>Date</th><th>Bill</th><th>GST</th><th>Supplier</th><th>E-Way</th><th class="num">Taxable</th><th class="num">GST Amt</th><th class="num">Total</th><th></th></tr></thead>
@@ -616,6 +624,7 @@
 
       <div class="purchase-import-toolbar">
         <label>Batch<select id="purchaseImportBatchSelect" aria-label="Purchase import batch"></select></label>
+        <span class="purchase-import-drop-hint" id="purchaseImportDropzone"><i data-lucide="cloud-upload"></i><span>Drop or paste invoices here</span></span>
         <label class="secondary-btn upload-btn purchase-import-add-btn" title="Add invoices to this batch">
           <i data-lucide="plus"></i><span>Add Invoices</span>
           <input id="purchaseImportAddInput" data-purchase-import-append="true" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,image/tiff,image/bmp,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp" multiple>

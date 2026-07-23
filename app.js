@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.23.1";
+const APP_BUILD = "2026.07.23.2";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -57,6 +57,16 @@ const ENTRY_RENDER_LOAD_MORE_DESKTOP = 75;
 const PURCHASE_IMAGE_OPTIMIZE_MIN_BYTES = 900 * 1024;
 const PURCHASE_IMAGE_OPTIMIZE_MAX_DIMENSION = 2200;
 const PURCHASE_IMAGE_OPTIMIZE_QUALITY = 0.82;
+const PURCHASE_INVOICE_MAX_BYTES = 25 * 1024 * 1024;
+const PURCHASE_INVOICE_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/tiff",
+  "image/bmp"
+]);
+const PURCHASE_INVOICE_EXTENSIONS = new Set(["pdf", "png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"]);
 const CLOUD_READ_PAGE_SIZE = 1000;
 
 const EWAY_ADDRESS_PRESETS = [
@@ -2754,6 +2764,10 @@ function bindEvents() {
   });
   $("#purchaseInvoiceInput").addEventListener("change", handlePurchaseInvoiceUpload);
   bindIf("#purchaseImportAddInput", "change", handlePurchaseInvoiceUpload);
+  bindIf("#purchaseInvoiceBrowseBtn", "click", openPurchaseInvoiceUpload);
+  bindPurchaseInvoiceDropzone("#purchaseInvoiceDropzone", false);
+  bindPurchaseInvoiceDropzone("#purchaseImportDropzone", true);
+  document.addEventListener("paste", handlePurchaseInvoicePaste);
   bindIf("#purchaseImportInboxBtn", "click", openPurchaseImportInbox);
   bindIf("#purchaseImportBatchSelect", "change", handlePurchaseImportBatchChange);
   bindIf("#purchaseImportDocumentList", "click", handlePurchaseImportDocumentClick);
@@ -12537,16 +12551,37 @@ function smartBillPartyCard(title, name, gstin, address) {
   </div>`;
 }
 
-async function handlePurchaseInvoiceUpload(event) {
-  const files = Array.from(event.target.files || []);
+function handlePurchaseInvoiceUpload(event) {
+  const input = event.currentTarget || event.target;
+  const files = Array.from(input?.files || []);
+  if (input) input.value = "";
   if (!files.length) return;
-  const appendToActive = event.currentTarget?.dataset?.purchaseImportAppend === "true";
+  importPurchaseInvoiceFiles(files, {
+    appendToActive: input?.dataset?.purchaseImportAppend === "true",
+    source: "picker"
+  });
+}
+
+function importPurchaseInvoiceFiles(files, { appendToActive = false, source = "picker" } = {}) {
+  const preparedFiles = Array.from(files || [])
+    .filter(file => file instanceof File)
+    .map(file => source === "paste" ? namePastedPurchaseInvoice(file) : file);
+  const acceptedFiles = preparedFiles.filter(isAcceptedPurchaseInvoiceFile);
+  const rejectedFiles = preparedFiles.filter(file => !isAcceptedPurchaseInvoiceFile(file));
+  if (rejectedFiles.length) {
+    const first = rejectedFiles[0];
+    const reason = first.size > PURCHASE_INVOICE_MAX_BYTES
+      ? `${first.name || "Invoice"} is larger than 25 MB`
+      : `${first.name || "File"} is not a supported PDF or image`;
+    toast(rejectedFiles.length === 1 ? reason : `${reason}. ${rejectedFiles.length - 1} more file(s) skipped.`);
+  }
+  if (!acceptedFiles.length) return;
   let batch = appendToActive ? purchaseImportBatchById(activePurchaseImportBatchId) : null;
   if (!batch || batch.status === "completed") batch = createPurchaseImportBatch();
   activePurchaseImportBatchId = batch.id;
-  const documents = files.map(file => createPurchaseImportDocument(batch, file));
+  const documents = acceptedFiles.map(file => createPurchaseImportDocument(batch, file));
   documents.forEach((document, index) => {
-    const file = files[index];
+    const file = acceptedFiles[index];
     purchaseImportFiles.set(document.id, file);
     purchaseUploadQueue.push({ batchId: batch.id, documentId: document.id, file });
   });
@@ -12554,12 +12589,115 @@ async function handlePurchaseInvoiceUpload(event) {
   batch.status = "extracting";
   touchPurchaseImportEntity(batch);
   activePurchaseImportDocumentId = documents[0]?.id || activePurchaseImportDocumentId;
-  event.target.value = "";
   saveState({ skipCloud: true });
   queuePurchaseImportCloudSync(batch.id);
   openPurchaseImportInbox(batch.id);
   renderPurchaseImportInbox();
   processQueuedPurchaseInvoiceUpload();
+  if (source === "drop" || source === "paste") {
+    const action = source === "paste" ? "Pasted" : "Dropped";
+    toast(`${action} ${acceptedFiles.length} invoice${acceptedFiles.length === 1 ? "" : "s"} into the inbox`);
+  }
+}
+
+function isAcceptedPurchaseInvoiceFile(file) {
+  if (!file || file.size <= 0 || file.size > PURCHASE_INVOICE_MAX_BYTES) return false;
+  const mimeType = String(file.type || "").toLowerCase();
+  if (PURCHASE_INVOICE_MIME_TYPES.has(mimeType)) return true;
+  const extension = String(file.name || "").split(".").pop().toLowerCase();
+  return PURCHASE_INVOICE_EXTENSIONS.has(extension);
+}
+
+function namePastedPurchaseInvoice(file) {
+  const originalName = String(file.name || "").trim();
+  if (originalName && !/^image\.(?:png|jpe?g|webp)$/i.test(originalName)) return file;
+  const extension = purchaseInvoiceExtension(file);
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "").replace("T", "-");
+  return new File([file], `pasted-invoice-${timestamp}.${extension}`, {
+    type: file.type || purchaseInvoiceMimeType(extension),
+    lastModified: file.lastModified || Date.now()
+  });
+}
+
+function purchaseInvoiceExtension(file) {
+  const extension = String(file.name || "").split(".").pop().toLowerCase();
+  if (PURCHASE_INVOICE_EXTENSIONS.has(extension)) return extension === "jpeg" ? "jpg" : extension;
+  return {
+    "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/tiff": "tiff",
+    "image/bmp": "bmp"
+  }[String(file.type || "").toLowerCase()] || "png";
+}
+
+function purchaseInvoiceMimeType(extension) {
+  return {
+    pdf: "application/pdf",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+    tif: "image/tiff",
+    tiff: "image/tiff",
+    bmp: "image/bmp"
+  }[extension] || "application/octet-stream";
+}
+
+function bindPurchaseInvoiceDropzone(selector, appendToActive) {
+  const zone = $(selector);
+  if (!zone) return;
+  const setActive = active => zone.classList.toggle("drag-active", active);
+  ["dragenter", "dragover"].forEach(type => zone.addEventListener(type, event => {
+    if (!purchaseInvoiceTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    setActive(true);
+  }));
+  zone.addEventListener("dragleave", event => {
+    if (!zone.contains(event.relatedTarget)) setActive(false);
+  });
+  zone.addEventListener("drop", event => {
+    if (!purchaseInvoiceTransferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    setActive(false);
+    importPurchaseInvoiceFiles(Array.from(event.dataTransfer?.files || []), {
+      appendToActive,
+      source: "drop"
+    });
+  });
+}
+
+function purchaseInvoiceTransferHasFiles(dataTransfer) {
+  return Array.from(dataTransfer?.types || []).includes("Files")
+    || Array.from(dataTransfer?.files || []).length > 0;
+}
+
+function handlePurchaseInvoicePaste(event) {
+  if (purchaseInvoicePasteTargetIsEditable(event.target)) return;
+  const importDialogOpen = Boolean($("#purchaseImportDialog")?.open);
+  if (!importDialogOpen && currentView !== "purchases") return;
+  const files = purchaseInvoiceClipboardFiles(event.clipboardData);
+  if (!files.length) return;
+  event.preventDefault();
+  importPurchaseInvoiceFiles(files, {
+    appendToActive: importDialogOpen,
+    source: "paste"
+  });
+}
+
+function purchaseInvoicePasteTargetIsEditable(target) {
+  return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+}
+
+function purchaseInvoiceClipboardFiles(clipboardData) {
+  const directFiles = Array.from(clipboardData?.files || []);
+  if (directFiles.length) return directFiles;
+  return Array.from(clipboardData?.items || [])
+    .filter(item => item.kind === "file")
+    .map(item => item.getAsFile())
+    .filter(Boolean);
 }
 
 function createPurchaseImportBatch() {
