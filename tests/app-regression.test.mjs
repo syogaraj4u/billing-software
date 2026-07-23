@@ -47,6 +47,13 @@ function createAppHarness() {
   sandbox.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   vm.createContext(sandbox);
   vm.runInContext(`${appSource}\n;globalThis.__appTest = {
+    defaultStateSnapshot() { return clone(defaultState); },
+    mergeCloudStateWithLocalCandidates,
+    normalizeEntry(entry, kind) {
+      const normalized = clone(entry);
+      normalizeEntryForState(normalized, kind, [], []);
+      return normalized;
+    },
     normalizePurchaseImportDocumentForState,
     syncCloudEntryLineChanges,
     verifyCloudPurchaseRows,
@@ -136,6 +143,65 @@ test("purchase import processing step survives state normalization", () => {
   });
   assert.equal(normalized.processingStep, "Reading invoice details");
   assert.equal(normalized.status, "extracting");
+});
+
+test("newer internal invoice cancellation wins over older paid cloud rows", () => {
+  const app = createAppHarness();
+  const cloud = app.defaultStateSnapshot();
+  const local = app.defaultStateSnapshot();
+  const paidSale = {
+    ...purchase("internal-sale-1", 118),
+    number: "NS/SO/26-27/099",
+    status: "Paid",
+    cancelled: false,
+    updatedAt: "2026-07-23T08:00:00.000Z",
+    createdAt: "2026-07-23T07:00:00.000Z",
+    internalTransfer: { linkedPurchaseId: "internal-purchase-1" }
+  };
+  const paidPurchase = {
+    ...purchase("internal-purchase-1", 118),
+    number: paidSale.number,
+    status: "Paid",
+    cancelled: false,
+    updatedAt: "2026-07-23T08:00:00.000Z",
+    createdAt: "2026-07-23T07:00:00.000Z",
+    internalTransfer: { linkedSaleId: paidSale.id }
+  };
+  cloud.sales = [structuredClone(paidSale)];
+  cloud.purchases = [structuredClone(paidPurchase)];
+  local.sales = [{
+    ...structuredClone(paidSale),
+    status: "Cancelled",
+    cancelled: true,
+    cancelledAt: "2026-07-23T09:00:00.000Z",
+    updatedAt: "2026-07-23T09:00:00.000Z"
+  }];
+  local.purchases = [{
+    ...structuredClone(paidPurchase),
+    status: "Cancelled",
+    reviewStatus: "Cancelled",
+    cancelled: true,
+    cancelledAt: "2026-07-23T09:00:00.000Z",
+    updatedAt: "2026-07-23T09:00:00.000Z"
+  }];
+
+  const merged = app.mergeCloudStateWithLocalCandidates(cloud, [local]).state;
+  assert.equal(merged.sales[0].status, "Cancelled");
+  assert.equal(merged.sales[0].cancelled, true);
+  assert.equal(merged.purchases[0].status, "Cancelled");
+  assert.equal(merged.purchases[0].cancelled, true);
+});
+
+test("cancelled status always restores the cancellation flag", () => {
+  const app = createAppHarness();
+  const normalized = app.normalizeEntry({
+    id: "sale-cancelled",
+    status: "Cancelled",
+    cancelled: false,
+    lines: []
+  }, "sale");
+  assert.equal(normalized.cancelled, true);
+  assert.equal(normalized.status, "Cancelled");
 });
 
 test("unchanged purchase lines do not rewrite the cloud table", async () => {

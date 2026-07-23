@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.22.4";
+const APP_BUILD = "2026.07.23.1";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -813,14 +813,14 @@ function mergeCloudStateWithLocalCandidates(cloudData, localCandidates = []) {
       mergeExistingDeletionTombstone
     ) || changed;
     changed = mergeByIdentity(merged.parties, local.parties, partyMergeKey, mergeExistingParty) || changed;
-    changed = mergeByIdentity(merged.items, local.items, itemMergeKey) || changed;
-    changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey) || changed;
-    changed = mergeByIdentity(merged.creditNotes, local.creditNotes, entryMergeKey) || changed;
-    changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey) || changed;
-    changed = mergeByIdentity(merged.purchaseReturns, local.purchaseReturns, entryMergeKey) || changed;
-    changed = mergeByIdentity(merged.purchaseOrders, local.purchaseOrders, entryMergeKey) || changed;
-    changed = mergeByIdentity(merged.paymentSources, local.paymentSources, paymentSourceMergeKey) || changed;
-    changed = mergeByIdentity(merged.bankTransactions, local.bankTransactions, bankTransactionMergeKey) || changed;
+    changed = mergeByIdentity(merged.items, local.items, itemMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.sales, local.sales, entryMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.creditNotes, local.creditNotes, entryMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.purchases, local.purchases, entryMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.purchaseReturns, local.purchaseReturns, entryMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.purchaseOrders, local.purchaseOrders, entryMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.paymentSources, local.paymentSources, paymentSourceMergeKey, mergeNewestCloudEntity) || changed;
+    changed = mergeByIdentity(merged.bankTransactions, local.bankTransactions, bankTransactionMergeKey, mergeNewestCloudEntity) || changed;
     changed = mergeByIdentity(merged.tallySyncRuns, local.tallySyncRuns, tallySyncRunMergeKey, mergeExistingTallySyncRun) || changed;
     changed = mergeByIdentity(merged.purchaseImportBatches, local.purchaseImportBatches, purchaseImportBatchMergeKey, mergeNewestCloudEntity) || changed;
     changed = mergeByIdentity(merged.purchaseImportDocuments, local.purchaseImportDocuments, purchaseImportDocumentMergeKey, mergeNewestCloudEntity) || changed;
@@ -1301,6 +1301,9 @@ function initialsAlias(value) {
 
 function normalizeEntryForState(entry, kind, parties = [], items = []) {
   normalizeCloudEntityMeta(entry);
+  entry.cancelled = Boolean(entry.cancelled) || entry.status === "Cancelled";
+  entry.cancelledAt = String(entry.cancelledAt || "").trim();
+  if (entry.cancelled) entry.status = "Cancelled";
   entry.paymentSourceId = String(entry.paymentSourceId || "").trim();
   entry.paymentDate = /^\d{4}-\d{2}-\d{2}$/.test(String(entry.paymentDate || "")) ? entry.paymentDate : "";
   entry.paymentReference = String(entry.paymentReference || "").trim();
@@ -7632,7 +7635,7 @@ function recordEntryDeletion(kind, entry) {
   return tombstone;
 }
 
-function cancelEntry(kind, id) {
+async function cancelEntry(kind, id) {
   if (kind !== "sale") {
     deleteEntry(kind, id);
     return;
@@ -7648,13 +7651,44 @@ function cancelEntry(kind, id) {
   entry.status = "Cancelled";
   const internalSyncResult = cancelLinkedInternalPurchase(entry, "Linked sales bill was cancelled.");
   Object.assign(entry, entityWithLocalMeta(entry, entry));
+  const linkedPurchaseId = internalSyncResult?.linkedPurchase?.id || "";
   const profile = profileById(entry.profileId);
   profile.nextSaleNo = nextSaleSequence(entry.profileId, state.sales);
   saveState();
   renderAll();
-  toast(internalSyncResult?.action === "cancelled"
-    ? `Sales bill ${entry.number} cancelled. Internal purchase cancelled`
-    : `Sales bill ${entry.number} cancelled`);
+  const canSyncNow = cloudReadyForSync();
+  let synced = canSyncNow ? await syncCloudNow(false) : false;
+  if (canSyncNow && !synced) {
+    try {
+      const currentSale = state.sales.find(row => row.id === id);
+      const currentLinkedPurchase = linkedPurchaseId
+        ? state.purchases.find(row => row.id === linkedPurchaseId)
+        : null;
+      const saleSynced = currentSale ? await syncSingleEntryToCloud("sale", currentSale) : false;
+      const purchaseSynced = currentLinkedPurchase
+        ? await syncSingleEntryToCloud("purchase", currentLinkedPurchase)
+        : true;
+      synced = saleSynced && purchaseSynced;
+    } catch (error) {
+      lastCloudSyncError = cloudErrorText(error);
+      console.warn("Cancelled invoice cloud sync failed", error);
+    }
+  }
+  if (canSyncNow && !synced) {
+    markEntrySyncFailed("sale", id);
+    const currentLinkedPurchase = linkedPurchaseId
+      ? state.purchases.find(row => row.id === linkedPurchaseId)
+      : null;
+    if (currentLinkedPurchase) markEntitySyncStatus(currentLinkedPurchase, SYNC_STATUS_FAILED);
+    saveState({ skipCloud: true });
+  }
+  const internalText = internalSyncResult?.action === "cancelled" ? " Internal purchase cancelled." : "";
+  const syncText = synced
+    ? " Cancellation synced."
+    : canSyncNow
+      ? ` Saved locally; cloud sync needs retry${cloudFailureSuffix()}.`
+      : " Saved locally.";
+  toast(`Sales bill ${entry.number} cancelled.${internalText}${syncText}`);
 }
 
 function creditableSales(profileId = activeProfileId(), includeSaleId = "") {
