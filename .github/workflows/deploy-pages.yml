@@ -107,35 +107,48 @@ jobs:
     environment: staging
 
     steps:
+      - name: Check staging smoke configuration
+        id: staging_config
+        env:
+          STAGING_TEST_EMAIL: ${{ secrets.STAGING_TEST_EMAIL }}
+          STAGING_TEST_PASSWORD: ${{ secrets.STAGING_TEST_PASSWORD }}
+        run: |
+          if [ -n "$STAGING_TEST_EMAIL" ] && [ -n "$STAGING_TEST_PASSWORD" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Staging test credentials are not configured; live smoke test skipped."
+          fi
+
       - name: Check out repository
+        if: steps.staging_config.outputs.enabled == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Node
+        if: steps.staging_config.outputs.enabled == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
+        if: steps.staging_config.outputs.enabled == 'true'
         run: npm ci
 
       - name: Install Chromium
+        if: steps.staging_config.outputs.enabled == 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Run live staging smoke test
+        if: steps.staging_config.outputs.enabled == 'true'
         env:
           STAGING_BASE_URL: https://billing.nirvanasolutions.in/staging/
           STAGING_TEST_EMAIL: ${{ secrets.STAGING_TEST_EMAIL }}
           STAGING_TEST_PASSWORD: ${{ secrets.STAGING_TEST_PASSWORD }}
-        run: |
-          if [ -z "$STAGING_TEST_EMAIL" ] || [ -z "$STAGING_TEST_PASSWORD" ]; then
-            echo "Staging test credentials are not configured; live smoke test skipped."
-            exit 0
-          fi
-          npm run test:e2e:staging
+        run: npm run test:e2e:staging
 
       - name: Upload staging failure report
-        if: failure()
+        if: failure() && steps.staging_config.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: staging-playwright-report-${{ github.run_id }}
