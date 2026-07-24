@@ -217,7 +217,8 @@ function normalizeCell9Invoice(invoice: Record<string, any>) {
   invoice.taxable = taxable;
   invoice.gst = gst;
   invoice.total = total;
-  invoice.roundOff = roundMoney(total - taxable - gst);
+  const taxRoundingDifference = roundMoney(total - taxable - gst);
+  invoice.roundOff = Math.abs(taxRoundingDifference) <= 0.01 ? 0 : taxRoundingDifference;
   invoice.extractedTaxes = { taxable, cgst, sgst, igst: 0, gst, total };
   line.hsn = !line.hsn || line.hsn === "8517" || line.hsn === "85176290" ? "85171300" : line.hsn;
   line.rate = taxableRate;

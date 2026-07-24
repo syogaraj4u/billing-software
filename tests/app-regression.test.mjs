@@ -57,6 +57,7 @@ function createAppHarness() {
     normalizePurchaseImportDocumentForState,
     parseCell9PurchaseInvoiceText,
     normalizeCell9PurchaseParsed,
+    purchaseImportCalculatedTotals,
     syncCloudEntryLineChanges,
     verifyCloudPurchaseRows,
     setCloud(client, workspace, session = { user: { id: "11111111-1111-4111-8111-111111111111" } }) {
@@ -299,8 +300,9 @@ test("Cell9 OCR profile consistently reads all four photographed invoices", () =
     assert.equal(parsed.extractedTaxes.cgst, 22309.32);
     assert.equal(parsed.extractedTaxes.sgst, 22309.32);
     assert.equal(parsed.gst, 44618.64);
-    assert.equal(parsed.roundOff, 0.01);
+    assert.equal(parsed.roundOff, 0);
     assert.equal(parsed.total, 292500);
+    assert.equal(app.purchaseImportCalculatedTotals(parsed).total, 292500);
     assert.equal(parsed.lines[0].name, "iPhone 15 128GB");
     assert.equal(parsed.lines[0].qty, 5);
     assert.equal(parsed.lines[0].rate, 49576.27);
@@ -336,7 +338,7 @@ test("Cell9 profile replaces inconsistent cloud totals with OCR-validated values
   }, ocrText, "CELL-750.jpeg");
   assert.equal(normalized.taxable, 247881.35);
   assert.equal(normalized.gst, 44618.64);
-  assert.equal(normalized.roundOff, 0.01);
+  assert.equal(normalized.roundOff, 0);
   assert.equal(normalized.total, 292500);
   assert.equal(normalized.lines[0].grossRate, 58500);
 });

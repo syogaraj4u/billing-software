@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.23.3";
+const APP_BUILD = "2026.07.24.1";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -38,7 +38,7 @@ const EWAY_DOCUMENT_VERSION = "1.0.0621";
 const DEFAULT_SALE_HSN = "85171300";
 const DISALLOWED_HSN_CODES = new Set(["85176290"]);
 const DEFAULT_SALE_GST_RATE = 18;
-const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-23-cell9-v3";
+const PURCHASE_SUPPLIER_PROFILE_VERSION = "2026-07-24-cell9-v4";
 const CHAT_BILL_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_CHAT_BILL_ATTACHMENTS = 4;
 const MAX_CHAT_BILL_ATTACHMENT_BYTES = 6 * 1024 * 1024;
@@ -14305,7 +14305,8 @@ function normalizeCell9PurchaseParsed(parsed = {}, text = "", fileName = "") {
   const sgst = round2(lines.reduce((sum, line) => sum + num(line.qty) * num(line.rate) * num(line.gstRate) / 200, 0));
   const gst = round2(cgst + sgst);
   const total = authoritativeTotal || round2(taxable + gst + num(source.roundOff));
-  const roundOff = round2(total - taxable - gst);
+  const taxRoundingDifference = round2(total - taxable - gst);
+  const roundOff = Math.abs(taxRoundingDifference) <= 0.01 ? 0 : taxRoundingDifference;
   return {
     ...source,
     supplierName: source.supplierName || "CELL9 MOBILE STORE",
@@ -15902,7 +15903,9 @@ function parseCell9PurchaseInvoiceText(text, fileName) {
   const sgst = round2(taxable * gstRate / 200);
   const gst = round2(cgst + sgst);
   const invoiceTotal = total || round2(taxable + gst);
-  const roundOff = round2(invoiceTotal - taxable - gst + purchasePaymentAdjustmentFromText(cleaned));
+  const paymentAdjustment = purchasePaymentAdjustmentFromText(cleaned);
+  const taxRoundingDifference = round2(invoiceTotal - taxable - gst);
+  const roundOff = paymentAdjustment || (Math.abs(taxRoundingDifference) <= 0.01 ? 0 : taxRoundingDifference);
   const parsedLine = {
     name: normalizeImportedItemName(item.name || "CELL9 Purchase"),
     hsn: normalizeLineHsn(item.hsn) || DEFAULT_SALE_HSN,
