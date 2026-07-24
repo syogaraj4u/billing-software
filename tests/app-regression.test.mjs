@@ -303,6 +303,7 @@ test("Cell9 OCR profile consistently reads all four photographed invoices", () =
     assert.equal(parsed.roundOff, 0);
     assert.equal(parsed.total, 292500);
     assert.equal(app.purchaseImportCalculatedTotals(parsed).total, 292500);
+    assert.equal(app.purchaseImportCalculatedTotals({ ...parsed, roundOff: 0.01 }).total, 292500);
     assert.equal(parsed.lines[0].name, "iPhone 15 128GB");
     assert.equal(parsed.lines[0].qty, 5);
     assert.equal(parsed.lines[0].rate, 49576.27);

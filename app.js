@@ -3,7 +3,7 @@ const LOCAL_STATE_BACKUP_KEY = "billingSoftware.localBackup.v1";
 const APP_ERROR_LOG_KEY = "billingSoftware.errorLog.v1";
 const GST_PROFILE_VERSION = "2026-06-24-official-8-gst";
 const APP_VERSION = "1.0.0";
-const APP_BUILD = "2026.07.24.1";
+const APP_BUILD = "2026.07.24.2";
 const CLOUD_WORKSPACE_TABLE = "billing_cloud_workspaces";
 const CLOUD_ROW_TABLES = {
   parties: "billing_parties",
@@ -6852,6 +6852,10 @@ function purchaseRoundOffForSource(source = {}, calculated = {}) {
   const explicitRoundOff = num(source?.roundOff);
   const extractedAdjustment = purchaseExtractedRoundOffForSource(source, calculated);
   if (Math.abs(explicitRoundOff) >= 0.01) {
+    const extractedTotal = num(source?.extractedTaxes?.total);
+    const calculatedAlreadyMatchesInvoice = extractedTotal
+      && Math.abs(extractedTotal - num(calculated.total)) < 0.005;
+    if (Math.abs(explicitRoundOff) <= 0.01 && calculatedAlreadyMatchesInvoice) return 0;
     const separateInvoiceRounding = Math.abs(explicitRoundOff) > 1
       && Math.abs(extractedAdjustment) >= 0.01
       && !amountsClose(explicitRoundOff, extractedAdjustment, 0.01);
